@@ -1,0 +1,39 @@
+# Ambiente / segredos (só .env.example é versionado)
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# uv / venv
+.venv/
+venv/
+env/
+
+# Testes / cobertura / cache de ferramentas
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# IDE / SO
+.idea/
+*.swp
+.DS_Store
+
+# Logs e dados locais
+*.log
+*.sqlite
+*.sqlite3
+*.db

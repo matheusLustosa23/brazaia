@@ -1,0 +1,11 @@
+[project]
+name = "iobraza"
+version = "0.1.0"
+description = "Assistente pessoal de IA, voz-first, multi-device, local (Qwen3-VL via vLLM)"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi[standard]>=0.136.3",
+    "pydantic-settings>=2.14.1",
+    "orjson>=3.10",
+]
