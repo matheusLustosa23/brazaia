@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from api.v1.setup import register_exception_handlers, register_routers
 from core.config import get_settings
 from lifespan import lifespan
+from observability.middleware import RequestContextMiddleware
 
 
 def create_app() -> FastAPI:
@@ -15,6 +16,7 @@ def create_app() -> FastAPI:
     )
     register_exception_handlers(app)
     register_routers(app)
+    app.add_middleware(RequestContextMiddleware)
     return app
 
 
