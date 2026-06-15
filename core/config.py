@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     model_name: str = "QuantTrio/Qwen3-VL-30B-A3B-Instruct-AWQ"
     max_context_tokens: int = 32768
     reserved_output_tokens: int = 2048
+    
+    # resiliência do cliente LLM  (NOVOS — feat-llm-client)
+    llm_timeout_s: float = 60.0
+    llm_max_retries: int = 3
+    llm_backoff_base_s: float = 0.5
 
     # transporte
     port: int = 8080

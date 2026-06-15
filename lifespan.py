@@ -3,7 +3,7 @@ from fastapi import FastAPI
 from core import get_settings
 from observability.logging import setup_logging
 from infrastructure.devices.device_router import DeviceRouter
-
+from infrastructure.llm.client import OpenAILLMClient
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -12,7 +12,7 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     app.state.settings = settings
     # placeholders — implementação real em feat-llm-client / feat-companion-actuator
-    app.state.llm = None                      # -> LLMClient (feat-llm-client)
+    app.state.llm = OpenAILLMClient(settings)                      # -> LLMClient (feat-llm-client)
     app.state.device_router = DeviceRouter()
     setup_logging(settings.log_level)
     yield
