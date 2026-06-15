@@ -5,20 +5,9 @@ class AgentError(Exception):
     status: int = 500
     message: str = 'erro interno do agente'
     
-    def __init__(self, message:str = None, *, status:int = None):
-
+    def __init__(self, message: str | None = None, *, status: int | None = None) -> None:
         if message is not None:
             self.message = message
         if status is not None:
             self.status = status
-        
         super().__init__(self.message)
-        
-        
-                
-            
-                
-        
-       
-
-    
