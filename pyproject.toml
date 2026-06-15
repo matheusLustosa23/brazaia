@@ -16,6 +16,8 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pyright>=1.1.410",
+    "pytest>=9.1.0",
+    "pytest-asyncio>=1.4.0",
 ]
 
 [tool.pyright]
@@ -28,3 +30,9 @@ typeCheckingMode = "standard"
 venvPath = "."
 venv = ".venv"
 reportMissingTypeStubs = false
+
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["."]          # <- faltava; sem isso 'core'/'domain' não importam
+markers = ["integration: bate no vLLM real (pula se fora)"]

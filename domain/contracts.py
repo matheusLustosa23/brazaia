@@ -16,14 +16,14 @@ class LLMClient(Protocol):
         messages: list[dict],
         tools: list[dict] | None = None,
         tool_choice: str = "auto",
-        **opst: Any
+        **opts: Any
     ) -> Completion: ...
     
-    async def stream(
+    def stream(
         self,
         messages: list[dict],
         tools: list[dict] | None = None,
-        tools_choice: str = "auto",
+        tool_choice: str = "auto",
         **opts: Any
         ) -> AsyncIterator[tuple[str, Any]]: ...
     

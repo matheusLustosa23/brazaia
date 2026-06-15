@@ -6,7 +6,7 @@ from openai import (
     APIConnectionError,
     InternalServerError
 )
-from openai.types.chat import ChatCompletion
+from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from tenacity import (
     retry,
     stop_after_attempt,
@@ -17,6 +17,7 @@ from tenacity import (
 from core.config import Settings
 from domain.entities.message import Completion, ToolCall, Usage
 from domain.exceptions.llm_exceptions import LLMUnavailable,LLMTimeout
+from collections.abc import AsyncIterator
 
 _TRANSIENT = (APIConnectionError, InternalServerError)
 
@@ -106,4 +107,33 @@ class OpenAILLMClient:
             return {"vllm": "timeout", "model": None}
         except Exception:
             return  {"vllm": "down", "model": None}
+    
+    async def stream(
+        self,
+        messages: list[dict],
+        tools: list[dict] | None = None,
+        tool_choice: str = "auto",
+        **opts: Any
+    ) -> AsyncIterator[tuple[str, Any]]:
+        """Itera deltas. Cada item: ('text', str) ou ('tool_call_delta', obj).
+
+        O vLLM emite tool-calls em fragmentos (índice, nome parcial, arguments parciais).
+        O acúmulo/parse final dos arguments fica a cargo do consumidor (feat-agent-loop).
+        """
+        kwargs: dict[str, Any] = dict(model=self._model, messages=messages, stream=True, **opts)
+        if tools:
+            kwargs["tools"] = tools
+            kwargs["tool_choice"] = tool_choice
+        try:
+            s: AsyncIterator[ChatCompletionChunk] = await self._c.chat.completions.create(**kwargs)
+            async for chunk in s:
+                delta = chunk.choices[0].delta
+                if delta.content:
+                    yield ("text", delta.content)
+                for tcd in (delta.tool_calls or []):
+                    yield ("tool_call_delta", tcd)
+        except APITimeoutError as e:
+            raise LLMTimeout("timeout no streaming do vLLM") from e
+        except _TRANSIENT as e:
+            raise LLMUnavailable("vLLM caiu durante o streaming") from e
         
