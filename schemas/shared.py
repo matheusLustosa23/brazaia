@@ -43,4 +43,5 @@ class ApiResponse(BaseModel, Generic[T]):
 
     @classmethod
     def error(cls, status: int, message: str) -> ApiResponse[None]:
-        return cls(status=status, success=False, message=message, data=None)
+        # parametriza explicitamente p/ None — cls(...) seria ApiResponse[T] (genérico invariante)
+        return ApiResponse[None](status=status, success=False, message=message, data=None)
