@@ -27,3 +27,21 @@ def test_build_corta_historico_no_teto():
     assert fake_count(msgs) <= cm.input_budget
     assert cm.metrics.dropped_turns > 0
     assert cm.metrics.used_tokens == fake_count(msgs)
+
+async def test_summarize_curto_retorna_sem_chamar_llm():
+    llm = FakeLLM()
+    cm = _cm(llm=llm)
+    raw = "mensagem  qualquer"
+    foco = "foco qualquer"
+    summary = await cm.summarize(raw=raw, foco=foco)
+    assert summary == raw
+    assert llm.calls == []
+
+async def test_summarize_longo_chama_llm_e_retorna_resumo():
+    llm = FakeLLM()
+    cm = _cm(llm=llm)
+    raw = "um texto gigante qualquer que consiga estourar o limite" * 1000
+    foco = "qualquer"
+    summary = await cm.summarize(raw=raw, foco=foco, target_tokens=200)
+    assert summary == "RESUMO"
+    assert len(llm.calls) == 1

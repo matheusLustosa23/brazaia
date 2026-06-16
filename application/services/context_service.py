@@ -85,3 +85,30 @@ class ContextManager:
         self.metrics.dropped_turns = dropped
         self.metrics.static_prefix_tokens = self._count(head[:1])
         self.metrics.summary_tokens = self._count([head[-1]]) if has_summary else 0
+    
+    async def summarize(
+        self,
+        raw: str,
+        foco: str,
+        target_tokens: int = 256    
+    ) -> str:
+        """Compacta uma observação volumosa, focando no objetivo do turno. Reusa o próprio
+        modelo via o contrato LLMClient injetado (coerência de estilo/idioma)."""
+        if self._count([{"role": "user", "content": raw}]) <= target_tokens:
+            return raw
+        
+        prompt = [
+            {
+                "role": "system",
+                "content": "Resuma a observacao preservando fatos, numeros e nomes relevantes ao foco. "
+                f"seja consiso (~{target_tokens} tokens). Nao invente"
+            },
+            {
+                "role":"user",
+                "content":f"FOCO: {foco}\n\nObservacao:\n{raw}"
+            }
+        ]
+        out = await self._llm.complete(prompt,max_tokens=target_tokens + 64)
+        return out.content or raw
+        
+      
