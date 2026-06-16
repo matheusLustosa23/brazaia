@@ -108,7 +108,42 @@ class ContextManager:
                 "content":f"FOCO: {foco}\n\nObservacao:\n{raw}"
             }
         ]
-        out = await self._llm.complete(prompt,max_tokens=target_tokens + 64)
+        out = await self._llm.complete(
+            prompt,
+            max_tokens=target_tokens + max(64,target_tokens//4)
+        )
         return out.content or raw
-        
+    
+    async def roll_summary(
+        self,
+        previous_summary: str,
+        dropped: list[dict],
+        foco: str,
+        target_tokens: int = 512
+    ) -> str:
+        """Funde o resumo anterior com os turnos antigos que sairiam do contexto (cortar tarde).
+        Mantém UM bloco único reusado; os últimos K turnos seguem na íntegra via build()."""
+        if not dropped:
+            return previous_summary
+        prompt = [
+            {
+                "role": "system",
+                "content": f"Atualiza o resumo da conversa de forma incremental (~{target_tokens} tokens). "
+                "Preserve preferencias, decisoes e pedencias do dono. "
+            },
+            {
+                "role": "user",
+                "content": f"FOCO ATUAL: {foco}\n\nRESUMO ATUAL:\n{previous_summary or '(vazio)'}\n\n"
+                f"NOVOS TURNOS:\n{_render_turns(dropped)}"
+            }
+        ]
+        out = await self._llm.complete(
+            prompt, 
+            max_tokens=target_tokens + max(64,target_tokens//4)
+        )
+        return out.content or previous_summary
+    
+def _render_turns(turns: list[dict]) -> str:
+    """Serializa turnos p/ o prompt de resumo: 'user: ...\\nassistant: ...'."""
+    return "\n".join(f"{t['role']}: {t['content']}" for t in turns )
       
