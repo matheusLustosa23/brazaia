@@ -4,6 +4,8 @@ import time
 from domain.contracts import MemoryStore
 from domain.entities.memory_fact import MemoryFact, PROFILE
 
+_MAX_RECALL  = 15   # teto do limit; acima disso token cost > benefício no contexto
+_SEARCH_POOL = 60   # pool fixo de candidatos FTS5, independente do limit
 
 def _retrieval_score(fact: MemoryFact) -> float:
     now = time.time()
@@ -46,3 +48,10 @@ class MemoryService:
         origin: str = "inferred"
     ) -> None:
         await self._store.link(from_id, to_id, relation, strength, origin)
+    
+    async def recall(self, query: str, limit: int = 8) -> list[MemoryFact]:
+        if limit > _MAX_RECALL:
+            limit = _MAX_RECALL
+        candidates = await self._store.search(query, limit=_SEARCH_POOL)
+        scored = sorted(candidates, key=_retrieval_score, reverse=True)
+        return scored[:limit]

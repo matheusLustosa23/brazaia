@@ -1,6 +1,6 @@
-import pytest
+import pytest, asyncio
 from application.services.memory_service import MemoryService
-from domain.entities.memory_fact import MemoryFact, PROFILE, GOAL
+from domain.entities.memory_fact import MemoryFact, PROFILE, GOAL, STUDY
 from infrastructure.memory.sqlite_store import SqlLiteMemoryStore
 
 @pytest.fixture
@@ -35,3 +35,20 @@ async def test_link_sem_erro(mem):
     fid1, _ = await mem.upsert(MemoryFact(category=PROFILE, key="ocupacao", content="engenheiro"))
     fid2, _ = await mem.upsert(MemoryFact(category=GOAL, key="estudo", content="aprender ML"))
     await mem.link(fid1, fid2, "precede")
+
+async def test_recall_sem_match_retorna_vazio(mem):
+    await mem.upsert(MemoryFact(category=STUDY, key="curso", content="estuda cálculo"))
+    hits = await mem.recall("python programação")
+    assert hits == []
+    
+async def test_recall_reordena_por_score(mem):
+    fid_baixo, _ = await mem.upsert(MemoryFact(category=STUDY, key="a", content="estuda cálculo", confidence=0.1))
+    fid_alto, _  = await mem.upsert(MemoryFact(category=STUDY, key="b", content="cálculo avançado", confidence=1.0))
+    hits = await mem.recall("cálculo")
+    assert hits[0].id == fid_alto
+
+async def test_recall_respeita_max_recall(mem):
+    for i in range(20):
+        await mem.upsert(MemoryFact(category=STUDY, key=f"t{i}", content=f"cálculo tema {i}"))
+    hits = await mem.recall("cálculo", limit=20)
+    assert len(hits) == 15  # _MAX_RECALL
