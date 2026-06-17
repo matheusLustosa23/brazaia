@@ -37,12 +37,16 @@ class ToolRegistry:
         tool = self.get(name)
         if tool is  None:
             return f"[erro] ferramenta '{name}' não existe"
+        if tool.side == "device":
+            return f"[erro] '{name}' é device-side; despache via Device Router"
         try:
             parsed = tool.input_schema.model_validate(payload)
         except ValidationError as e:
              return f"[erro de input em {name}] {e.errors()}"
         return await self._invoke(tool, parsed)
 
+    
+    
     async def _invoke(self, tool: Tool, parsed: BaseModel) -> str:
         try:
             return await asyncio.wait_for(tool.run(parsed), timeout=tool.timeout_s)
@@ -80,3 +84,13 @@ class ToolRegistry:
             f"- {t.name} [{t.side}/{t.action_class}]: {t.description}"
             for t in self._tools.values()
         )
+    
+    def for_device(self, capabilities: set[str] | None = None) -> ToolRegistry:
+        """Subconjunto: server-side sempre + device-side só se a capability existir."""
+        sub = ToolRegistry()
+        for t in self._tools.values():
+            if t.side == "server":
+                sub.register(t)
+            elif capabilities and t.name in capabilities:
+                sub.register(t)
+        return sub
