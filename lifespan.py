@@ -5,7 +5,9 @@ from observability.logging import setup_logging
 from infrastructure.devices.device_router import DeviceRouter
 from infrastructure.llm.client import OpenAILLMClient
 from infrastructure.llm import tokenizer
+from infrastructure.tools.echo import EchoTool
 from application.services.context_service import ContextManager
+from domain.tools.base import ToolRegistry
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -21,6 +23,9 @@ async def lifespan(app: FastAPI):
         count_tokens=lambda msgs: tokenizer.count_tokens(msgs, settings.model_name),
         llm=app.state.llm
     )
+    registry = ToolRegistry()
+    registry.register(EchoTool())
+    app.state.tools = registry
     app.state.device_router = DeviceRouter()
     setup_logging(settings.log_level)
     yield
