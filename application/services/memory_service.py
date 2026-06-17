@@ -55,3 +55,28 @@ class MemoryService:
         candidates = await self._store.search(query, limit=_SEARCH_POOL)
         scored = sorted(candidates, key=_retrieval_score, reverse=True)
         return scored[:limit]
+    
+    async def render_compact(
+        self, 
+        query: str | None = None, 
+        max_facts: int = 12
+    ) -> str:
+        """Bloco compacto p/ injeção pós-prefixo no ContextManager.build(memory_block=...)."""
+        if query in self._render_cache:
+            return self._render_cache[query]
+        profile = await self.get_profile()
+        extra = await self.recall(query) if query else []
+        
+        seen: set[int | None] = set()
+        lines: list[str] = []
+        for f in profile + extra:
+            if f.id in seen:
+                continue
+            seen.add(f.id)
+            lines.append(f"[{f.category}] {f.content}")
+            if len(lines) >= max_facts:
+                break
+            
+        result = ("MEMÓRIA DO DONO:\n" + "\n".join(lines)) if lines else ""
+        self._render_cache[query] = result
+        return result

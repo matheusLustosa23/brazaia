@@ -52,3 +52,29 @@ async def test_recall_respeita_max_recall(mem):
         await mem.upsert(MemoryFact(category=STUDY, key=f"t{i}", content=f"cálculo tema {i}"))
     hits = await mem.recall("cálculo", limit=20)
     assert len(hits) == 15  # _MAX_RECALL
+
+async def test_render_compact_contem_perfil_e_recall(mem):
+    await mem.upsert(MemoryFact(category=PROFILE, key="nome", content="Matheus"))
+    await mem.upsert(MemoryFact(category=STUDY, key="curso", content="estuda cálculo"))
+    block = await mem.render_compact(query="cálculo")
+    assert block.startswith("MEMÓRIA DO DONO:")
+    assert "Matheus" in block and "cálculo" in block
+
+
+async def test_render_compact_sem_fatos_retorna_vazio(mem):
+    assert await mem.render_compact() == ""
+
+
+async def test_render_compact_usa_cache(mem):
+    await mem.upsert(MemoryFact(category=PROFILE, key="nome", content="Matheus"))
+    r1 = await mem.render_compact()
+    r2 = await mem.render_compact()
+    assert r1 == r2
+
+
+async def test_render_compact_invalida_cache_em_upsert(mem):
+    await mem.upsert(MemoryFact(category=PROFILE, key="nome", content="Matheus"))
+    r1 = await mem.render_compact()
+    await mem.upsert(MemoryFact(category=PROFILE, key="cidade", content="São Paulo"))
+    r2 = await mem.render_compact()
+    assert "São Paulo" in r2 and r1 != r2
