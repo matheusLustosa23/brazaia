@@ -50,4 +50,33 @@ class ToolRegistry:
             return f"[timeout] '{tool.name}' excedeu {tool.timeout_s}s"
         except Exception as e:
             return f"[erro ao executar {tool.name}] {type(e).__name__}: {e}"
-        
+    
+    def as_openai_tools(
+        self,
+        *,
+        only: list[str] | None = None
+    ) -> list[dict]:
+        """Schema nativo de function calling consumido pelo vLLM (parser hermes)."""
+        items = (
+            [self._tools[n] for n in only if n in self._tools]
+            if only is not None
+            else list(self._tools.values())
+        )
+        return [
+            {
+                "type":"function",
+                "function":{
+                    "name":t.name,
+                    "description":t.description,
+                    "parameters":t.input_schema.model_json_schema()
+                }
+            }
+            for t in items
+        ]
+    
+    def describe_all(self) -> str:
+        """Texto compacto p/ o system estático (preserva prefix cache do vLLM)."""
+        return "\n".join(
+            f"- {t.name} [{t.side}/{t.action_class}]: {t.description}"
+            for t in self._tools.values()
+        )
