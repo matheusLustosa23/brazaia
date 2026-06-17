@@ -38,6 +38,8 @@ class Settings(BaseSettings):
     # transporte
     port: int = 8080
     log_level: str = "INFO"
+    
+    memory_db_path: str = "data/memoria.db"
 
 
 @lru_cache 
