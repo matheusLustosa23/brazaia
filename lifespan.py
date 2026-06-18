@@ -11,6 +11,7 @@ from infrastructure.memory.sqlite_store import SqlLiteMemoryStore
 from application.services.context_service import ContextManager
 from application.services.memory_service import MemoryService
 from application.services.orchestrator import Orchestrator
+from application.tools.lembrar import LembrarTool
 from domain.tools.base import ToolRegistry
 
 
@@ -31,11 +32,13 @@ async def lifespan(app: FastAPI):
     os.makedirs(os.path.dirname(settings.memory_db_path),exist_ok=True)
     _store = SqlLiteMemoryStore(settings.memory_db_path)
     await _store.init()
+    memory = MemoryService(_store)
     registry = ToolRegistry()
     registry.register(EchoTool())
+    registry.register(LembrarTool(memory))
     app.state.tools = registry
     app.state.device_router = DeviceRouter()
-    app.state.memory = MemoryService(_store)
+    app.state.memory = memory
     app.state.orchestrator = Orchestrator(
         llm=app.state.llm,
         context=app.state.context,
