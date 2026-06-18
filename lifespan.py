@@ -10,6 +10,7 @@ from infrastructure.tools.echo import EchoTool
 from infrastructure.memory.sqlite_store import SqlLiteMemoryStore
 from application.services.context_service import ContextManager
 from application.services.memory_service import MemoryService
+from application.services.orchestrator import Orchestrator
 from domain.tools.base import ToolRegistry
 
 
@@ -35,6 +36,13 @@ async def lifespan(app: FastAPI):
     app.state.tools = registry
     app.state.device_router = DeviceRouter()
     app.state.memory = MemoryService(_store)
+    app.state.orchestrator = Orchestrator(
+        llm=app.state.llm,
+        context=app.state.context,
+        tools=app.state.tools,
+        memory=app.state.memory,
+        device_router=app.state.device_router,
+    )
     setup_logging(settings.log_level)
     yield
     # shutdown: await app.state.llm.aclose() etc. quando existirem
