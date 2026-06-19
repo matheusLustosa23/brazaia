@@ -3,11 +3,11 @@ from __future__ import annotations
 import orjson
 
 from collections.abc import AsyncIterator
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable,BinaryIO
 
 from domain.contracts import DeviceRouter, LLMClient
 from domain.tools.base import ToolRegistry
-from domain.entities.message import ToolCall, Completion
+from domain.entities.message import Completion
 from application.services.context_service import ContextManager
 from application.services.memory_service import MemoryService
 
@@ -17,6 +17,10 @@ ConfirmFn = Callable[[str, dict], Awaitable[bool]]
 
 async def _always_true(name: str, payload: dict) -> bool:
     return True
+
+async def deny_by_default(name: str, payload: dict) -> bool:
+    """Default seguro: nega destrutiva sem aceite explícito do transporte."""
+    return False
 
 
 class Orchestrator:
@@ -32,14 +36,14 @@ class Orchestrator:
         device_router: DeviceRouter,
         *,
         confirm: ConfirmFn | None = None,
-        audit_log=None
+        audit_log: BinaryIO | None = None
     ) -> None:
         self._llm = llm
         self._context = context
         self._tools = tools
         self._memory = memory
         self._device_router = device_router
-        self._confirm = confirm or _always_true
+        self._confirm = confirm or deny_by_default
         self._audit_log = audit_log
         self._sessions: dict[str, list[dict]] = {}
         self._traces: dict[str, list[dict]] = {}
@@ -66,12 +70,15 @@ class Orchestrator:
             msg = await self._llm.complete(messages, tools=active.as_openai_tools())
             
             if not getattr(msg, "tool_calls", None):
-                text = msg.content or ""
                 if user_turn:
                     history = history + [user_turn]
-                history = history + [{"role": "assistant", "content": text}]
+                buf: list[str] = []
+                async for tok, _ in self._llm.stream(messages):
+                    buf.append(tok)
+                    yield tok
+                history = history + [{"role": "assistant", "content": "".join(buf)}]
                 self._sessions[session_id] = history
-                yield text
+                self._flush_trace(session_id)
                 return
             history = await self._handle_tool_calls(
                 session_id, history, user_turn, msg, active, device_id, seen
@@ -177,7 +184,12 @@ class Orchestrator:
             "obs_raw_len": len(raw_obs), "obs_compact": compact,
         })
     
-        
+    def _flush_trace(self, session_id: str) -> None:
+        entries = self._traces.pop(session_id,[])
+        if entries and self._audit_log is not None:
+            self._audit_log.write(
+                orjson.dumps({"session": session_id, "steps": entries}) + b"\n"
+            )
     
 def _user_turn(text: str, image: str  | None) -> dict:
     if not image:
