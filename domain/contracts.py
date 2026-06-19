@@ -47,4 +47,9 @@ class MemoryStore(Protocol):
         strength: float = 1.0,
         origin: str = "inferred"
     ) -> None: ...
+
+class DeviceRouter(Protocol):
+    """Roteador de ações device-side. Implementado por infrastructure.devices.device_router."""
     
+    async def dispatch(self, device_id: str | None, tool_call: dict) -> str: ...
+    def capabilities(self, device_id: str | None) -> set[str] | None: ...
