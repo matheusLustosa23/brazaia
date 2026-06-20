@@ -15,7 +15,7 @@ def _flatten(messages: list[dict]) -> list[dict]:
     """Reduz content multimodal a texto p/ contagem (imagens contam à parte/aprox.)."""
     flat = []
     for m in messages:
-        content = m["content"]
+        content = m.get("content","") 
         if isinstance(content, list):
             text = " ".join(block.get("text", "") for block in content if block.get("type") == "text")
             flat.append({"role": m["role"], "content": text})
@@ -27,7 +27,8 @@ def _flatten(messages: list[dict]) -> list[dict]:
 def count_tokens(messages: list[dict], model: str | None = None) -> int:
     model = model or get_settings().model_name
     t = _tok(model)
-    ids = t.apply_chat_template(_flatten(messages), add_generation_prompt=True, return_dict=False)
+    conversation = _flatten(messages)
+    ids = t.apply_chat_template(conversation, add_generation_prompt=True, return_dict=False)
     return len(ids)
 
 

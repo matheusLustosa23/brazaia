@@ -7,6 +7,7 @@ from typing import Awaitable, Callable,BinaryIO
 
 from domain.contracts import DeviceRouter, LLMClient
 from domain.tools.base import ToolRegistry
+from domain.contracts import SessionStore
 from domain.entities.message import Completion
 from application.services.context_service import ContextManager
 from application.services.memory_service import MemoryService
@@ -34,6 +35,7 @@ class Orchestrator:
         tools: ToolRegistry,
         memory: MemoryService,
         device_router: DeviceRouter,
+        session_store: SessionStore,
         *,
         confirm: ConfirmFn | None = None,
         audit_log: BinaryIO | None = None
@@ -45,10 +47,9 @@ class Orchestrator:
         self._device_router = device_router
         self._confirm = confirm or deny_by_default
         self._audit_log = audit_log
-        self._sessions: dict[str, list[dict]] = {}
+        self._session_store = session_store
         self._traces: dict[str, list[dict]] = {}
 
-        
     async def run(
         self,
         session_id: str,
@@ -57,7 +58,7 @@ class Orchestrator:
         image: str | None = None,
         device_id: str | None = None
     ) -> AsyncIterator[str]:
-        history = self._sessions.get(session_id,[])
+        history = self._session_store.get(session_id)
         memory_block = await self._memory.render_compact(user_message)
         system = self._system_prompt()
         capabilities = self._device_router.capabilities(device_id)
@@ -73,11 +74,11 @@ class Orchestrator:
                 if user_turn:
                     history = history + [user_turn]
                 buf: list[str] = []
-                async for tok, _ in self._llm.stream(messages):
+                async for _, tok in self._llm.stream(messages):
                     buf.append(tok)
                     yield tok
                 history = history + [{"role": "assistant", "content": "".join(buf)}]
-                self._sessions[session_id] = history
+                self._session_store.set(session_id, history) 
                 self._flush_trace(session_id)
                 return
             history = await self._handle_tool_calls(
@@ -86,7 +87,6 @@ class Orchestrator:
             user_turn = None
             
         yield "[aviso] limite de passos atingido; respondo com o que apurei até aqui."
-       
     
     def _system_prompt(self) -> str:
         return(
@@ -106,18 +106,17 @@ class Orchestrator:
     ) -> list[dict]:
         if user_turn is not None:
             history = history + [user_turn]
-        
         history = history + [
             {
                 "role":"assistant",
-                "content":msg.content,
+                "content":msg.content if msg.content is not None else "",
                 "tool_calls":[
                     {
                         "id": tc.id,
                         "type": "function",
                         "function": {
                             "name": tc.name,
-                            "arguments": tc.arguments
+                            "arguments": orjson.dumps(tc.arguments).decode()
                         }
                     }
                     for tc in msg.tool_calls
@@ -190,6 +189,9 @@ class Orchestrator:
             self._audit_log.write(
                 orjson.dumps({"session": session_id, "steps": entries}) + b"\n"
             )
+    
+    def create_session(self) -> str:
+        return self._session_store.create()
     
 def _user_turn(text: str, image: str  | None) -> dict:
     if not image:

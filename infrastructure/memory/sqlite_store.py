@@ -1,4 +1,4 @@
-import time
+import time, re
 from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
 
@@ -83,6 +83,11 @@ def _row_to_fact(row: aiosqlite.Row) -> MemoryFact:
     d = dict(row)
     d.pop("bm25_rank",None)
     return MemoryFact(**d)
+
+def _sanitize_fts5(query: str) -> str:
+    """Remove caracteres especiais do FTS5 que causam erro de sintaxe"""
+    cleaned = re.sub(r'[^\w\s]', ' ', query, flags=re.UNICODE)
+    return ' '.join(cleaned.split())
 
 class SqlLiteMemoryStore:
     def __init__(self, db_path: str) -> None:
@@ -178,7 +183,7 @@ class SqlLiteMemoryStore:
                     WHERE facts_fts MATCH ? AND f.invalid_at IS NULL
                     ORDER BY bm25_rank
                     LIMIT ?""",
-                (query, limit),
+                (_sanitize_fts5(query), limit),
             )
             if rows:
                 ids = [r["id"] for r in rows]
