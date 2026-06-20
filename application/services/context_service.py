@@ -51,7 +51,7 @@ class ContextManager:
             head.append({"role": "system", "content": memory_block})
         if rolling_summary:
             head.append({"role": "system", "content": f"[resumo da conversa]\n{rolling_summary}"})
-        tail = [user_turn]
+        tail = [user_turn] if user_turn else []
         
         room = self.input_budget - self._count(head + tail)
         recent: list[dict] = []
