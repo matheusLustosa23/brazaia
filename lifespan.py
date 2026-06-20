@@ -8,11 +8,13 @@ from infrastructure.llm.client import OpenAILLMClient
 from infrastructure.llm import tokenizer
 from infrastructure.tools.echo import EchoTool
 from infrastructure.memory.sqlite_store import SqlLiteMemoryStore
+from infrastructure.memory.session_store import InMemorySessionStore
 from application.services.context_service import ContextManager
 from application.services.memory_service import MemoryService
 from application.services.orchestrator import Orchestrator
 from application.tools.lembrar import LembrarTool
 from domain.tools.base import ToolRegistry
+
 
 
 @asynccontextmanager
@@ -39,12 +41,14 @@ async def lifespan(app: FastAPI):
     app.state.tools = registry
     app.state.device_router = DeviceRouter()
     app.state.memory = memory
+    app.state.session_store = InMemorySessionStore()
     app.state.orchestrator = Orchestrator(
         llm=app.state.llm,
         context=app.state.context,
         tools=app.state.tools,
         memory=app.state.memory,
         device_router=app.state.device_router,
+        session_store=app.state.session_store
     )
     setup_logging(settings.log_level)
     yield
