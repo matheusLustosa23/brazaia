@@ -58,7 +58,7 @@ class Orchestrator:
         image: str | None = None,
         device_id: str | None = None
     ) -> AsyncIterator[str]:
-        history = self._session_store.get(session_id)
+        history = await self._session_store.get(session_id)
         memory_block = await self._memory.render_compact(user_message)
         system = self._system_prompt()
         capabilities = self._device_router.capabilities(device_id)
@@ -78,7 +78,7 @@ class Orchestrator:
                     buf.append(tok)
                     yield tok
                 history = history + [{"role": "assistant", "content": "".join(buf)}]
-                self._session_store.set(session_id, history) 
+                await self._session_store.set(session_id, history) 
                 self._flush_trace(session_id)
                 return
             history = await self._handle_tool_calls(
@@ -190,8 +190,8 @@ class Orchestrator:
                 orjson.dumps({"session": session_id, "steps": entries}) + b"\n"
             )
     
-    def create_session(self) -> str:
-        return self._session_store.create()
+    async def create_session(self) -> str:
+        return await self._session_store.create()
     
 def _user_turn(text: str, image: str  | None) -> dict:
     if not image:

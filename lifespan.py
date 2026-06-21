@@ -8,7 +8,7 @@ from infrastructure.llm.client import OpenAILLMClient
 from infrastructure.llm import tokenizer
 from infrastructure.tools.echo import EchoTool
 from infrastructure.memory.sqlite_store import SqlLiteMemoryStore
-from infrastructure.memory.session_store import InMemorySessionStore
+from infrastructure.memory.session_store import SqlLiteSessionStore
 from application.services.context_service import ContextManager
 from application.services.memory_service import MemoryService
 from application.services.orchestrator import Orchestrator
@@ -34,6 +34,9 @@ async def lifespan(app: FastAPI):
     os.makedirs(os.path.dirname(settings.memory_db_path),exist_ok=True)
     _store = SqlLiteMemoryStore(settings.memory_db_path)
     await _store.init()
+    os.makedirs(os.path.dirname(settings.session_db_path), exist_ok=True)
+    _session_store = SqlLiteSessionStore(settings.session_db_path)
+    await _session_store.init()
     memory = MemoryService(_store)
     registry = ToolRegistry()
     registry.register(EchoTool())
@@ -41,7 +44,7 @@ async def lifespan(app: FastAPI):
     app.state.tools = registry
     app.state.device_router = DeviceRouter()
     app.state.memory = memory
-    app.state.session_store = InMemorySessionStore()
+    app.state.session_store = _session_store
     app.state.orchestrator = Orchestrator(
         llm=app.state.llm,
         context=app.state.context,

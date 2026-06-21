@@ -21,7 +21,7 @@ async def chat(
     request: Request,
     orch: Orchestrator = Depends(get_orchestrator)
 ):
-    session_id = req.session_id or orch.create_session()
+    session_id = req.session_id or await orch.create_session()
     if not req.stream:
         reply = "".join(
             [

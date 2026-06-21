@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     
     memory_db_path: str = "data/memoria.db"
+    session_db_path: str = "data/sessoes.db"
 
 
 @lru_cache 
