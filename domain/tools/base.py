@@ -1,37 +1,44 @@
 from __future__ import annotations
 
 import asyncio
-from typing import ClassVar, Literal
+from typing import ClassVar, Literal, Generic, TypeVar
 
 from pydantic import BaseModel, ValidationError
+
+InputType = TypeVar("InputType", bound=BaseModel)
 
 Side = Literal["server", "device"]
 ActionClass = Literal["read", "reversible", "destructive"]
 
 
-class Tool:
+class Tool(Generic[InputType]):
     name: ClassVar[str]
     description: ClassVar[str]
-    input_schema: ClassVar[type[BaseModel]]
+    input_schema:type[InputType]
     side: ClassVar[Side] = "server"
     action_class: ClassVar[ActionClass] = "read"
     timeout_s: ClassVar[float] = 15.0
     
-    async def run(self, payload: BaseModel) -> str:
+    async def run(self, payload: InputType) -> str:
         raise NotImplementedError()
 
 class ToolRegistry:
     def __init__(self) -> None:
         self._tools: dict[str, Tool] = {}
-    
+
     def register(self, tool: Tool) -> None:
         self._tools[tool.name] = tool
-    
+
     def get(self, tool_name: str) -> Tool | None:
         return self._tools.get(tool_name)
-    
+
     def __contains__(self, name):
         return name in self._tools
+    
+    def get_all_tool_names(self) -> list[str]:
+        """Retorna nomes de todas as tools registradas."""
+        return list(self._tools.keys())
+    
     
     async def run(self, name: str, payload: dict) -> str:
         tool = self.get(name)

@@ -10,7 +10,7 @@ class LembrarInput(BaseModel):
     confianca: float = 1.0
 
 
-class LembrarTool(Tool):
+class LembrarTool(Tool[LembrarInput]):
     name = "lembrar"
     description = "Persiste um fato sobre o dono na memória pessoal."
     input_schema = LembrarInput
@@ -20,8 +20,7 @@ class LembrarTool(Tool):
     def __init__(self, memory: MemoryService) -> None:
         self._memory = memory
 
-    async def run(self, payload: BaseModel) -> str:
-        assert isinstance(payload, LembrarInput)
+    async def run(self, payload: LembrarInput) -> str:
         fact = MemoryFact(
             category=payload.categoria,
             key=payload.chave,

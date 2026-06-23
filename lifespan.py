@@ -1,58 +1,104 @@
 import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
+
 from core import get_settings
+from core.container import Container, AIContainer, DeviceContainer
 from observability.logging import setup_logging
-from infrastructure.devices.device_router import DeviceRouter
+from infrastructure.devices.device_registry import SqlLiteDeviceRegistry
+from infrastructure.devices.device_connection import DeviceConnectionManager
+from infrastructure.devices.device_rpc import DeviceRPCManager
+from infrastructure.devices.device_gateway import DeviceGateway
 from infrastructure.llm.client import OpenAILLMClient
 from infrastructure.llm import tokenizer
 from infrastructure.tools.echo import EchoTool
+from infrastructure.tools.notify import NotifyTool
 from infrastructure.memory.sqlite_store import SqlLiteMemoryStore
 from infrastructure.memory.session_store import SqlLiteSessionStore
 from application.services.context_service import ContextManager
 from application.services.memory_service import MemoryService
 from application.services.orchestrator import Orchestrator
+from application.services.device_service import DeviceService
+from application.services.device_handshake import DeviceHandshakeService
 from application.tools.lembrar import LembrarTool
 from domain.tools.base import ToolRegistry
 
 
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup: instancia placeholders de LLMClient/DeviceRouter no app.state.
-    Núcleo desacoplado — tudo por injeção. Shutdown: fecha recursos."""
     settings = get_settings()
     app.state.settings = settings
-    # placeholders — implementação real em feat-llm-client / feat-companion-actuator
-    app.state.llm = OpenAILLMClient(settings)                      # -> LLMClient (feat-llm-client)
-    app.state.context = ContextManager(
+
+    # ── LLM ──
+    llm = OpenAILLMClient(settings)
+    context = ContextManager(
         budget=settings.max_context_tokens,
         reserved_output=settings.reserved_output_tokens,
         count_tokens=lambda msgs: tokenizer.count_tokens(msgs, settings.model_name),
-        llm=app.state.llm
+        llm=llm,
     )
-    os.makedirs(os.path.dirname(settings.memory_db_path),exist_ok=True)
+
+    # ── Memory ──
+    os.makedirs(os.path.dirname(settings.memory_db_path), exist_ok=True)
     _store = SqlLiteMemoryStore(settings.memory_db_path)
     await _store.init()
+    memory = MemoryService(_store)
+
+    # ── Session ──
     os.makedirs(os.path.dirname(settings.session_db_path), exist_ok=True)
     _session_store = SqlLiteSessionStore(settings.session_db_path)
     await _session_store.init()
-    memory = MemoryService(_store)
+
+    # ── Tools ──
     registry = ToolRegistry()
     registry.register(EchoTool())
     registry.register(LembrarTool(memory))
-    app.state.tools = registry
-    app.state.device_router = DeviceRouter()
-    app.state.memory = memory
-    app.state.session_store = _session_store
-    app.state.orchestrator = Orchestrator(
-        llm=app.state.llm,
-        context=app.state.context,
-        tools=app.state.tools,
-        memory=app.state.memory,
-        device_router=app.state.device_router,
-        session_store=app.state.session_store
+    registry.register(NotifyTool())
+
+    # ── Devices ──
+    os.makedirs(os.path.dirname(settings.device_db_path), exist_ok=True)
+    device_registry = SqlLiteDeviceRegistry(settings.device_db_path)
+    await device_registry.init()
+
+    device_service = DeviceService(device_registry, registry)
+    conn_manager = DeviceConnectionManager()
+    rpc_manager = DeviceRPCManager(settings.device_ws_timeout)
+    device_gateway = DeviceGateway(conn_manager, rpc_manager, device_service)
+    device_handshake = DeviceHandshakeService(device_service, device_gateway)
+
+    # ── Orchestrator ──
+    orchestrator = Orchestrator(
+        llm=llm,
+        context=context,
+        tools=registry,
+        memory=memory,
+        device_gateway=device_gateway,
+        session_store=_session_store,
     )
+
+    # ── Sub-Containers ──
+    ai_container = AIContainer(
+        llm=llm,
+        context=context,
+        tools=registry,
+        memory=memory,
+        session_store=_session_store,
+    )
+
+    device_container = DeviceContainer(
+        registry=device_registry,
+        service=device_service,
+        gateway=device_gateway,
+        handshake=device_handshake,
+    )
+
+    # ── Container (Composition Root) ──
+    container = Container(
+        ai=ai_container,
+        device=device_container,
+        orchestrator=orchestrator,
+    )
+    app.state.container = container
+
     setup_logging(settings.log_level)
     yield
-    # shutdown: await app.state.llm.aclose() etc. quando existirem

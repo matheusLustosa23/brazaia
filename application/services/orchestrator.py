@@ -5,12 +5,13 @@ import orjson
 from collections.abc import AsyncIterator
 from typing import Awaitable, Callable,BinaryIO
 
-from domain.contracts import DeviceRouter, LLMClient
+from domain.contracts import LLMClient
 from domain.tools.base import ToolRegistry
 from domain.contracts import SessionStore
 from domain.entities.message import Completion
 from application.services.context_service import ContextManager
 from application.services.memory_service import MemoryService
+from infrastructure.devices.device_gateway import DeviceGateway
 
 MAX_STEPS = 8
 
@@ -34,7 +35,7 @@ class Orchestrator:
         context: ContextManager,
         tools: ToolRegistry,
         memory: MemoryService,
-        device_router: DeviceRouter,
+        device_gateway: DeviceGateway,
         session_store: SessionStore,
         *,
         confirm: ConfirmFn | None = None,
@@ -44,7 +45,7 @@ class Orchestrator:
         self._context = context
         self._tools = tools
         self._memory = memory
-        self._device_router = device_router
+        self._device_gateway = device_gateway
         self._confirm = confirm or deny_by_default
         self._audit_log = audit_log
         self._session_store = session_store
@@ -61,7 +62,7 @@ class Orchestrator:
         history = await self._session_store.get(session_id)
         memory_block = await self._memory.render_compact(user_message)
         system = self._system_prompt()
-        capabilities = self._device_router.capabilities(device_id)
+        capabilities = await self._device_gateway.capabilities(device_id)
         active = self._tools.for_device(capabilities)
         user_turn: dict | None = _user_turn(user_message, image)
         seen: set[tuple[str, bytes]] = set()
@@ -168,7 +169,9 @@ class Orchestrator:
         
         if tool.side == "server":
             return await active.run(name, payload)
-        return await self._device_router.dispatch(device_id, {"name": name, "arguments": payload})
+        
+        parsed = tool.input_schema.model_validate(payload)
+        return await self._device_gateway.dispatch(device_id, tool, parsed)
     
     def _trace(
         self,
