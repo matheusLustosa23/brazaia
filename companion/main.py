@@ -1,0 +1,56 @@
+import asyncio, os, sys, websockets, orjson
+
+from companion.runtime import runtime
+from companion.tools import notify_handler
+
+SERVER_WS_URL = os.getenv("SERVER_WS_URL", "ws://localhost:8000/api/v1/ws/device")
+DEVICE_ID = os.getenv("DEVICE_ID", "device_macbook_pro_01")
+DEVICE_NAME = os.getenv("DEVICE_NAME", "Dispositivo Principal de Trabalho")
+
+async def run_companion_agent():
+    """Gerencia a conexão ativa, rotina de rede e escuta RPC do Companion."""
+    uri = f"{SERVER_WS_URL}/{DEVICE_ID}"
+    print(f"🚀 Inicializando Companion Client... Conectando a {uri}")
+    
+    try:
+        async with websockets.connect(uri) as ws:
+            await ws.send(orjson.dumps({"name": DEVICE_NAME}).decode())
+            print("🛰️  Metadados de handshake enviados.")
+            
+            welcome_msg = await ws.recv()
+            welcome_data = orjson.loads(welcome_msg)
+            
+            if welcome_data.get("type") == "welcome":
+                print("❇️  Handshake aceito pelo Servidor Central!")
+                print(f"📋 Contratos permitidos pelo Server: {welcome_data.get('tools')}")
+                print(f"🛠️  Handlers locais registrados na memória: {runtime.list_tools()}")
+            
+            print("\n📥 Monitorando barramento de ações remoto...")
+            async for msg in ws:
+                action = orjson.loads(msg)
+                print(action)
+                if "request_id" in action and "name" in action:
+                    req_id = action["request_id"]
+                    tool_name= action["name"]
+                    
+                    print(f"⚡ Chamada Remota Recebida: [Tool: {tool_name}] (ID: {req_id})")
+                    
+                    execution_result = await runtime.execute(action)
+                    
+                    response = {
+                        "request_id": req_id,
+                        "result": execution_result,
+                    }
+                    
+                    await ws.send(orjson.dumps(response).decode())
+                    print(f"📤 Resposta enviada. ID: {req_id}")
+    except websockets.exceptions.ConnectionClosed:
+        print("❌ Conexão WebSocket finalizada pelo servidor.")
+    except Exception as e:
+        print(f"💥 Falha na runtime do agente: {e}", file=sys.stderr)                
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(run_companion_agent())
+    except KeyboardInterrupt:
+        print("\n👋 Companion interrompido pelo usuário.")
