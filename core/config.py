@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     
     memory_db_path: str = "data/memoria.db"
     session_db_path: str = "data/sessoes.db"
+    
+    device_db_path: str = "data/devices.db"
+    device_ws_timeout: float = 30.0
 
 
 @lru_cache 
