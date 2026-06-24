@@ -7,9 +7,11 @@ SERVER_WS_URL = os.getenv("SERVER_WS_URL", "ws://localhost:8000/api/v1/ws/device
 DEVICE_ID = os.getenv("DEVICE_ID", "device_macbook_pro_01")
 DEVICE_NAME = os.getenv("DEVICE_NAME", "Dispositivo Principal de Trabalho")
 
-async def run_companion_agent():
+async def run_companion_agent(device: str | None = None):
     """Gerencia a conexão ativa, rotina de rede e escuta RPC do Companion."""
-    uri = f"{SERVER_WS_URL}/{DEVICE_ID}"
+    if not device:
+        device = DEVICE_ID
+    uri = f"{SERVER_WS_URL}/{device}"
     print(f"🚀 Inicializando Companion Client... Conectando a {uri}")
     
     try:
@@ -51,6 +53,7 @@ async def run_companion_agent():
 
 if __name__ == "__main__":
     try:
-        asyncio.run(run_companion_agent())
+        device = input("Digite o nome do device:")
+        asyncio.run(run_companion_agent(device))
     except KeyboardInterrupt:
         print("\n👋 Companion interrompido pelo usuário.")
