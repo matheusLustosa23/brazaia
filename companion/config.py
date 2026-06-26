@@ -12,7 +12,7 @@ class CompanionConfig:
 
 def load_config() -> CompanionConfig:
     return CompanionConfig(
-        server_ws_url=os.getenv("SERVER_WS_URL", "ws://localhost:8000/api/v1/ws/device"),
+        server_ws_url=os.getenv("SERVER_WS_URL", "ws://localhost:8000/api/v1"),
         device_id=os.getenv("DEVICE_ID", "device_macbook_pro_01"),
         device_name=os.getenv("DEVICE_NAME", "Dispositivo Principal"),
         token=os.getenv("DEVICE_TOKEN"),
