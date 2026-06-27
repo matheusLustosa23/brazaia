@@ -1,5 +1,4 @@
 from fastapi import Request, Header, WebSocket
-
 from core.container import Container
 from domain.contracts import LLMClient
 from domain.exceptions.base import AgentError
@@ -21,6 +20,11 @@ def get_memory(request: Request) -> MemoryService:
 
 def get_orchestrator(request: Request) -> Orchestrator:
     return _get_container(request).orchestrator
+
+
+
+def get_asr(websocket: WebSocket):
+    return websocket.app.state.asr
 
 def require_api_key(
     request: Request,

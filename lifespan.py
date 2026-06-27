@@ -1,4 +1,4 @@
-import os
+import os, asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
@@ -22,7 +22,7 @@ from application.services.device_service import DeviceService
 from application.services.device_handshake import DeviceHandshakeService
 from application.tools.lembrar import LembrarTool
 from domain.tools.base import ToolRegistry
-
+from infrastructure.voice.asr import ASR
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -98,6 +98,10 @@ async def lifespan(app: FastAPI):
         device=device_container,
         orchestrator=orchestrator,
     )
+    asr = await asyncio.to_thread(
+        ASR, settings.voice_stt_model, "cpu", settings.voice_beam_size
+    )
+    app.state.asr = asr
     app.state.container = container
 
     setup_logging(settings.log_level)
