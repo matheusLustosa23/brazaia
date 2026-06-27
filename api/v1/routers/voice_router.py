@@ -1,5 +1,8 @@
 import orjson, logging
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
+
+from application.services.voice_service import VoiceService
+from api.v1.dependencies import get_asr  # injeta o ASR compartilhado (lifespan)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -12,38 +15,33 @@ async def ping_ws(ws: WebSocket) -> None:
     await ws.close()
 
 @router.websocket("/ws/voice")
-async def voice_ws(ws: WebSocket) -> None:
+async def voice_ws(ws: WebSocket, asr=Depends(get_asr)) -> None:
+   
     await ws.accept()
-    msg = await ws.receive()
-    text = msg.get("text") or msg.get("bytes",b"").decode()
-    start = orjson.loads(text)
-    assert start["type"] == "turn_start"
-    logger.info(f"turn_start: device={start.get('device_id')}")
+    voice = VoiceService(asr)
     
-    audio = bytearray()
-    chunk_count = 0 
     try:
+        first = await ws.receive()
+        start = orjson.loads(first["text"])
+        assert start.get("type") == "turn_start"
+        logger.info("turn_start device=%s", start.get("device_id"))
+        
         while True:
             msg = await ws.receive()
             if msg.get("bytes") is not None:
-                audio.extend(msg["bytes"])
-                chunk_count += 1
-                if chunk_count % 50 == 0:
-                    logger.info(f"audio_chunks_received: {chunk_count} bytes={len(audio)}")
+                voice.feed(msg["bytes"])
             elif msg.get("text") is not None:
                 ctrl = orjson.loads(msg["text"])
                 if ctrl.get("type") == "turn_end":
-                    break
-                
-        await ws.send_text(orjson.dumps({
-            "type": "turn_done",
-            "asr": "",
-            "debug": {"chunks": chunk_count, "bytes": len(audio)}
-        }).decode())
-        
+                    texto = await voice.transcribe()
+                    logger.info("turn_end texto=%s", texto)
+                    # Slice 3: resposta = await voice.reply_text(texto)
+                    await ws.send_text(
+                        orjson.dumps({"type": "turn_done", "text": texto or ""}).decode()
+                    )
+                    return
     except WebSocketDisconnect:
-        return
-    await  ws.send_text(orjson.dumps({"type": "turn_done", "asr": None}).decode())
+        return                   
     
-                
+  
     
