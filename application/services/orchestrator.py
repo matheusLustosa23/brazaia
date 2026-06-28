@@ -57,11 +57,14 @@ class Orchestrator:
         user_message: str,
         *,
         image: str | None = None,
-        device_id: str | None = None
+        device_id: str | None = None,
+        extra_system: str | None = None
     ) -> AsyncIterator[str]:
         history = await self._session_store.get(session_id)
         memory_block = await self._memory.render_compact(user_message)
         system = self._system_prompt()
+        if extra_system:
+            system = f"{system}\n\n{extra_system}"
         capabilities = await self._device_gateway.capabilities(device_id)
         active = self._tools.for_device(capabilities)
         user_turn: dict | None = _user_turn(user_message, image)
