@@ -15,10 +15,12 @@ async def ping_ws(ws: WebSocket) -> None:
     await ws.close()
 
 @router.websocket("/ws/voice")
-async def voice_ws(ws: WebSocket, asr=Depends(get_asr)) -> None:
+async def voice_ws(ws: WebSocket) -> None:
    
     await ws.accept()
-    voice = VoiceService(asr)
+    asr = ws.app.state.asr
+    orchestrator = ws.app.state.container.orchestrator
+    voice = VoiceService(asr, orchestrator)
     
     try:
         first = await ws.receive()
@@ -34,10 +36,17 @@ async def voice_ws(ws: WebSocket, asr=Depends(get_asr)) -> None:
                 ctrl = orjson.loads(msg["text"])
                 if ctrl.get("type") == "turn_end":
                     texto = await voice.transcribe()
-                    logger.info("turn_end texto=%s", texto)
+                    resposta = await voice.reply_text(texto) if texto else ""
+                    logger.info("llm_reply: %s", resposta[:100])
                     # Slice 3: resposta = await voice.reply_text(texto)
                     await ws.send_text(
-                        orjson.dumps({"type": "turn_done", "text": texto or ""}).decode()
+                        orjson.dumps(
+                            {
+                                "type": "turn_done", 
+                                "text": texto or "",
+                                "reply": resposta
+                            }
+                        ).decode()
                     )
                     return
     except WebSocketDisconnect:

@@ -77,6 +77,8 @@ class VoiceSession:
                     ctrl = orjson.loads(msg)
                     if ctrl.get("type") == "turn_done":
                         print(f"Transcrição: {ctrl.get('text')}")
+                        if ctrl.get("reply"):
+                            print(f"IA: {ctrl.get('reply')}")
                         return
 
 
