@@ -4,14 +4,14 @@ import numpy as np
 import orjson
 import websockets
 import time
-from companion.audio import capture_chunks
+from companion.audio import capture_chunks, play, TTS_SAMPLE_RATE
 from companion.config import CompanionConfig
 from companion.vad import SilenceEndpointer
 
 
 logger = logging.getLogger(__name__)
 
-SAMPLE_RATE = 16_000
+SAMPLE_RATE =  16_000
 BAR_WIDTH = 20
 RMS_FACTOR = 300
 SILENCE_MS = 1500             # silêncio contínuo para encerrar o turno
@@ -72,7 +72,7 @@ class VoiceSession:
 
             async for msg in ws:
                 if isinstance(msg, bytes):
-                    pass  # TTS (Slice 4)
+                    await play(msg, sample_rate=TTS_SAMPLE_RATE)
                 else:
                     ctrl = orjson.loads(msg)
                     if ctrl.get("type") == "turn_done":

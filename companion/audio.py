@@ -5,6 +5,7 @@ import numpy as np
 import sounddevice as sd
 
 SAMPLE_RATE = 16_000
+TTS_SAMPLE_RATE = 24_000   # Kokoro (saída do TTS)
 CHANNELS = 1
 DTYPE = "int16"
 
@@ -32,6 +33,11 @@ async def capture_chunks(stop_event: asyncio.Event, chunks_ms: int = 30) -> Asyn
 async def play(audio_bytes: bytes, sample_rate: int = SAMPLE_RATE) -> None:
     """Reproduz PCM int16 no speaker."""
     audio = np.frombuffer(audio_bytes, dtype=np.int16)
-    await asyncio.get_event_loop().run_in_executor(
-        None, lambda: sd.play(audio, samplerate=sample_rate)
-    )
+    
+    def _play():
+        sd.play(audio, samplerate=sample_rate)
+        sd.wait()
+    
+    await asyncio.get_event_loop().run_in_executor(None, _play)
+    
+    

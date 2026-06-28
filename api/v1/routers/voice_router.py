@@ -20,7 +20,8 @@ async def voice_ws(ws: WebSocket) -> None:
     await ws.accept()
     asr = ws.app.state.asr
     orchestrator = ws.app.state.container.orchestrator
-    voice = VoiceService(asr, orchestrator)
+    tts = ws.app.state.tts
+    voice = VoiceService(asr, orchestrator, tts)
     
     try:
         first = await ws.receive()
@@ -36,18 +37,21 @@ async def voice_ws(ws: WebSocket) -> None:
                 ctrl = orjson.loads(msg["text"])
                 if ctrl.get("type") == "turn_end":
                     texto = await voice.transcribe()
-                    resposta = await voice.reply_text(texto) if texto else ""
+                    if texto:
+                        try:
+                            async for pcm in voice.reply_audio(texto):
+                                await ws.send_bytes(pcm)
+                            resposta = voice.last_reply
+                        except Exception as e:
+                            logger.warning("tts_error: %s", e)
+                            resposta = await voice.reply_text(texto)
+                    else: 
+                        resposta = ""
+                    
                     logger.info("llm_reply: %s", resposta[:100])
-                    # Slice 3: resposta = await voice.reply_text(texto)
-                    await ws.send_text(
-                        orjson.dumps(
-                            {
-                                "type": "turn_done", 
-                                "text": texto or "",
-                                "reply": resposta
-                            }
-                        ).decode()
-                    )
+                    await ws.send_text(orjson.dumps(
+                        {"type": "turn_done", "text": texto or "", "reply": resposta}
+                    ).decode())
                     return
     except WebSocketDisconnect:
         return                   
