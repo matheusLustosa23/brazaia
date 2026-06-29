@@ -5,6 +5,7 @@ import orjson
 import websockets
 import time
 from companion.audio import capture_chunks, play, TTS_SAMPLE_RATE
+from companion.wake import WakeWord
 from companion.config import CompanionConfig
 from companion.vad import SilenceEndpointer
 
@@ -31,13 +32,16 @@ class VoiceSession:
         self.url = f"{cfg.server_ws_url}/ws/voice"
         self.max_seconds = max_seconds
         self._endpointer = SilenceEndpointer(silence_ms=SILENCE_MS)
+        self.wake = WakeWord(cfg.wake_models, cfg.wake_threshold)
     
     async def loop(self):
-        """Modo simplificado: Enter → grava → VAD encerra no silêncio."""
+        """Modo completo: wake → grava → envia → resposta."""
         while True:
-            print("Pressione Enter para falar...")
-            await asyncio.get_event_loop().run_in_executor(None, input)
-            print("Gravando... fale agora!")
+            stop = asyncio.Event()
+            print("Aguardando wake ('Fala Braza')...")
+            trigger = await self.wake.wait_for_trigger(capture_chunks(stop, chunks_ms=80))
+            stop.set()
+            print(f"[wake: {trigger}] fale agora...")
             await self._run_turn()
     
     async def _run_turn(self):

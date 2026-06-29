@@ -1,5 +1,5 @@
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -8,6 +8,8 @@ class CompanionConfig:
     device_id: str
     device_name: str
     token: str | None = None
+    wake_models: list[str] = field(default_factory=lambda: ["companion/models/braza.onnx"])
+    wake_threshold: float = 0.3
 
 
 def load_config() -> CompanionConfig:
@@ -16,4 +18,6 @@ def load_config() -> CompanionConfig:
         device_id=os.getenv("DEVICE_ID", "device_macbook_pro_01"),
         device_name=os.getenv("DEVICE_NAME", "Dispositivo Principal"),
         token=os.getenv("DEVICE_TOKEN"),
+        wake_models=os.getenv("WAKE_MODELS", "companion/models/braza.onnx").split(","),
+        wake_threshold=float(os.getenv("WAKE_THRESHOLD", "0.3")),
     )

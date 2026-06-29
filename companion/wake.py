@@ -1,26 +1,24 @@
-import asyncio, numpy as np
+import numpy as np
 from openwakeword.model import Model
 from collections.abc import AsyncIterator
 
-WAKE_MODEL_PATH = ".venv/lib/python3.12/site-packages/openwakeword/resources/models/hey_jarvis_v0.1.onnx"
-THRESHOLD = 0.3
-
 
 class WakeWord:
-    def __init__(self, path: str = WAKE_MODEL_PATH):
-        self._model = Model(wakeword_model_paths=[path])
-        
-    async def wait_for_trigger(self, mic_chunks: AsyncIterator[bytes]) -> None:
-        """Bloqueia até detectar 'Hey Jarvis'. Mic permanece local até aqui."""
-        async for chunk in mic_chunks:
+    """Detecção on-device. Carrega 1+ modelos custom; dispara no threshold."""
+
+    def __init__(self, model_paths: list[str], threshold: float = 0.3):
+        self._model = Model(wakeword_model_paths=model_paths)
+        self._threshold = threshold
+
+    async def wait_for_trigger(self, chunks: AsyncIterator[bytes]) -> str:
+        """Consome chunks PCM int16 16kHz até detectar um wake. Retorna o nome do modelo."""
+        async for chunk in chunks:
             audio = np.frombuffer(chunk, dtype=np.int16)
             scores = self._model.predict(audio)
             if isinstance(scores, tuple):
                 scores = scores[0]
-            if max(scores.values()) >= THRESHOLD:
-                self._model.reset()
-                return
-            await asyncio.sleep(0)
-            
-            
-                
+            for name, score in scores.items():
+                if score >= self._threshold:
+                    self._model.reset()
+                    return name
+        return ""
