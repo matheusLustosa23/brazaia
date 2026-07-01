@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     voice_beam_size: int = 1
     voice_language: str = "pt"
     voice_sample_rate: int = 16_000
-    voice_tts_voice: str = "pf_dora"
+    voice_tts_voice: str = "pm_santa"
 
 
 @lru_cache 
