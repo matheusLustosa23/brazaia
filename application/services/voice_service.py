@@ -7,32 +7,44 @@ logger = logging.getLogger(__name__)
 
 
 VOICE_STYLE = """\
-Você está numa conversa por VOZ: o usuário OUVE a resposta, não lê. Marcações visuais \
-(listas, títulos, asteriscos, números ordenados, emojis, markdown) prejudicam a fala — não use nenhuma.
+Você está numa conversa por VOZ. O usuário OUVE, não lê. Responda como uma pessoa \
+responderia falando — direto e curto.
 
-Como responder:
-- Comece direto pela resposta. Nunca abra explicando que está adaptando, formatando ou que vai falar.
-- Frases corridas e naturais, tom coloquial, como alguém conversando pessoalmente. \
-Use vírgulas e pontos como pausas, não quebras estruturais.
-- Nunca faça meta-comentário sobre formato ou voz.
+Regra principal — BREVIDADE:
+- Responda em 1 ou 2 frases. Vá direto ao ponto que foi perguntado.
+- Dê a resposta primeiro. Não recapitule o histórico, não liste etapas, não explique seu \
+raciocínio a menos que peçam.
+- Assunto longo → dê só o essencial e ofereça continuar ("quer que eu detalhe?").
+- Pergunta curta = resposta curta. Só se estenda com "explica/detalha/passo a passo" explícito.
 
-Casos especiais:
-- Listas (ingredientes, passos): apresente de forma narrativa e conectada ("primeiro", "depois", "além disso").
-- Números e dados: fale por extenso no contexto ("três em cada cinco" em vez de "3/5").
-- Incerteza: diga naturalmente ("não tenho certeza, mas acho que...").
+Tom:
+- Coloquial e natural, como falando com um colega. Frases corridas, sem marcações visuais \
+(listas, títulos, asteriscos, emojis, markdown).
+- Nunca faça meta-comentário sobre formato, voz ou que você está sendo breve.
+
+Exemplos:
+P: "Onde a gente parou?"
+✓ "Paramos no script do wake word."
+✗ "Na última interação fizemos uma análise dos arquivos X e Y, depois editamos o wake.py nas \
+linhas tais, commitamos e discutimos o threshold..."
+
+P: "Deu certo o treino?"
+✓ "Deu, o modelo ficou pronto. O recall ainda tá baixo, mas dá pra usar."
+✗ "O treino concluiu com accuracy 0.80, recall 0.51 e 3.7 falsos positivos por hora..."
 """
 
 class VoiceService:
     """Orquestra o ASR para UM turno de voz. Criado por conexão WS (mantém o
     buffer de áudio do turno). O modelo de ASR em si é compartilhado e stateless."""
     
-    def __init__(self, asr: VoiceASR, orchestrator: Orchestrator, tts: VoiceTTS):
+    def __init__(self, asr: VoiceASR, orchestrator: Orchestrator, tts: VoiceTTS, session_id: str = "voice"):
         self._asr = asr
         self._audio = bytearray()
         self._orchestrator = orchestrator
         self._last_reply = ""
         self._tts = tts
-    
+        self._session_id = session_id
+        
     @property
     def last_reply(self) -> str:
         return self._last_reply
@@ -45,12 +57,12 @@ class VoiceService:
         parts: list[str] = []
         t0, first = time.monotonic(), True
         
-        async def tee() -> AsyncIterator[str]:
-            async for tok in  self._orchestrator.run(session_id="voice",user_message=text, extra_system=VOICE_STYLE):
+        async def tee(session_id: str) -> AsyncIterator[str]:
+            async for tok in  self._orchestrator.run(session_id=session_id,user_message=text, extra_system=VOICE_STYLE):
                 parts.append(tok)
                 yield tok
         
-        async for pcm in self._tts.stream(tee()):
+        async for pcm in self._tts.stream(tee(self._session_id)):
             if first:
                 logger.info("voice_tts_ttft_ms=%d", round((time.monotonic() - t0) * 1000))
                 first = False
@@ -77,7 +89,7 @@ class VoiceService:
         tokens = [
             tok 
             async for tok in self._orchestrator.run(
-                session_id="voice",
+                session_id=self._session_id,
                 user_message=text,
                 extra_system=VOICE_STYLE
             )
