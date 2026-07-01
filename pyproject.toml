@@ -17,6 +17,7 @@ dependencies = [
     "openwakeword>=0.4.0",
     "kokoro>=0.9.4",
     "emoji>=2.15.0",
+    "soundfile>=0.14.0",
 ]
 
 [dependency-groups]
