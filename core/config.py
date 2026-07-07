@@ -44,6 +44,12 @@ class Settings(BaseSettings):
     
     device_db_path: str = "data/devices.db"
     device_ws_timeout: float = 30.0
+    
+    voice_stt_model: str = "small"       # benchmark: RTF ~0.11; "large-v3-turbo" p/ +qualidade
+    voice_beam_size: int = 1
+    voice_language: str = "pt"
+    voice_sample_rate: int = 16_000
+    voice_tts_voice: str = "pm_santa"
 
 
 @lru_cache 
