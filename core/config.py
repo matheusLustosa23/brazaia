@@ -50,6 +50,8 @@ class Settings(BaseSettings):
     voice_language: str = "pt"
     voice_sample_rate: int = 16_000
     voice_tts_voice: str = "pm_santa"
+    
+    vision_default_source: str = "webcam" 
 
 
 @lru_cache 

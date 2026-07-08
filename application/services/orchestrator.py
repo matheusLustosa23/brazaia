@@ -17,6 +17,14 @@ MAX_STEPS = 8
 
 ConfirmFn = Callable[[str, dict], Awaitable[bool]]
 
+VISION_STYLE = """\
+Você está olhando uma IMAGEM real capturada agora.
+Grounding (regra absoluta): descreva/leia SÓ o que está de fato na imagem; NÃO invente elementos/textos.
+Se algo estiver ilegível, DIGA que não conseguiu ler — nunca preencha com suposição.
+Ao avaliar (quadro/exercício): CONFIRA cada passo e o resultado circulado; diga o que está CERTO e ERRADO e ONDE.
+Se o resultado escrito estiver errado, APONTE — nunca "corrija em silêncio". É por voz: curto, veredito primeiro.
+"""
+
 async def _always_true(name: str, payload: dict) -> bool:
     return True
 
@@ -85,9 +93,11 @@ class Orchestrator:
                 await self._session_store.set(session_id, history) 
                 self._flush_trace(session_id)
                 return
-            history = await self._handle_tool_calls(
+            history, saw_image = await self._handle_tool_calls(
                 session_id, history, user_turn, msg, active, device_id, seen
             )
+            if saw_image and VISION_STYLE not in system:
+                system = f"{system}\n\n{VISION_STYLE}"
             user_turn = None
             
         yield "[aviso] limite de passos atingido; respondo com o que apurei até aqui."
@@ -107,7 +117,7 @@ class Orchestrator:
         active: ToolRegistry,
         device_id: str | None,
         seen: set[tuple[str, bytes]],
-    ) -> list[dict]:
+    ) ->  tuple[list[dict], bool]:
         if user_turn is not None:
             history = history + [user_turn]
         history = history + [
@@ -127,7 +137,7 @@ class Orchestrator:
                 ]
             }
         ]
-        
+        saw_image = False
         for tc in msg.tool_calls:
             name = tc.name
             payload = tc.arguments
@@ -137,18 +147,33 @@ class Orchestrator:
             else:
                 self._remember_call(name, payload, seen)
                 obs = await self._execute(name, payload, active, device_id)
-            
-            compact = await self._context.summarize(obs, foco=f"resultado de {name}")
+                
+            if isinstance(obs, str) and obs.startswith("data:image/"):
+                tool_content = [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": obs
+                        }
+                    }
+                ]
+                saw_image = True
+                trace_txt = "[imagem capturada]"
+            else:
+                tool_content =  await self._context.summarize(obs, foco=f"resultado de {name}")
+                trace_txt = tool_content
+        
+        
             history = history + [
                 {
                     "role": "tool", 
                     "tool_call_id": tc.id, 
-                    "content": compact
+                    "content": tool_content
                 }
             ]
-            self._trace(session_id, name, payload, obs, compact)
+            self._trace(session_id, name, payload, obs,  trace_txt)
             
-        return history
+        return (history, saw_image)
 
     def _is_repeat(self, name: str, payload: dict, seen: set[tuple[str, bytes]]) -> bool:
         return (name, orjson.dumps(payload, option=orjson.OPT_SORT_KEYS),) in seen
