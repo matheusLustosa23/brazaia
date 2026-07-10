@@ -14,6 +14,7 @@ from infrastructure.llm import tokenizer
 from infrastructure.tools.echo import EchoTool
 from infrastructure.tools.notify import NotifyTool
 from infrastructure.tools.capture_image import CaptureImageTool
+from infrastructure.tools.load_imagem import LoadImageTool
 from infrastructure.memory.sqlite_store import SqlLiteMemoryStore
 from infrastructure.memory.session_store import SqlLiteSessionStore
 from application.services.context_service import ContextManager
@@ -65,6 +66,7 @@ async def lifespan(app: FastAPI):
     registry.register(LembrarTool(memory))
     registry.register(NotifyTool())
     registry.register(CaptureImageTool(vision))
+    registry.register(LoadImageTool(image_index))
 
     # ── Devices ──
     os.makedirs(os.path.dirname(settings.device_db_path), exist_ok=True)
