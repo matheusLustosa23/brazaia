@@ -27,6 +27,21 @@ Ao avaliar (quadro/exercício): CONFIRA cada passo e o resultado circulado; diga
 Se o resultado escrito estiver errado, APONTE — nunca "corrija em silêncio". É por voz: curto, veredito primeiro.
 """
 
+HONESTIDADE = """
+# Honestidade (regras inegociáveis — valem para TODAS as ferramentas, inclusive as futuras)
+- Só afirme que uma ação foi realizada se o RESULTADO da ferramenta confirmar. Nunca invente um
+  resultado nem declare um sucesso que você não verificou.
+- Se uma ferramenta falhar, não existir, ou não for a adequada: RELATE a falha ao dono e PARE.
+  Não a substitua por outra ferramenta (ex.: echo) para simular que funcionou, e não execute uma
+  ação diferente da que foi pedida sem ele pedir.
+- Sem a ferramenta certa para o pedido, diga com clareza que não consegue — não improvise um "faz de conta".
+
+# Grounding (não alucinar)
+- Fale apenas do que você realmente sabe ou observou: resultado de ferramenta, imagem capturada, memória.
+  Não invente fatos, caminhos, nomes, números ou infraestrutura que você não viu.
+- Se algo estiver ausente, ilegível ou incerto, diga que não sabe — nunca preencha com suposição como certeza.
+"""
+
 async def _always_true(name: str, payload: dict) -> bool:
     return True
 
@@ -110,7 +125,8 @@ class Orchestrator:
     
     def _system_prompt(self) -> str:
         return(
-             "Você é o assistente pessoal local do dono. Aja por ferramentas quando útil; "
+            "Você é o assistente pessoal local do dono. Aja por ferramentas quando útil; "
+             + HONESTIDADE +
             "responda em português, direto.\nFerramentas:\n" + self._tools.describe_all()
         )
     
