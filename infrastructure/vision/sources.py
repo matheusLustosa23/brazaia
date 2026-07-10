@@ -27,9 +27,8 @@ class VisionRegistry:
 class WebCam:
     name = "webcam"
     
-    def __init__(self, index: int = 0, save_dir: str | None = "~/capturas"):
+    def __init__(self, index: int = 0):
         self._i = index
-        self._save_dir = os.path.expanduser(save_dir) if save_dir else None
     
     async def capture(self) -> str:
         return await asyncio.to_thread(self._grab)
@@ -40,14 +39,8 @@ class WebCam:
             ok, frame = cap.read()
             if not ok: raise RuntimeError("Web cam sem frame")
             _, buf = cv2.imencode(".jpg", frame)
-            
-            if self._save_dir:
-                SP = ZoneInfo("America/Sao_Paulo")
-                os.makedirs(self._save_dir, exist_ok=True)
-                fname = datetime.now(SP).strftime("%Y%m%d_%H%M%S_%f") + ".jpg"
-                buf.tofile(os.path.join(self._save_dir, fname))
-            
-            return "data:image/jpeg;base64," + base64.b64encode(buf).decode()
+            b64 = base64.b64encode(buf).decode()
+            return "data:image/jpeg;base64," + b64
         finally:
             cap.release()
     
