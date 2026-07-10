@@ -11,7 +11,9 @@ from domain.contracts import SessionStore
 from domain.entities.message import Completion
 from application.services.context_service import ContextManager
 from application.services.memory_service import MemoryService
+from application.services.helpers import _save_and_strip
 from infrastructure.devices.device_gateway import DeviceGateway
+from infrastructure.vision.image_index import ImageIndex
 
 MAX_STEPS = 8
 
@@ -45,6 +47,7 @@ class Orchestrator:
         memory: MemoryService,
         device_gateway: DeviceGateway,
         session_store: SessionStore,
+        image_index: ImageIndex, 
         *,
         confirm: ConfirmFn | None = None,
         audit_log: BinaryIO | None = None
@@ -58,6 +61,7 @@ class Orchestrator:
         self._audit_log = audit_log
         self._session_store = session_store
         self._traces: dict[str, list[dict]] = {}
+        self._image_index = image_index
 
     async def run(
         self,
@@ -86,11 +90,13 @@ class Orchestrator:
                 if user_turn:
                     history = history + [user_turn]
                 buf: list[str] = []
-                async for _, tok in self._llm.stream(messages):
+                async for kind, tok in self._llm.stream(messages):
+                    # if kind != "text":
+                    #     continue
                     buf.append(tok)
                     yield tok
                 history = history + [{"role": "assistant", "content": "".join(buf)}]
-                await self._session_store.set(session_id, history) 
+                await self._session_store.set(session_id, _save_and_strip(history, session_id, device_id, self._image_index)) 
                 self._flush_trace(session_id)
                 return
             history, saw_image = await self._handle_tool_calls(

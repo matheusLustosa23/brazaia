@@ -26,6 +26,7 @@ from domain.tools.base import ToolRegistry
 from infrastructure.voice.asr import ASR
 from infrastructure.voice.tts import TTS
 from infrastructure.vision.sources import VisionRegistry, WebCam
+from infrastructure.vision.image_index import ImageIndex
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -53,6 +54,7 @@ async def lifespan(app: FastAPI):
     await _session_store.init()
     
      # -- VISION --
+    image_index = ImageIndex()
     vision = VisionRegistry()
     vision.register(WebCam())
     
@@ -83,6 +85,7 @@ async def lifespan(app: FastAPI):
         memory=memory,
         device_gateway=device_gateway,
         session_store=_session_store,
+        image_index=image_index
     )
 
     # ── Sub-Containers ──
@@ -116,6 +119,7 @@ async def lifespan(app: FastAPI):
    
     app.state.asr = asr
     app.state.tts = tts
+    app.state.image_index = image_index
     app.state.vision = vision
     app.state.container = container
 
