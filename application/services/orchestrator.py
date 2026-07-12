@@ -106,8 +106,8 @@ class Orchestrator:
                     history = history + [user_turn]
                 buf: list[str] = []
                 async for kind, tok in self._llm.stream(messages):
-                    # if kind != "text":
-                    #     continue
+                    if kind != "text":
+                        continue
                     buf.append(tok)
                     yield tok
                 history = history + [{"role": "assistant", "content": "".join(buf)}]

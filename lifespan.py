@@ -11,7 +11,6 @@ from infrastructure.devices.device_rpc import DeviceRPCManager
 from infrastructure.devices.device_gateway import DeviceGateway
 from infrastructure.llm.client import OpenAILLMClient
 from infrastructure.llm import tokenizer
-from infrastructure.tools.echo import EchoTool
 from infrastructure.tools.notify import NotifyTool
 from infrastructure.tools.capture_image import CaptureImageTool
 from infrastructure.tools.load_imagem import LoadImageTool
@@ -62,7 +61,6 @@ async def lifespan(app: FastAPI):
 
     # ── Tools ──
     registry = ToolRegistry()
-    registry.register(EchoTool())
     registry.register(LembrarTool(memory))
     registry.register(NotifyTool())
     registry.register(CaptureImageTool(vision))
