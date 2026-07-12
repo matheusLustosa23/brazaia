@@ -2,6 +2,7 @@ import asyncio, base64, cv2, os
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Protocol
+from infrastructure.devices.device_gateway import DeviceGateway
 
 class VisionSource(Protocol):
     name: str
@@ -14,6 +15,9 @@ class VisionRegistry:
         
     def register(self, src: VisionSource) -> None:
         self._sources[src.name] = src
+    
+    def unregister(self, name: str) -> None:
+        self._sources.pop(name, None)
     
     def names(self) -> list[str]:
         return list(self._sources.keys())
@@ -43,4 +47,16 @@ class WebCam:
             return "data:image/jpeg;base64," + b64
         finally:
             cap.release()
+
+class DeviceCamera:
+    """Fonte remota: pede a foto ao companion do device via RPC."""
+    def __init__(self, gateway: DeviceGateway, device_id: str, name: str, camera: str | None = None):
+        self._gateway = gateway
+        self._device_id = device_id
+        self.name = name
+        self._camera = camera
+    
+    async def capture(self) -> str:
+        args = {"camera": self._camera} if self._camera else {}
+        return await self._gateway.request(self._device_id, "capture_image", args)
     

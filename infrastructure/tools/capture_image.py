@@ -5,7 +5,8 @@ from infrastructure.vision.sources import VisionRegistry
 class CaptureImageInput(BaseModel):
     source: str = Field(
         default="webcam",
-        description="de onde capturar: webcam | (futuro) celular_traseira | celular_frontal | notebook"
+        description="Fonte da câmera: 'webcam' (câmera do próprio server) OU o NOME EXATO de um device conectado "
+                    "(ex.: 'ubuntu-teste'). Se o usuário pedir a câmera de um aparelho específico, use o nome desse device."
     )
 
 class CaptureImageTool(Tool[CaptureImageInput]):

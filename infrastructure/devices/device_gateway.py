@@ -18,34 +18,25 @@ class DeviceGateway:
         self.connections = conn_manager
         self.rpc = rpc_manager
         self.service = device_service
-        
-    async def dispatch(
-        self,
-        device_id: str | None,
-        tool: Tool,
-        payload: BaseModel
-    ) -> str:
+    
+    async def request(self, device_id: str | None, name: str, arguments: dict) -> str:
         if not device_id:
-            return "[erro] device_id não fornecido pelo orquestrador"
-        
+            return "[erro] device_id não fornecido"
         ws = self.connections.get(device_id)
         if not ws:
-            return f"[erro] device '{device_id}' encontra-se offline"
-        
+            return f"[erro] device '{device_id}' offline"
         request_id, future = self.rpc.create_request()
-        action = {
-            "request_id": request_id,
-            "name": tool.name,
-            "arguments": payload.model_dump(),
-        }
-        
+        action = {"request_id": request_id, "name": name, "arguments": arguments}
         try:
             await ws.send_text(orjson.dumps(action).decode())
-            return await asyncio.wait_for(future, timeout=self.rpc.timeout)
+            return await asyncio.wait_for(future, timeout=self.rpc._timeout)
         except asyncio.TimeoutError:
-            return f"[timeout] device '{device_id}' excedeu tempo limite de {self.rpc.timeout}s"
+            return f"[timeout] device '{device_id}' excedeu {self.rpc.timeout}s"
         finally:
             self.rpc.cancel_request(request_id)
+        
+    async def dispatch(self, device_id, tool, payload):         
+        return await self.request(device_id, tool.name, payload.model_dump())
     
     async def capabilities(self, device_id: str | None) -> set[str] | None:
         """Retorna tools permitidas para o device."""

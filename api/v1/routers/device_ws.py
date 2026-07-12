@@ -1,5 +1,6 @@
 import orjson
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from infrastructure.vision.sources import DeviceCamera
 
 from core.container import Container
 
@@ -17,7 +18,9 @@ async def device_ws(
     try:
        all_tools = container.ai.tools.get_all_tool_names()
        await container.device.handshake.execute(ws, device_id, all_tools)
-       
+       ws.app.state.vision.register(
+            DeviceCamera(container.device.gateway, device_id, name=device_id)
+       )
        while True:
            msg = await ws.receive_text()
            data = orjson.loads(msg)
@@ -29,5 +32,6 @@ async def device_ws(
            
     except WebSocketDisconnect:
         container.device.gateway.connections.unregister(device_id)
+        ws.app.state.vision.unregister(device_id)
    
    
