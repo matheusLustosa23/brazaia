@@ -1,7 +1,8 @@
-import asyncio, os, sys, websockets, orjson
-
+import asyncio, os, sys, websockets
+from companion._json import dumps, loads  
+from companion.tools.capture_handler import CAMERAS 
 from companion.runtime import runtime
-from companion.tools import notify_handler
+
 
 SERVER_WS_URL = os.getenv("SERVER_WS_URL", "ws://localhost:8000/api/v1/ws/device")
 DEVICE_ID = os.getenv("DEVICE_ID", "device_macbook_pro_01")
@@ -16,11 +17,13 @@ async def run_companion_agent(device: str | None = None):
     
     try:
         async with websockets.connect(uri) as ws:
-            await ws.send(orjson.dumps({"name": DEVICE_NAME}).decode())
+            hs = {"name": DEVICE_NAME, "handlers": runtime.list_tools()}
+            if CAMERAS: hs["cameras"] = CAMERAS
+            await ws.send(dumps(hs))
             print("🛰️  Metadados de handshake enviados.")
             
             welcome_msg = await ws.recv()
-            welcome_data = orjson.loads(welcome_msg)
+            welcome_data = loads(welcome_msg)
             
             if welcome_data.get("type") == "welcome":
                 print("❇️  Handshake aceito pelo Servidor Central!")
@@ -29,7 +32,7 @@ async def run_companion_agent(device: str | None = None):
             
             print("\n📥 Monitorando barramento de ações remoto...")
             async for msg in ws:
-                action = orjson.loads(msg)
+                action = loads(msg)
                 print(action)
                 if "request_id" in action and "name" in action:
                     req_id = action["request_id"]
@@ -44,7 +47,7 @@ async def run_companion_agent(device: str | None = None):
                         "result": execution_result,
                     }
                     
-                    await ws.send(orjson.dumps(response).decode())
+                    await ws.send(dumps(response))
                     print(f"📤 Resposta enviada. ID: {req_id}")
     except websockets.exceptions.ConnectionClosed:
         print("❌ Conexão WebSocket finalizada pelo servidor.")

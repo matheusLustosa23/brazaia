@@ -21,6 +21,16 @@ class Tool(Generic[InputType]):
     
     async def run(self, payload: InputType) -> str:
         raise NotImplementedError()
+    
+    def openai_schema(self) -> dict:      
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": self.input_schema.model_json_schema(),
+            },
+        }
 
 class ToolRegistry:
     def __init__(self) -> None:
@@ -74,14 +84,7 @@ class ToolRegistry:
             else list(self._tools.values())
         )
         return [
-            {
-                "type":"function",
-                "function":{
-                    "name":t.name,
-                    "description":t.description,
-                    "parameters":t.input_schema.model_json_schema()
-                }
-            }
+            t.openai_schema()
             for t in items
         ]
     

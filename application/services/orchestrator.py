@@ -11,11 +11,36 @@ from domain.contracts import SessionStore
 from domain.entities.message import Completion
 from application.services.context_service import ContextManager
 from application.services.memory_service import MemoryService
+from application.services.helpers import _save_and_strip
 from infrastructure.devices.device_gateway import DeviceGateway
+from infrastructure.vision.image_index import ImageIndex
 
 MAX_STEPS = 8
 
 ConfirmFn = Callable[[str, dict], Awaitable[bool]]
+
+VISION_STYLE = """\
+Você está olhando uma IMAGEM real capturada agora.
+Grounding (regra absoluta): descreva/leia SÓ o que está de fato na imagem; NÃO invente elementos/textos.
+Se algo estiver ilegível, DIGA que não conseguiu ler — nunca preencha com suposição.
+Ao avaliar (quadro/exercício): CONFIRA cada passo e o resultado circulado; diga o que está CERTO e ERRADO e ONDE.
+Se o resultado escrito estiver errado, APONTE — nunca "corrija em silêncio". É por voz: curto, veredito primeiro.
+"""
+
+HONESTIDADE = """
+# Honestidade (regras inegociáveis — valem para TODAS as ferramentas, inclusive as futuras)
+- Só afirme que uma ação foi realizada se o RESULTADO da ferramenta confirmar. Nunca invente um
+  resultado nem declare um sucesso que você não verificou.
+- Se uma ferramenta falhar, não existir, ou não for a adequada: RELATE a falha ao dono e PARE.
+  Não a substitua por outra ferramenta (ex.: echo) para simular que funcionou, e não execute uma
+  ação diferente da que foi pedida sem ele pedir.
+- Sem a ferramenta certa para o pedido, diga com clareza que não consegue — não improvise um "faz de conta".
+
+# Grounding (não alucinar)
+- Fale apenas do que você realmente sabe ou observou: resultado de ferramenta, imagem capturada, memória.
+  Não invente fatos, caminhos, nomes, números ou infraestrutura que você não viu.
+- Se algo estiver ausente, ilegível ou incerto, diga que não sabe — nunca preencha com suposição como certeza.
+"""
 
 async def _always_true(name: str, payload: dict) -> bool:
     return True
@@ -37,6 +62,7 @@ class Orchestrator:
         memory: MemoryService,
         device_gateway: DeviceGateway,
         session_store: SessionStore,
+        image_index: ImageIndex, 
         *,
         confirm: ConfirmFn | None = None,
         audit_log: BinaryIO | None = None
@@ -50,6 +76,7 @@ class Orchestrator:
         self._audit_log = audit_log
         self._session_store = session_store
         self._traces: dict[str, list[dict]] = {}
+        self._image_index = image_index
 
     async def run(
         self,
@@ -78,23 +105,28 @@ class Orchestrator:
                 if user_turn:
                     history = history + [user_turn]
                 buf: list[str] = []
-                async for _, tok in self._llm.stream(messages):
+                async for kind, tok in self._llm.stream(messages):
+                    if kind != "text":
+                        continue
                     buf.append(tok)
                     yield tok
                 history = history + [{"role": "assistant", "content": "".join(buf)}]
-                await self._session_store.set(session_id, history) 
+                await self._session_store.set(session_id, _save_and_strip(history, session_id, device_id, self._image_index)) 
                 self._flush_trace(session_id)
                 return
-            history = await self._handle_tool_calls(
+            history, saw_image = await self._handle_tool_calls(
                 session_id, history, user_turn, msg, active, device_id, seen
             )
+            if saw_image and VISION_STYLE not in system:
+                system = f"{system}\n\n{VISION_STYLE}"
             user_turn = None
             
         yield "[aviso] limite de passos atingido; respondo com o que apurei até aqui."
     
     def _system_prompt(self) -> str:
         return(
-             "Você é o assistente pessoal local do dono. Aja por ferramentas quando útil; "
+            "Você é o assistente pessoal local do dono. Aja por ferramentas quando útil; "
+             + HONESTIDADE +
             "responda em português, direto.\nFerramentas:\n" + self._tools.describe_all()
         )
     
@@ -107,7 +139,7 @@ class Orchestrator:
         active: ToolRegistry,
         device_id: str | None,
         seen: set[tuple[str, bytes]],
-    ) -> list[dict]:
+    ) ->  tuple[list[dict], bool]:
         if user_turn is not None:
             history = history + [user_turn]
         history = history + [
@@ -127,7 +159,7 @@ class Orchestrator:
                 ]
             }
         ]
-        
+        saw_image = False
         for tc in msg.tool_calls:
             name = tc.name
             payload = tc.arguments
@@ -137,18 +169,33 @@ class Orchestrator:
             else:
                 self._remember_call(name, payload, seen)
                 obs = await self._execute(name, payload, active, device_id)
-            
-            compact = await self._context.summarize(obs, foco=f"resultado de {name}")
+                
+            if isinstance(obs, str) and obs.startswith("data:image/"):
+                tool_content = [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": obs
+                        }
+                    }
+                ]
+                saw_image = True
+                trace_txt = "[imagem capturada]"
+            else:
+                tool_content =  await self._context.summarize(obs, foco=f"resultado de {name}")
+                trace_txt = tool_content
+        
+        
             history = history + [
                 {
                     "role": "tool", 
                     "tool_call_id": tc.id, 
-                    "content": compact
+                    "content": tool_content
                 }
             ]
-            self._trace(session_id, name, payload, obs, compact)
+            self._trace(session_id, name, payload, obs,  trace_txt)
             
-        return history
+        return (history, saw_image)
 
     def _is_repeat(self, name: str, payload: dict, seen: set[tuple[str, bytes]]) -> bool:
         return (name, orjson.dumps(payload, option=orjson.OPT_SORT_KEYS),) in seen

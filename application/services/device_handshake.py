@@ -19,15 +19,14 @@ class DeviceHandshakeService:
         ws: WebSocket,
         device_id: str,
         all_tool_names: list[str]
-    ) -> None:
+    ) -> dict:
         """Executa a rotina estruturada de conexão, registro e autorização inicial."""
         msg = await ws.receive_text()
         data = orjson.loads(msg)
         device_name = data.get("name", device_id)
-        
+        handlers = data.get("handlers") or all_tool_names
         await self._service.register_device(device_id, device_name)
-        device = await self._service.activate_device(device_id, all_tool_names)
-        
+        device = await self._service.activate_device(device_id, handlers)
         self._gateway.connections.register(device_id, ws)
         
         welcome = {
@@ -36,5 +35,5 @@ class DeviceHandshakeService:
             "tools": device.allowed_tools,
         }
         await ws.send_text(orjson.dumps(welcome).decode())
-        
+        return data
         

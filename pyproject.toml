@@ -18,6 +18,10 @@ dependencies = [
     "kokoro>=0.9.4",
     "emoji>=2.15.0",
     "soundfile>=0.14.0",
+    "opencv-python>=5.0.0.93",
+    "faster-whisper>=1.2.1",
+    "websockets>=16.0",
+    "webrtcvad-wheels>=2.0.14",
 ]
 
 [dependency-groups]

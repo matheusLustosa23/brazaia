@@ -11,8 +11,9 @@ from infrastructure.devices.device_rpc import DeviceRPCManager
 from infrastructure.devices.device_gateway import DeviceGateway
 from infrastructure.llm.client import OpenAILLMClient
 from infrastructure.llm import tokenizer
-from infrastructure.tools.echo import EchoTool
 from infrastructure.tools.notify import NotifyTool
+from infrastructure.tools.capture_image import CaptureImageTool
+from infrastructure.tools.load_imagem import LoadImageTool
 from infrastructure.memory.sqlite_store import SqlLiteMemoryStore
 from infrastructure.memory.session_store import SqlLiteSessionStore
 from application.services.context_service import ContextManager
@@ -24,6 +25,8 @@ from application.tools.lembrar import LembrarTool
 from domain.tools.base import ToolRegistry
 from infrastructure.voice.asr import ASR
 from infrastructure.voice.tts import TTS
+from infrastructure.vision.sources import VisionRegistry, WebCam
+from infrastructure.vision.image_index import ImageIndex
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -49,12 +52,19 @@ async def lifespan(app: FastAPI):
     os.makedirs(os.path.dirname(settings.session_db_path), exist_ok=True)
     _session_store = SqlLiteSessionStore(settings.session_db_path)
     await _session_store.init()
+    
+     # -- VISION --
+    image_index = ImageIndex()
+    vision = VisionRegistry()
+    vision.register(WebCam())
+    
 
     # ── Tools ──
     registry = ToolRegistry()
-    registry.register(EchoTool())
     registry.register(LembrarTool(memory))
     registry.register(NotifyTool())
+    registry.register(CaptureImageTool(vision))
+    registry.register(LoadImageTool(image_index))
 
     # ── Devices ──
     os.makedirs(os.path.dirname(settings.device_db_path), exist_ok=True)
@@ -75,6 +85,7 @@ async def lifespan(app: FastAPI):
         memory=memory,
         device_gateway=device_gateway,
         session_store=_session_store,
+        image_index=image_index
     )
 
     # ── Sub-Containers ──
@@ -99,12 +110,17 @@ async def lifespan(app: FastAPI):
         device=device_container,
         orchestrator=orchestrator,
     )
+    # --- VOICE ---
     asr = await asyncio.to_thread(
         ASR, settings.voice_stt_model, "cpu", settings.voice_beam_size
     )
     tts = await asyncio.to_thread(TTS, settings.voice_tts_voice)
+    
+   
     app.state.asr = asr
     app.state.tts = tts
+    app.state.image_index = image_index
+    app.state.vision = vision
     app.state.container = container
 
     setup_logging(settings.log_level)
