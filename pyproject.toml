@@ -22,6 +22,8 @@ dependencies = [
     "faster-whisper>=1.2.1",
     "websockets>=16.0",
     "webrtcvad-wheels>=2.0.14",
+    "matplotlib>=3.11.0",
+    "plyer>=2.1.0",
 ]
 
 [dependency-groups]
