@@ -26,3 +26,14 @@ class CaptureImageTool(Tool[CaptureImageInput]):
     
     async def run(self, payload: CaptureImageInput):
         return await self._registry.capture(payload.source)
+    
+    def openai_schema(self) -> dict:
+        schema = super().openai_schema()
+        sources = self._registry.names()
+        src = schema["function"]["parameters"]["properties"]["source"]
+        src["enum"] = sources
+        src["description"] = (
+            f"De qual câmera capturar. Fontes CONECTADAS agora: {sources}. Use o nome EXATO. "
+            f"'webcam' = câmera do próprio server; os outros nomes são devices conectados."
+        )
+        return schema
