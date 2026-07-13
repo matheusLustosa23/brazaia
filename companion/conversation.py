@@ -5,8 +5,8 @@ from companion.greeting import play_greeting
 from companion.audio import capture_chunks, play, TTS_SAMPLE_RATE
 import websockets, numpy as np
 from websockets.asyncio.client import ClientConnection
-from core.config import get_settings
-import asyncio, orjson, time
+import asyncio, time
+from companion._json import dumps, loads  
 
 
 SAMPLE_RATE =  16_000
@@ -39,7 +39,7 @@ class ConversationSession:
             stop.set()
        
             if self.cfg.greeting_enabled:
-                await play_greeting(get_settings().voice_tts_voice)
+                await play_greeting(self.cfg.greeting_voice)
             await self._conversation()
     
     async def _conversation(self):
@@ -50,7 +50,7 @@ class ConversationSession:
                     break
                 if self._is_end_phrase(texto):
                     break
-            await ws.send(orjson.dumps({"type": "conversation_end"}).decode())
+            await ws.send(dumps({"type": "conversation_end"}))
             print("Conversa encerrada.\n")
     
     async def _run_turn(self , ws: ClientConnection):
@@ -69,13 +69,14 @@ class ConversationSession:
                     if self._endpointer.is_speech(chunk):
                         started = True
                         await ws.send(
-                            orjson.dumps(
-                            {
-                                "type": "turn_start", 
-                                "device_id": self.cfg.device_id,
-                                "sample_rate": SAMPLE_RATE
-                            }
-                            ).decode())
+                            dumps(
+                                {
+                                    "type": "turn_start", 
+                                    "device_id": self.cfg.device_id,
+                                    "sample_rate": SAMPLE_RATE
+                                }
+                            )
+                        )
                         await ws.send(chunk)  
                     else:
                         waited_ms += FOLLOW_UP_FRAME_MS
@@ -93,11 +94,11 @@ class ConversationSession:
             stop.set()
         
         await ws.send(
-            orjson.dumps(
+            dumps(
                 {
                     "type": "turn_end"
                 }
-            ).decode()
+            )
         )
         return await self._receive_reply(ws)
     
@@ -107,7 +108,7 @@ class ConversationSession:
             if isinstance(msg , bytes):
                 await play(msg, sample_rate=TTS_SAMPLE_RATE)
             else:
-                ctrl = orjson.loads(msg)
+                ctrl = loads(msg)
                 if ctrl.get("type") == "turn_done":
                     texto = ctrl.get("text") or ""
                     if ctrl.get("reply"):

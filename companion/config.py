@@ -14,6 +14,7 @@ class CompanionConfig:
     follow_up_ms: int = 7000 
     end_phrases: list[str] = field(default_factory=lambda: ["tchau braza", "encerrar","falow braza"])
     greeting_enabled: bool = True
+    greeting_voice: str = "pm_santa" 
 
 
 def load_config() -> CompanionConfig:
@@ -27,6 +28,6 @@ def load_config() -> CompanionConfig:
         silence_ms=int(os.getenv("SILENCE_MS","1000")),
         follow_up_ms=int(os.getenv("FOLLOW_UP_MS","7000")),
         end_phrases=os.getenv("END_PHRASES", "tchau braza,encerrar,falou braza").split(","),
-        greeting_enabled=bool(os.getenv("GREETING_ENABLED", "True"))
-
+        greeting_enabled=bool(os.getenv("GREETING_ENABLED", "True")),
+        greeting_voice=os.getenv("VOICE_TTS_VOICE", "pm_santa"),
     )
