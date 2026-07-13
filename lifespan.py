@@ -1,4 +1,4 @@
-import os, asyncio
+import os, asyncio, logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
@@ -27,6 +27,8 @@ from infrastructure.voice.asr import ASR
 from infrastructure.voice.tts import TTS
 from infrastructure.vision.sources import VisionRegistry, WebCam
 from infrastructure.vision.image_index import ImageIndex
+
+logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -124,4 +126,12 @@ async def lifespan(app: FastAPI):
     app.state.container = container
 
     setup_logging(settings.log_level)
+    
+    try:
+        from infrastructure.render.math import render_math          # import → esquenta o matplotlib
+        await asyncio.to_thread(render_math, r"x^2")                 # render descartável → esquenta o cache de fontes do mathtext
+        logger.info("matplotlib mathtext warmed")
+    except Exception as e:
+        logger.warning("warm do render falhou (segue sem): %s", e)  # se matplotlib faltar, server ainda sobe
+        
     yield
