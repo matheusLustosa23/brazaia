@@ -1,5 +1,7 @@
 import os, sys, shutil, subprocess
+from typing import Callable, cast
 _IS_THERMUX = shutil.which("termux-open") is not None
+
 
 def _run(command) -> None:
     subprocess.run(command, capture_output=True)
@@ -33,15 +35,13 @@ def notify(title: str, message: str, image: str | None = None) -> str:
         return "android"
     if image:
         open_file(image)
-    if sys.platform == "win32":
-        try:
-            from plyer import notification
-            notification.notify(title=title, message=message, timeout=8)
-            return "windows"
-        except Exception:
-            print(f"🔔 {title}: {message}"); return "windows-print"
-    if shutil.which("notify-send"):
-        _run(["notify-send", title, message])
-        return "linux"
+    try:
+        from plyer import notification
+        from plyer.facades import Notification 
+        notification = cast(Notification, notification)
+        notification.notify()
+        return "desktop"
+    except Exception as e:
+        print(f"Notificação não disponível: {e}")    
     print(f"🔔 {title}: {message}")
     return "print"
