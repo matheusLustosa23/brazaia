@@ -27,6 +27,6 @@ class NotifyTextTool(Tool[NotifyTextInput]):
         schema = super().openai_schema()
         devs = self._gateway.connections.names()
         device = schema["function"]["parameters"]["properties"]["device"]
-        device["enums"] = devs
+        device["enum"] = devs
         device["description"] = f"Device que recebe. CONECTADOS: {devs}. Nome EXATO."
         return schema

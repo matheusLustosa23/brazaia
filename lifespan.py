@@ -11,7 +11,7 @@ from infrastructure.devices.device_rpc import DeviceRPCManager
 from infrastructure.devices.device_gateway import DeviceGateway
 from infrastructure.llm.client import OpenAILLMClient
 from infrastructure.llm import tokenizer
-from infrastructure.tools.notify import NotifyTool
+from infrastructure.tools.notify_text import NotifyTextTool
 from infrastructure.tools.capture_image import CaptureImageTool
 from infrastructure.tools.load_imagem import LoadImageTool
 from infrastructure.memory.sqlite_store import SqlLiteMemoryStore
@@ -63,10 +63,7 @@ async def lifespan(app: FastAPI):
 
     # ── Tools ──
     registry = ToolRegistry()
-    registry.register(LembrarTool(memory))
-    registry.register(NotifyTool())
-    registry.register(CaptureImageTool(vision))
-    registry.register(LoadImageTool(image_index))
+ 
 
     # ── Devices ──
     os.makedirs(os.path.dirname(settings.device_db_path), exist_ok=True)
@@ -78,6 +75,11 @@ async def lifespan(app: FastAPI):
     rpc_manager = DeviceRPCManager(settings.device_ws_timeout)
     device_gateway = DeviceGateway(conn_manager, rpc_manager, device_service)
     device_handshake = DeviceHandshakeService(device_service, device_gateway)
+    
+    registry.register(LembrarTool(memory))
+    registry.register(CaptureImageTool(vision))
+    registry.register(LoadImageTool(image_index))
+    registry.register(NotifyTextTool(device_gateway))
 
     # ── Orchestrator ──
     orchestrator = Orchestrator(
