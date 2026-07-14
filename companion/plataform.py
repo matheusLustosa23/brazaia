@@ -39,7 +39,11 @@ def notify(title: str, message: str, image: str | None = None) -> str:
         from plyer import notification
         from plyer.facades import Notification 
         notification = cast(Notification, notification)
-        notification.notify()
+        notification.notify(
+            title=title,
+            message=message,
+            timeout=8
+        )
         return "desktop"
     except Exception as e:
         print(f"Notificação não disponível: {e}")    
