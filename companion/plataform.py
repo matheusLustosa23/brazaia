@@ -29,9 +29,8 @@ def open_url(url: str):
 
 def notify(title: str, message: str, image: str | None = None) -> str:
     if _IS_THERMUX:
-        if not image:
-            img = os.path.abspath(f"companion/assets/images/braza_logo_termux.png")
-        cmd = ["termux-notification", "--title", title, "--content", message, "--image-path", image]
+        default_img = os.path.abspath(f"companion/assets/images/braza_logo_full.png")
+        cmd = ["termux-notification", "--title", title, "--content", message, "--image-path", image or default_img]
     
         _run(cmd)
         return "android"
