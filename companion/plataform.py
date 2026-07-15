@@ -3,6 +3,7 @@ from typing import Callable, cast
 _IS_THERMUX = shutil.which("termux-open") is not None
 
 
+
 def _run(command) -> None:
     subprocess.run(command, capture_output=True)
 
@@ -28,23 +29,24 @@ def open_url(url: str):
 
 def notify(title: str, message: str, image: str | None = None) -> str:
     if _IS_THERMUX:
-        cmd = ["termux-notification", "--title", title, "--content", message]
-        if image:
-            cmd += ["--image-path", image]
+        if not image:
+            img = os.path.abspath(f"companion/assets/images/braza_logo_termux.png")
+        cmd = ["termux-notification", "--title", title, "--content", message, "--image-path", image]
+    
         _run(cmd)
         return "android"
     if image:
         open_file(image)
     try:
-        from plyer import notification
-        from plyer.facades import Notification 
-        notification = cast(Notification, notification)
-        notification.notify(
-            title=title,
-            message=message,
-            timeout=8
-        )
-        return "desktop"
+        icon_ext = ".ico" if sys.platform == "win32" else ".png"
+        icon_path = os.path.abspath(f"companion/assets/images/braza_logo{icon_ext}")
+        if sys.platform  == "win32":
+            from win11toast import toast
+            toast(title, message, icon=icon_path)
+            return "windows"
+        else:
+            _run(["notify-send", "-i", icon_path, title, message])
+            return "linux"
     except Exception as e:
         print(f"Notificação não disponível: {e}")    
     print(f"🔔 {title}: {message}")
