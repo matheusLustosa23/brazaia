@@ -130,10 +130,10 @@ async def lifespan(app: FastAPI):
     setup_logging(settings.log_level)
     
     try:
-        from infrastructure.render.math import render_math          # import → esquenta o matplotlib
-        await asyncio.to_thread(render_math, r"x^2")                 # render descartável → esquenta o cache de fontes do mathtext
-        logger.info("matplotlib mathtext warmed")
+        from infrastructure.render.page import render_page
+        await asyncio.to_thread(render_page, r"$x^2$")
+        logger.info("katex assets warmed")
     except Exception as e:
-        logger.warning("warm do render falhou (segue sem): %s", e)  # se matplotlib faltar, server ainda sobe
+        logger.warning("warm do render falhou (segue sem): %s", e) 
         
     yield
