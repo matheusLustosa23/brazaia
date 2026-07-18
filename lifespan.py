@@ -14,6 +14,8 @@ from infrastructure.llm import tokenizer
 from infrastructure.tools.notify_text import NotifyTextTool
 from infrastructure.tools.capture_image import CaptureImageTool
 from infrastructure.tools.load_imagem import LoadImageTool
+from infrastructure.tools.display_math import DisplayMathTool
+from infrastructure.tools.display_page import DisplayPageTool
 from infrastructure.memory.sqlite_store import SqlLiteMemoryStore
 from infrastructure.memory.session_store import SqlLiteSessionStore
 from application.services.context_service import ContextManager
@@ -80,6 +82,8 @@ async def lifespan(app: FastAPI):
     registry.register(CaptureImageTool(vision))
     registry.register(LoadImageTool(image_index))
     registry.register(NotifyTextTool(device_gateway))
+    registry.register(DisplayMathTool(device_gateway))
+    registry.register(DisplayPageTool(device_gateway))
 
     # ── Orchestrator ──
     orchestrator = Orchestrator(
