@@ -33,7 +33,6 @@ async def run_companion_agent(device: str | None = None):
             print("\n📥 Monitorando barramento de ações remoto...")
             async for msg in ws:
                 action = loads(msg)
-                print(action)
                 if "request_id" in action and "name" in action:
                     req_id = action["request_id"]
                     tool_name= action["name"]

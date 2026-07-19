@@ -189,7 +189,6 @@ async def notify(title: str, message: str, image: str | None = None) -> str:
         return await _run_sync(
             ["notify-send", "-i", _asset("braza_logo.png"), title, message]
         )
-    print(f"🔔 {title}: {message}")
     return "ok (print)"
     
   
