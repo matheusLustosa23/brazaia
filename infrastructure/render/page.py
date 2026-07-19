@@ -6,7 +6,7 @@ Por isso foto e página nunca divergem — e há um lugar só pra caçar bug.
 
 Não parseamos nada: o auto-render do KaTeX acha os $...$ sozinho.
 """
-import base64
+import base64, re
 import html as _html
 from functools import lru_cache
 from pathlib import Path
@@ -88,6 +88,7 @@ def render_page(content: str, title: str | None = None) -> str:
     e o browser devolve '&' no textContent -> o KaTeX lê o LaTeX certinho.
     Sem escape, um 'x < 5' quebraria o HTML.
     """
+    content = re.sub(r"\\n(?![A-Za-z])", "\n", content)
     titulo_txt = title or "brazaia"
     h1 = f"<h1>{_html.escape(titulo_txt)}</h1>" if title else ""
     katex_js, auto_js = _js()
