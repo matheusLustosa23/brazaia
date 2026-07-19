@@ -14,9 +14,10 @@ class RenderMathInput(BaseModel):
 class RenderMathTool(Tool[RenderMathInput]):
     name = "render_math"
     description = (
-        "Renderiza matemática numa IMAGEM e devolve um image_id. A imagem NÃO vai pra lugar "
-        "nenhum sozinha: depois use 'notify' (mandar pro device) ou 'open_image' (tela cheia) "
-        "passando o image_id.\n" + SINTAXE       # a sintaxe vem do motor (E1), não daqui
+        "Renderiza matemática numa IMAGEM e devolve um image_id. A imagem fica GUARDADA — "
+        "não vai pra device nenhum sozinha. Entregue SÓ SE o usuário pedir: aí use 'notify' "
+        "(notificação) ou 'open_image' (tela cheia) com o image_id. Se ele pediu apenas pra "
+        "GERAR, só informe que a imagem está pronta.\n" + SINTAXE
     )
     input_schema = RenderMathInput
     side = "server"
