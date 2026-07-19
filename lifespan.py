@@ -11,12 +11,12 @@ from infrastructure.devices.device_rpc import DeviceRPCManager
 from infrastructure.devices.device_gateway import DeviceGateway
 from infrastructure.llm.client import OpenAILLMClient
 from infrastructure.llm import tokenizer
-from infrastructure.tools.notify_text import NotifyTextTool
 from infrastructure.tools.capture_image import CaptureImageTool
 from infrastructure.tools.load_imagem import LoadImageTool
 from infrastructure.tools.display_math import DisplayMathTool
 from infrastructure.tools.display_page import DisplayPageTool
 from infrastructure.tools.render_math import RenderMathTool
+from infrastructure.tools.notify import NotifyTool
 from infrastructure.memory.sqlite_store import SqlLiteMemoryStore
 from infrastructure.memory.session_store import SqlLiteSessionStore
 from application.services.context_service import ContextManager
@@ -82,10 +82,10 @@ async def lifespan(app: FastAPI):
     registry.register(LembrarTool(memory))
     registry.register(CaptureImageTool(vision))
     registry.register(LoadImageTool(image_index))
-    registry.register(NotifyTextTool(device_gateway))
     registry.register(DisplayMathTool(device_gateway))
     registry.register(DisplayPageTool(device_gateway))
     registry.register(RenderMathTool(image_index))
+    registry.register(NotifyTool(device_gateway, image_index))
 
     # ── Orchestrator ──
     orchestrator = Orchestrator(
