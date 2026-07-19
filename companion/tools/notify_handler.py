@@ -1,5 +1,5 @@
 from companion.runtime import runtime
-from companion.plataform import notify, show_html
+from companion.plataform import notify, show_html, show_image
 import base64, os
 
 _ARQUIVO_NOTIFY = os.path.expanduser("~/brazaia_display.png")
@@ -32,3 +32,10 @@ async def notify_handler(args : dict) -> str:
 @runtime.register_tool("display_page")
 async def display_page_handler(args: dict) -> str:
     return await show_html(args["html"])
+
+@runtime.register_tool("open_image")
+async def open_image_handler(args: dict) -> str:
+    png = _bytes_imagem(args.get("image"))
+    if png is None:
+        return "[erro] sem imagem"
+    return await show_image(png) 
