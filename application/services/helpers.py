@@ -26,23 +26,25 @@ def _has_image(history: list[dict]) -> bool:
         for m in history
     )
 
-def _save_and_strip(history: list[dict], session_id: str, device_id: str | None, index: ImageIndex) -> list[dict]:
+def _strip(history: list[dict]) -> list[dict]:
     
     if _has_image(history):
         for message in history:
             content = message.get("content")
             if  isinstance(content, list): 
-                for i, block in enumerate(content):
-                    if isinstance(block, dict) and  block.get("type") == "image_url":
-                        print("block com formato dict e type image url")
-                        url = block["image_url"]["url"]
-                        _id = _img_id(url)
-                        _save_image(url, session_id, device_id, _id, index)
-                        content[i] = {"type": "text", "text": f"[imagem analisada · id:{_id}]"}
-                        
-   
+                message["content"] = [
+                    block 
+                    for block in content
+                    if not (isinstance(block, dict) and block.get("type") == "image_url")
+                ]
+    
     return history
-                
+
+def persist_image(url: str, session_id: str, device_id: str | None, index: ImageIndex) -> str:
+    """data URI -> disco + image_index. Idempotente (id = hash do conteúdo). Devolve o id."""
+    _id = _img_id(url)
+    _save_image(url, session_id, device_id, _id, index)
+    return _id             
             
                 
             

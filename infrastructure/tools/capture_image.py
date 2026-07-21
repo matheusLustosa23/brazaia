@@ -12,10 +12,13 @@ class CaptureImageInput(BaseModel):
 class CaptureImageTool(Tool[CaptureImageInput]):
     name = "capture_image"
     description = (
-        "Captura uma imagem AO VIVO da câmera neste instante, para VOCÊ analisar. Escolha a 'source'. "
-        "A cena é sempre atual e pode ter mudado desde a última vez: SEMPRE que o dono pedir para olhar/ver a "
-        "câmera (mesmo repetindo o pedido), chame esta ferramenta DE NOVO para pegar um frame novo. "
-        "NUNCA reutilize uma descrição anterior nem diga 'imagem capturada' sem ter chamado esta ferramenta neste turno."
+        "Captura um frame AO VIVO da câmera neste instante — VOCÊ vê os pixels e a imagem fica "
+        "GUARDADA, devolvendo um image_id. Pra ENVIAR essa imagem a um device (tela cheia ou "
+        "notificação), use 'open_image'/'notify' com esse image_id.\n"
+        "Pra VER/DESCREVER o que tem na câmera, você é OBRIGADO a CHAMAR esta ferramenta e ESPERAR o "
+        "resultado — NUNCA descreva a cena de cabeça. NUNCA escreva '[imagem capturada …]' nem diga "
+        "que capturou sem ter CHAMADO esta ferramenta NESTE turno. A cena é sempre atual: se pedirem "
+        "de novo, capture de novo; nunca reutilize uma descrição anterior."
     )
     input_schema = CaptureImageInput
     side = "server"
