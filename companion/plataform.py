@@ -13,7 +13,7 @@ import os, sys, shutil,  asyncio
 
 _IS_TERMUX = shutil.which("termux-open") is not None
 _GRACE = 1.0 
-
+_seq = 0
 _SERVE_PORT = 8765
 _conteudo: dict[str, tuple[str, bytes]] = {}     # rota -> (content-type, bytes)
 _servidor_no_ar = False
@@ -59,33 +59,37 @@ def _servir(rota: str, tipo: str, dados: bytes) -> str:
     Em memória (sem arquivo em disco): zero content://, zero limpeza. Bind em
     127.0.0.1 → nada sai do aparelho. Sobe uma vez, na 1ª chamada (lazy).
     """
-    global _servidor_no_ar
+    global _servidor_no_ar, _seq
     _conteudo[rota] = (tipo, dados)
     if not _servidor_no_ar:
         import threading
-        from http.server import BaseHTTPRequestHandler, HTTPServer
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
         
         class _H(BaseHTTPRequestHandler):
             def do_GET(self):
-                item = _conteudo.get(self.path.lstrip("/"))
+                caminho = self.path.split("?", 1)[0].lstrip("/")
+                item = _conteudo.get(caminho)
                 if not item:
                     self.send_error(404)
                     return
                 tipo, dados = item
-                self.send_response(200)
-                self.send_header("Content-Type", tipo)
-                self.send_header("Content-Length", str(len(dados)))
-                self.send_header("Cache-Control", "no-store")
-                self.end_headers()
-                self.wfile.write(dados)
+                try:
+                    self.send_response(200)
+                    self.send_header("Content-Type", tipo)
+                    self.send_header("Content-Length", str(len(dados)))
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    self.wfile.write(dados)
+                except (BrokenPipeError, ConnectionResetError): ...
             def log_message(self, format, *args):
                 pass
             
-        srv = HTTPServer(("127.0.0.1", _SERVE_PORT), _H)
+        srv = ThreadingHTTPServer(("127.0.0.1", _SERVE_PORT), _H)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         _servidor_no_ar = True
         
-    return f"http://localhost:{_SERVE_PORT}/{rota}"
+    _seq += 1
+    return f"http://localhost:{_SERVE_PORT}/{rota}?v={_seq}"
 
 async def show_html(html: str) -> str:
     """Abre uma página no navegador do device. Termux → localhost; desktop → arquivo tmp."""
