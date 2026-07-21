@@ -8,7 +8,12 @@ from infrastructure.vision.image_index import ImageIndex
 class NotifyInput(BaseModel):
     device: str = Field(description="Nome EXATO do device conectado.")
     title: str = Field(description="Título curto.")
-    message: str = Field(default="", description="Mensagem. Unicode math ok (√ ² π ≤ →).")
+    message: str = Field(default="", description=(
+        "Mensagem em TEXTO PURO pro usuário ler (a notificação NÃO renderiza LaTeX). Unicode ok (√ ² π ≤ →). "
+        "Se anexar imagem de fórmula (image_id), o `message` é uma LEGENDA CURTA em palavras — a fórmula já vai "
+        "na imagem.\n"
+        "Ex.: com a imagem da energia cinética → message: \"Segue a fórmula da energia cinética.\" "
+        "(NÃO 'A energia cinética é $E_c = ...$')."))
     image_id: str | None = Field(
         default=None,
         description=(
