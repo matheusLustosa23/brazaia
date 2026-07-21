@@ -12,6 +12,7 @@ from functools import lru_cache
 from pathlib import Path
 
 _ASSETS = Path(__file__).parent / "assets"
+_TEM_MACRO = re.compile(r"\\[a-zA-Z]+")
 
 # A instrução de sintaxe mora AQUI, junto do motor que a interpreta — não na
 # description de cada tool. Quem define o que é sintaxe válida é este módulo; as
@@ -23,9 +24,12 @@ _ASSETS = Path(__file__).parent / "assets"
 # sistemas, integrais + somatórios, limites/derivadas: 0 falhas, 0 comandos
 # fora de $...$.
 SINTAXE = (
-    "Escreva LaTeX normal: texto corrido em português e matemática entre $...$ "
-    "(ou $$...$$ pra bloco).\n"
-    "Ex.: 1) Dado o vetor $\\vec{v} = (3, -4)$, calcule a sua norma."
+    "Escreva em LaTeX. SEMPRE embrulhe TODA matemática em $...$ (inline) ou $$...$$ (bloco), "
+    "inclusive quando a resposta é SÓ a fórmula.\n"
+    "Exemplos:\n"
+    "• Fórmula pura → bloco:  $$x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$$\n"
+    "• Math no meio da frase → inline:  Dado o vetor $\\vec{v} = (3, -4)$, calcule a norma.\n"
+    "• Texto + fórmula:  A energia cinética é $E_c = \\frac{1}{2}mv^2$."
 )
 
 _TEMPLATE = """<!doctype html>
@@ -89,6 +93,8 @@ def render_page(content: str, title: str | None = None) -> str:
     Sem escape, um 'x < 5' quebraria o HTML.
     """
     content = re.sub(r"\\n(?![A-Za-z])", "\n", content)
+    if "$" not in content and _TEM_MACRO.search(content):
+        content = f"$$\n{content.strip()}\n$$"
     titulo_txt = title or "brazaia"
     h1 = f"<h1>{_html.escape(titulo_txt)}</h1>" if title else ""
     katex_js, auto_js = _js()
