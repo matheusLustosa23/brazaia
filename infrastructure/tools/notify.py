@@ -11,8 +11,16 @@ class NotifyInput(BaseModel):
     message: str = Field(default="", description="Mensagem. Unicode math ok (√ ² π ≤ →).")
     image_id: str | None = Field(
         default=None,
-        description=("image_id de uma imagem já pronta nesta conversa (ex.: de 'render_math'). "
-                     "Omita pra notificação só de texto. NÃO invente o id: use um que apareceu antes."))
+        description=(
+            "OPCIONAL — omita pra notificação SÓ DE TEXTO.\n"
+            "Pra anexar imagem, use um image_id que JÁ apareceu nesta conversa. DUAS origens "
+            "valem: 'render_math' (image_id=XXXX) ou uma captura ([imagem capturada · image_id=...]). "
+            "NÃO invente o id.\n"
+            "Se NENHUM image_id apareceu ainda: não gere nem capture por conta própria — diga que "
+            "não encontrou imagem e PERGUNTE se quer que gere ou capture.\n"
+            "Se o próprio usuário pediu as duas coisas (gerar/capturar E entregar): encadeie — "
+            "chame a outra tool, ESPERE o id, só então esta. Nunca as duas no mesmo turno."))
+
 
 
 class NotifyTool(Tool[NotifyInput]):
@@ -34,8 +42,9 @@ class NotifyTool(Tool[NotifyInput]):
         if payload.image_id:
             data_uri = resolve_data_uri(self._index, payload.image_id)
             if data_uri is None:
-                return (f"[erro] image_id '{payload.image_id}' não existe mais — "
-                        f"gere de novo (render_math) ou capture/referencie a imagem")
+                return (f"[erro] image_id '{payload.image_id}' não existe mais. Não invente ids. "
+                        f"Se outra imagem apareceu nesta conversa, use o id DELA; senão, AVISE o "
+                        f"usuário e PERGUNTE se ele quer que você gere ou capture uma.")
             args["image"] = data_uri
         return await self._gateway.request(payload.device, "notify", args)
     
