@@ -20,6 +20,9 @@ class OpenImageTool(Tool[OpenImageInput]):
     description = (
         "Abre uma imagem em TELA CHEIA no visualizador do device (permite zoom). "
         "Use pra ler com calma; pra um aviso rápido prefira 'notify'."
+        "\nEx.: \"abre a última foto (ou a fórmula) em tela cheia no celular\" → open_image(device, o image_id que "
+        "apareceu antes na conversa).\n"
+        "Contraste: aviso rápido em vez de tela cheia → 'notify'."
     )
     input_schema = OpenImageInput
     side = "server"

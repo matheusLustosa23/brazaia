@@ -29,6 +29,9 @@ class LoadImageTool(Tool[LoadImageInput]):
         "'capture_image'.\n"
         "NUNCA invente um id. Se nenhum image_id apareceu antes e o usuário não informou um válido, NÃO "
         "chame esta ferramenta: diga que não há imagem nesta conversa e pergunte se deve capturar/gerar."
+        "\nEx.: \"olha de novo aquela foto e me diz a cor\" / \"amplia a imagem anterior\" → load_image(o image_id que já "
+        "apareceu antes).\n"
+        "Contraste: cena NOVA/ao vivo → 'capture_image', não esta."
     )
     
     def __init__(self, index: ImageIndex):

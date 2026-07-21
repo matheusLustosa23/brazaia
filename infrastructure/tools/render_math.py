@@ -17,7 +17,10 @@ class RenderMathTool(Tool[RenderMathInput]):
         "Renderiza matemática numa IMAGEM e devolve um image_id. A imagem fica GUARDADA — "
         "não vai pra device nenhum sozinha. Entregue SÓ SE o usuário pedir: aí use 'notify' "
         "(notificação) ou 'open_image' (tela cheia) com o image_id. Se ele pediu apenas pra "
-        "GERAR, só informe que a imagem está pronta.\n" + SINTAXE
+        "GERAR, só informe que a imagem está pronta.\n" + SINTAXE +
+        "\nEx.: \"gera/renderiza a fórmula de X\" → produz a IMAGEM e devolve o image_id; NÃO envia sozinho. "
+        "Se pedirem pra ENVIAR ou ABRIR, aí use 'open_image'/'notify' com o id.\n"
+        "Contraste: \"MOSTRA uma lista de exercícios no celular pra eu resolver\" NÃO é isto — é PÁGINA, use 'display_math'."
     )
     input_schema = RenderMathInput
     side = "server"

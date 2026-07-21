@@ -14,6 +14,9 @@ class DisplayPageTool(Tool[DisplayPageInput]):
         "Abre uma PÁGINA GENÉRICA no navegador do device com HTML que VOCÊ escreve — nota, "
         "tabela, lista, card, resumo, dashboard, comparação. Pra MATEMÁTICA use 'display_math'; "
         "pra aviso curto use 'notify'."
+        "\nEx.: \"faz uma tabela dos planos\" / \"um card de boas-vindas\" / \"um resumo em tópicos\" no celular → esta "
+        "tool (HTML que VOCÊ escreve).\n"
+        "Contraste: matemática → 'display_math'; aviso curto → 'notify'."
     )
     input_schema = DisplayPageInput
     side = "server"

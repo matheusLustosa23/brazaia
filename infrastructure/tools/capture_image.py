@@ -19,6 +19,8 @@ class CaptureImageTool(Tool[CaptureImageInput]):
         "resultado — NUNCA descreva a cena de cabeça. NUNCA escreva '[imagem capturada …]' nem diga "
         "que capturou sem ter CHAMADO esta ferramenta NESTE turno. A cena é sempre atual: se pedirem "
         "de novo, capture de novo; nunca reutilize uma descrição anterior."
+        "\nEx.: \"o que tem na câmera do celular?\" / \"olha a câmera de tal aparelho\" → chame capture_image com a câmera "
+        "pedida, ESPERE o resultado, e SÓ ENTÃO descreva o que veio (nunca antes)."
     )
     input_schema = CaptureImageInput
     side = "server"

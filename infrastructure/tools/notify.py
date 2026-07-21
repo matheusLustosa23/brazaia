@@ -32,7 +32,10 @@ class NotifyTool(Tool[NotifyInput]):
     name = "notify"
     description = (
         "Manda uma NOTIFICAÇÃO pra tela de um device conectado. Só texto: passe title/message. "
-        "Com imagem: passe também o image_id (de qualquer origem — matemática, foto, arquivo)."
+        "Com imagem: passe também o image_id (de qualquer origem — matemática, foto, arquivo).\n"
+        "Ex. só texto: \"avisa no celular que o build terminou\" → notify(device, title, message).\n"
+        "Ex. com imagem: \"manda a fórmula que você gerou pro celular\" → notify(device, title, "
+        "message=legenda curta em palavras, image_id)."
     )
     input_schema = NotifyInput
     side = "server"
