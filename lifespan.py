@@ -1,4 +1,4 @@
-import os, asyncio
+import os, asyncio, logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
@@ -11,9 +11,13 @@ from infrastructure.devices.device_rpc import DeviceRPCManager
 from infrastructure.devices.device_gateway import DeviceGateway
 from infrastructure.llm.client import OpenAILLMClient
 from infrastructure.llm import tokenizer
-from infrastructure.tools.notify import NotifyTool
 from infrastructure.tools.capture_image import CaptureImageTool
 from infrastructure.tools.load_imagem import LoadImageTool
+from infrastructure.tools.display_math import DisplayMathTool
+from infrastructure.tools.display_page import DisplayPageTool
+from infrastructure.tools.render_math import RenderMathTool
+from infrastructure.tools.notify import NotifyTool
+from infrastructure.tools.open_image import OpenImageTool
 from infrastructure.memory.sqlite_store import SqlLiteMemoryStore
 from infrastructure.memory.session_store import SqlLiteSessionStore
 from application.services.context_service import ContextManager
@@ -27,6 +31,8 @@ from infrastructure.voice.asr import ASR
 from infrastructure.voice.tts import TTS
 from infrastructure.vision.sources import VisionRegistry, WebCam
 from infrastructure.vision.image_index import ImageIndex
+
+logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -61,10 +67,7 @@ async def lifespan(app: FastAPI):
 
     # ── Tools ──
     registry = ToolRegistry()
-    registry.register(LembrarTool(memory))
-    registry.register(NotifyTool())
-    registry.register(CaptureImageTool(vision))
-    registry.register(LoadImageTool(image_index))
+ 
 
     # ── Devices ──
     os.makedirs(os.path.dirname(settings.device_db_path), exist_ok=True)
@@ -76,6 +79,15 @@ async def lifespan(app: FastAPI):
     rpc_manager = DeviceRPCManager(settings.device_ws_timeout)
     device_gateway = DeviceGateway(conn_manager, rpc_manager, device_service)
     device_handshake = DeviceHandshakeService(device_service, device_gateway)
+    
+    registry.register(LembrarTool(memory))
+    registry.register(CaptureImageTool(vision))
+    registry.register(LoadImageTool(image_index))
+    registry.register(DisplayMathTool(device_gateway))
+    registry.register(DisplayPageTool(device_gateway))
+    registry.register(RenderMathTool(image_index))
+    registry.register(NotifyTool(device_gateway, image_index))
+    registry.register(OpenImageTool(device_gateway, image_index))
 
     # ── Orchestrator ──
     orchestrator = Orchestrator(
@@ -124,4 +136,12 @@ async def lifespan(app: FastAPI):
     app.state.container = container
 
     setup_logging(settings.log_level)
+    
+    try:
+        from infrastructure.render.page import render_page
+        await asyncio.to_thread(render_page, r"$x^2$")
+        logger.info("katex assets warmed")
+    except Exception as e:
+        logger.warning("warm do render falhou (segue sem): %s", e) 
+        
     yield

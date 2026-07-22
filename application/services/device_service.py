@@ -20,17 +20,14 @@ class DeviceService:
         await self._registry.upsert(device)
         return device
     
-    async def activate_device(self, device_id: str, allowed_tools: list[str]) -> Device:
+    async def activate_device(self, device_id: str, capabilities: list[str]) -> Device:
         """Ativa device com tools permitidas validadas."""
         device = await self._registry.get(device_id)
         if device is None:
             raise ValueError(f"device '{device_id}' não registrado")
-        
-        for tool_name in allowed_tools:
-            if tool_name not in self._tools:
-                raise ValueError(f"tool '{tool_name}' não existe no registry")
+    
 
-        device.allowed_tools = allowed_tools
+        device.allowed_tools = capabilities
         device.activate()
         await self._registry.upsert(device)
         return device

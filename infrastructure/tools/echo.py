@@ -7,7 +7,7 @@ class EchoInput(BaseModel):
     
 class EchoTool(Tool[EchoInput]):
     name = "echo"
-    description = "Devolve exatamente o texto recebido. Dummy para testes do loop."
+    description = "Apenas teste interno do loop. NÃO use pra responder o usuário nem pra simular o resultado de outra ação."
     input_schema = EchoInput
     side = "server"
     action_class = "read"

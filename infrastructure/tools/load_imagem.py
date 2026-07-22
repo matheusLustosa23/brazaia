@@ -2,13 +2,18 @@ import os, glob, base64
 from domain.tools.base import Tool
 from pydantic import BaseModel, Field
 from infrastructure.vision.image_index import ImageIndex
+from infrastructure.render.store import resolve_data_uri, _MIME_POR_EXT
 
 BASE = os.path.realpath(os.path.expanduser("~/brazaia"))
 
 class LoadImageInput(BaseModel):
     image_id: str = Field(
         pattern=r"^[0-9a-f]{12}$",              # SÓ 12 hex → "../etc" é rejeitado pelo Pydantic antes de rodar
-        description="id do placeholder [imagem analisada · id:...] de uma imagem já capturada nesta conversa"
+         description=(
+            "image_id de uma imagem que JÁ apareceu nesta conversa — de uma captura "
+            "([imagem capturada · image_id=XXXX]) OU do que 'render_math' devolveu (image_id=XXXX)."
+        )
+    
     )
 
 class LoadImageTool(Tool[LoadImageInput]):
@@ -17,14 +22,16 @@ class LoadImageTool(Tool[LoadImageInput]):
     action_class = "read"
     input_schema = LoadImageInput
     description = (
-        "Recarrega uma imagem que VOCÊ JÁ capturou antes nesta conversa (pelo id do placeholder "
-        "[imagem analisada · id:...]) para olhar os PIXELS de novo. Use quando o usuário pedir para "
-        "rever/examinar um detalhe de uma imagem anterior ('olha de novo aquela foto', 'dá um zoom no "
-        "canto', 'que cor era X'). Para uma cena NOVA/ao vivo, use capture_image em vez desta.\n"
-        "O 'image_id' vem SOMENTE de um placeholder [imagem analisada · id:...] que apareceu antes no "
-        "histórico desta conversa. NUNCA invente um id nem monte um valor. Se NÃO houver nenhum placeholder "
-        "no histórico e o usuário não informar um id válido, NÃO chame esta ferramenta: responda que ainda "
-        "não há imagem capturada nesta conversa e pergunte se deve capturar uma agora."
+        "Traz os PIXELS de uma imagem que JÁ apareceu nesta conversa de volta pro contexto, pra VOCÊ "
+        "olhar de novo. O image_id vem de DUAS origens: uma captura ([imagem capturada · image_id=XXXX]) "
+        "OU o que 'render_math' devolveu (image_id=XXXX). Use pra reexaminar um detalhe ('olha de novo "
+        "aquela foto', 'dá um zoom', 'confere se a fórmula renderizou'). Para uma cena NOVA/ao vivo, use "
+        "'capture_image'.\n"
+        "NUNCA invente um id. Se nenhum image_id apareceu antes e o usuário não informou um válido, NÃO "
+        "chame esta ferramenta: diga que não há imagem nesta conversa e pergunte se deve capturar/gerar."
+        "\nEx.: \"olha de novo aquela foto e me diz a cor\" / \"amplia a imagem anterior\" → load_image(o image_id que já "
+        "apareceu antes).\n"
+        "Contraste: cena NOVA/ao vivo → 'capture_image', não esta."
     )
     
     def __init__(self, index: ImageIndex):
@@ -32,11 +39,15 @@ class LoadImageTool(Tool[LoadImageInput]):
     
     async def run(self, payload: LoadImageInput) -> str:
         img_id = payload.image_id
-        path = self._index.get(img_id)
-        if not path or not os.path.exists(path):
-            m = glob.glob(os.path.join(BASE, "**", f"{img_id}.jpg"), recursive=True)
-            path = m[0] if m else None
-        if not path:
+        data_uri = resolve_data_uri(self._index, img_id)
+        if data_uri is None:
+            found = glob.glob(os.path.join(BASE, "**", f"{img_id}.*"), recursive=True)
+            if found:
+                _raiz, ext = os.path.splitext(found[0])
+                mime = _MIME_POR_EXT.get(ext.lower(), "image/jpeg")
+                with open(found[0], "rb") as f:
+                    data_uri = f"data:{mime};base64," + base64.b64encode(f.read()).decode()
+        if data_uri is None:
             return f"[erro] não encontrei imagem com id '{img_id}' — o id pode estar errado."
-        with open(path, "rb") as f:
-            return "data:image/jpeg;base64," + base64.b64encode(f.read()).decode()
+        return data_uri
+                

@@ -11,7 +11,7 @@ from domain.contracts import SessionStore
 from domain.entities.message import Completion
 from application.services.context_service import ContextManager
 from application.services.memory_service import MemoryService
-from application.services.helpers import _save_and_strip
+from application.services.helpers import _strip, persist_image
 from infrastructure.devices.device_gateway import DeviceGateway
 from infrastructure.vision.image_index import ImageIndex
 
@@ -31,10 +31,20 @@ HONESTIDADE = """
 # Honestidade (regras inegociáveis — valem para TODAS as ferramentas, inclusive as futuras)
 - Só afirme que uma ação foi realizada se o RESULTADO da ferramenta confirmar. Nunca invente um
   resultado nem declare um sucesso que você não verificou.
+- Você NUNCA escreve o RESULTADO de uma ferramenta — um "ok", um id, um placeholder como
+  "[imagem capturada · image_id=…]", uma descrição de imagem — sem ter CHAMADO a ferramenta
+  NESTE turno e recebido a resposta. Se você não chamou, NÃO HÁ resultado: não o simule nem
+  o narre. "Vou capturar/abrir/enviar…" só vira verdade DEPOIS que a ferramenta rodou e
+  confirmou — antes disso, ou você chama, ou diz que vai fazer e espera.
 - Se uma ferramenta falhar, não existir, ou não for a adequada: RELATE a falha ao dono e PARE.
   Não a substitua por outra ferramenta (ex.: echo) para simular que funcionou, e não execute uma
   ação diferente da que foi pedida sem ele pedir.
 - Sem a ferramenta certa para o pedido, diga com clareza que não consegue — não improvise um "faz de conta".
+- IDs, códigos e identificadores (image_id, session, device...) você NUNCA inventa.
+  Um id só vale se você o RECEBEU: (a) retornado por uma ferramenta agora (ex.:
+  render_math, capture_image) OU (b) já presente antes no histórico desta conversa.
+  Se você precisa de um e não o recebeu de nenhuma dessas fontes: diga que não
+  encontrou e PERGUNTE — nunca gere um "parecido".
 
 # Grounding (não alucinar)
 - Fale apenas do que você realmente sabe ou observou: resultado de ferramenta, imagem capturada, memória.
@@ -111,7 +121,7 @@ class Orchestrator:
                     buf.append(tok)
                     yield tok
                 history = history + [{"role": "assistant", "content": "".join(buf)}]
-                await self._session_store.set(session_id, _save_and_strip(history, session_id, device_id, self._image_index)) 
+                await self._session_store.set(session_id, _strip(history)) 
                 self._flush_trace(session_id)
                 return
             history, saw_image = await self._handle_tool_calls(
@@ -171,16 +181,22 @@ class Orchestrator:
                 obs = await self._execute(name, payload, active, device_id)
                 
             if isinstance(obs, str) and obs.startswith("data:image/"):
+                img_id = persist_image(obs, session_id, device_id, self._image_index)
                 tool_content = [
                     {
                         "type": "image_url",
                         "image_url": {
                             "url": obs
-                        }
-                    }
+                        },
+                        
+                    },
+                    {
+                        "type": "text", 
+                        "text": f"[imagem capturada · image_id={img_id}]" 
+                    },
                 ]
                 saw_image = True
-                trace_txt = "[imagem capturada]"
+                trace_txt = f"[imagem capturada: {img_id}]"
             else:
                 tool_content =  await self._context.summarize(obs, foco=f"resultado de {name}")
                 trace_txt = tool_content

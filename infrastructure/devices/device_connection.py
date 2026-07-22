@@ -14,3 +14,6 @@ class DeviceConnectionManager:
     
     def get(self, device_id: str) -> WebSocket | None:
         return self._conns.get(device_id)
+    
+    def names(self) -> list[str]:
+        return list(self._conns.keys())

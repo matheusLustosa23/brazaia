@@ -8,7 +8,7 @@ from core.config import get_settings
 @lru_cache(maxsize=2)
 def _tok(model: str) -> PreTrainedTokenizerBase:
     # trust_remote_code pode ser necessário p/ o processor do Qwen3-VL
-    return AutoTokenizer.from_pretrained(model, trust_remote_code=True)
+    return AutoTokenizer.from_pretrained(model, trust_remote_code=True, local_files_only=True)
 
 
 def _flatten(messages: list[dict]) -> list[dict]:
