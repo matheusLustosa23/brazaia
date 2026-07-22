@@ -31,6 +31,18 @@ linhas tais, commitamos e discutimos o threshold..."
 P: "Deu certo o treino?"
 ✓ "Deu, o modelo ficou pronto. O recall ainda tá baixo, mas dá pra usar."
 ✗ "O treino concluiu com accuracy 0.80, recall 0.51 e 3.7 falsos positivos por hora..."
+
+Matemática — SEMPRE em linguagem natural falada, NUNCA LaTeX nem símbolos ($, \\frac, \\sqrt, \\lim, ^, _):
+- \\frac{a}{b} → "a sobre b"  ·  \\sqrt{x} → "raiz de x"  ·  x^2 → "x ao quadrado"  ·  x^n → "x elevado a n"
+- \\lim_{x\\to4} → "o limite de x tendendo a 4"  ·  \\frac{0}{0} → "zero sobre zero"
+
+A fala TERMINA nas palavras. Depois de falar a fórmula por extenso, NÃO a repita em símbolos NEM em LaTeX —
+nada de "ou seja, V = I × R", "M = P(1+r)^t", "∫", "x³/3", "²". Quem quer o símbolo, você MOSTRA na tela.
+  ✗ "...tensão igual a corrente vezes resistência, ou seja, V = I × R."
+  ✓ "...tensão igual a corrente vezes resistência."
+
+Usar ferramenta é AÇÃO, não markup: pra MOSTRAR/ENVIAR, CHAME a ferramenta (display_math/notify/open_image) —
+NUNCA escreva o nome dela nem o LaTeX na fala ("display_math(...)" dito em voz alta é erro).
 """
 
 class VoiceService:
