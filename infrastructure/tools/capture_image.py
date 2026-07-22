@@ -12,15 +12,16 @@ class CaptureImageInput(BaseModel):
 class CaptureImageTool(Tool[CaptureImageInput]):
     name = "capture_image"
     description = (
-        "Captura um frame AO VIVO da câmera neste instante — VOCÊ vê os pixels e a imagem fica "
-        "GUARDADA, devolvendo um image_id. Pra ENVIAR essa imagem a um device (tela cheia ou "
-        "notificação), use 'open_image'/'notify' com esse image_id.\n"
+        "Captura um frame AO VIVO da câmera. Use SOMENTE quando o dono pedir pra VER/OLHAR/ANALISAR "
+        "a câmera. NUNCA acione a câmera por conta própria pra 'verificar/testar se um device está "
+        "conectado', confirmar disponibilidade, ou qualquer fim que o dono NÃO pediu — a câmera é "
+        "privada e só liga a pedido explícito.\n"
+        "VOCÊ vê os pixels e a imagem fica GUARDADA, devolvendo um image_id. Pra ENVIAR a um device "
+        "(tela cheia ou notificação), use 'open_image'/'notify' com esse image_id.\n"
         "Pra VER/DESCREVER o que tem na câmera, você é OBRIGADO a CHAMAR esta ferramenta e ESPERAR o "
-        "resultado — NUNCA descreva a cena de cabeça. NUNCA escreva '[imagem capturada …]' nem diga "
-        "que capturou sem ter CHAMADO esta ferramenta NESTE turno. A cena é sempre atual: se pedirem "
-        "de novo, capture de novo; nunca reutilize uma descrição anterior."
-        "\nEx.: \"o que tem na câmera do celular?\" / \"olha a câmera de tal aparelho\" → chame capture_image com a câmera "
-        "pedida, ESPERE o resultado, e SÓ ENTÃO descreva o que veio (nunca antes)."
+        "resultado — NUNCA descreva a cena de cabeça. NUNCA escreva '[imagem capturada …]' sem ter "
+        "CHAMADO esta ferramenta NESTE turno. A cena é sempre atual: se pedirem de novo, capture de novo."
+        "\nEx.: \"o que tem na câmera do celular?\" → chame capture_image, ESPERE o id, e SÓ ENTÃO descreva."
     )
     input_schema = CaptureImageInput
     side = "server"
