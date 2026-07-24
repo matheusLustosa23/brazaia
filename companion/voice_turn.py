@@ -1,6 +1,6 @@
 import websockets
 from companion._json import dumps, loads
-from companion.audio import capturar_turno, play, TTS_SAMPLE_RATE
+from companion.audio import capturar_turno, tocar, TTS_SAMPLE_RATE
 
 async def turno_unico(cfg) -> None:
     url = f"{cfg.server_ws_url}/ws/voice"
@@ -23,5 +23,5 @@ async def turno_unico(cfg) -> None:
             elif loads(msg).get("type") == "turn_done":
                 break
         if audio:
-            await play(bytes(audio), TTS_SAMPLE_RATE)
+            await tocar(bytes(audio), TTS_SAMPLE_RATE)
 
