@@ -12,6 +12,8 @@ def _notif(titulo: str, botao: str, acao: str) -> None:
                     "--button1", botao, "--button1-action", f"{CHAMAR} {acao}"])
 
 def start() -> None:
+    if os.path.exists(REC):
+        os.remove(REC)                                            # mic-record NÃO sobrescreve → apaga o turno anterior
     subprocess.run(["termux-microphone-record", "-e", "aac", "-c", "1", "-b", "128", "-l", "0", "-f", REC])
     _notif("🔴 Ouvindo…", "Parar", "parar")
 
