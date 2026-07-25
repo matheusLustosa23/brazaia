@@ -37,11 +37,10 @@ async def capturar_turno() -> bytes:
     
     if _IS_TERMUX:
         os.makedirs(_DIR, exist_ok=True)
-        aac, pcm, dur = f"{_DIR}/turno.aac", f"{_DIR}/turno.pcm", 8
+        aac,  dur = f"{_DIR}/turno.aac",  8
         await _run_sync(["termux-microphone-record", "-f", aac, "-l", str(dur), "-e", "aac"])
         await asyncio.sleep(dur + 0.4)
-        await _run_sync(["ffmpeg", "-y", "-i", aac, "-ar", "16000", "-ac", "1", "-f", "s16le", pcm])
-        with open(pcm, "rb") as f:
+        with open(aac, "rb") as f:
             return f.read()
         
     

@@ -86,11 +86,11 @@ class VoiceService:
         """Acumula o áudio do turno. Instantâneo — NÃO transcreve (não bloqueia o loop)."""
         self._audio.extend(chunk)
     
-    async def transcribe(self) -> str | None:
+    async def transcribe(self, fmt: str = "pcm") -> str | None:
         """Transcrição única do turno inteiro — chamada no turn_end (batch)."""
         if not self._audio:
             return None
-        return await self._asr.transcribe(bytes(self._audio))
+        return await self._asr.transcribe(bytes(self._audio), fmt=fmt)
     
  
     def reset(self) -> None:

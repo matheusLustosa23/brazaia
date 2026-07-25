@@ -1,6 +1,9 @@
 import websockets
 from companion._json import dumps, loads
 from companion.audio import capturar_turno, tocar, TTS_SAMPLE_RATE
+from  companion.plataform import _IS_TERMUX
+
+CAPTURE_FMT = "aac" if _IS_TERMUX else "pcm" 
 
 async def turno_unico(cfg) -> None:
     url = f"{cfg.server_ws_url}/ws/voice"
@@ -9,7 +12,8 @@ async def turno_unico(cfg) -> None:
             dumps(
                 {
                 "type": "turn_start", 
-                "device_id": cfg.device_id
+                "device_id": cfg.device_id,
+                "fmt": CAPTURE_FMT
                 }
             )
             
