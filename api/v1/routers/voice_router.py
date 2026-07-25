@@ -52,6 +52,7 @@ async def voice_ws(ws: WebSocket) -> None:
                     break
                 
             texto = await voice.transcribe(fmt)
+            print(texto)
             resposta = ""
             if texto:
                 try:
@@ -61,6 +62,7 @@ async def voice_ws(ws: WebSocket) -> None:
                 except Exception as e:
                     logger.warning("tts_error: %s", e)
                     resposta = await voice.reply_text(texto)
+            print(resposta)
             await ws.send_text(
                 orjson.dumps(
                     {
