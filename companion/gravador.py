@@ -1,6 +1,5 @@
 import asyncio, os, subprocess, sys, time
 from companion.config import load_config
-from companion.voice_turn import enviar_arquivo
 
 REC = os.path.expanduser("~/rec.aac")
 IMG = os.path.expanduser("~/brazaia/companion/assets/images/braza_logo_full.png")
@@ -18,6 +17,7 @@ def start() -> None:
     _notif("🔴 Ouvindo…", "Parar", "parar")
 
 def parar() -> None:
+    from companion.voice_turn import enviar_arquivo             # LAZY: start() não paga o import de websockets/voice_turn
     subprocess.run(["termux-microphone-record", "-q"]); time.sleep(1)
     try:
         texto = asyncio.run(enviar_arquivo(load_config(), REC))   # manda pro server + toca + RETORNA a transcrição

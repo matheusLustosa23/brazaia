@@ -6,10 +6,11 @@ def _mais_x(p: str) -> None:
 
 def setup_termux() -> None:
     home = os.path.expanduser("~")
-    sc, icons = f"{home}/.shortcuts", f"{home}/.shortcuts/icons"
+    sc, icons, tasks = f"{home}/.shortcuts", f"{home}/.shortcuts/icons", f"{home}/.shortcuts/tasks"
     os.makedirs(icons, exist_ok=True)
-    # 1) entry-point do widget → chama o gravador Python
-    atalho = f"{sc}/Fala Comigo"
+    os.makedirs(tasks, exist_ok=True)
+    # 1) entry-point em tasks/ → roda em BACKGROUND (sem abrir o terminal)
+    atalho = f"{tasks}/Fala Comigo"
     with open(atalho, "w") as f:
         f.write("#!/data/data/com.termux/files/usr/bin/bash\n"
                 'cd "$HOME/brazaia" && python -m companion.gravador start\n')   # chama o gravador Python
@@ -17,8 +18,9 @@ def setup_termux() -> None:
     # 2) ícone (asset que já existe, quadrado) → copia (sem imagemagick)
     shutil.copy(_asset("braza_logo_termux.png"), f"{icons}/Fala Comigo.png")
     # (gravador é .py agora — não precisa de +x)
-    # 3) permissão da pasta (o Termux:Widget exige) + canal da notificação
+    # 3) permissão das pastas (o Termux:Widget exige leitura+exec) + canal da notificação
     os.chmod(sc, 0o700)
+    os.chmod(tasks, 0o700)
     subprocess.run(["termux-notification-channel", "--id", "brazaia",
                     "--name", "Brazaia", "--importance", "max"], check=False)
     # 4) config por-dispositivo (FORA do repo) — cria template se não existir
