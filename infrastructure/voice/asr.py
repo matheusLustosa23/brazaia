@@ -1,6 +1,7 @@
-import asyncio
+import asyncio, io
 import numpy as np
 from faster_whisper import WhisperModel
+
 
 
 class ASR:
@@ -11,14 +12,19 @@ class ASR:
         self._model = WhisperModel(model_size, device=device, compute_type="int8")
         self._beam = beam_size
 
-    def _transcribe_sync(self, pcm: bytes, language: str | None) -> str | None:
-        samples = np.frombuffer(pcm, dtype=np.int16)
-        audio = samples.astype(np.float32) / 32768.0
-        segments, _ = self._model.transcribe(audio, language=language, beam_size=self._beam, vad_filter=True)
+    def _transcribe_sync(self, audio: bytes, language: str | None, fmt: str) -> str | None:
+        
+        if fmt == "pcm":
+            samples = np.frombuffer(audio, dtype=np.int16)
+            waveform = samples.astype(np.float32) / 32768.0 
+        else:
+            waveform = io.BytesIO(audio)
+            
+        segments, _ = self._model.transcribe(waveform, language=language, beam_size=self._beam, vad_filter=True)
         text = " ".join(s.text for s in segments).strip()
         return text or None
 
-    async def transcribe(self, pcm: bytes, language: str | None = "pt") -> str | None:
+    async def transcribe(self, pcm: bytes, language: str | None = "pt",  fmt: str = "pcm") -> str | None:
         if not pcm:
             return None
-        return await asyncio.to_thread(self._transcribe_sync, pcm, language)
+        return await asyncio.to_thread(self._transcribe_sync, pcm, language, fmt)

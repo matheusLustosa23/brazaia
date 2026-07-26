@@ -36,7 +36,8 @@ async def voice_ws(ws: WebSocket) -> None:
             if ctrl.get("type") == "conversation_end":
                     break
             assert ctrl.get("type") == "turn_start"
-            logger.info("turn_start device=%s", ctrl.get("device_id"))
+            fmt = ctrl.get("fmt", "pcm")
+            logger.info("turn_start device=%s fmt=%s", ctrl.get("device_id"), fmt)
             
             voice.reset()
             
@@ -50,7 +51,8 @@ async def voice_ws(ws: WebSocket) -> None:
                 elif msg.get("text") and orjson.loads(msg["text"]).get("type") == "turn_end":
                     break
                 
-            texto = await voice.transcribe()
+            texto = await voice.transcribe(fmt)
+            print(texto)
             resposta = ""
             if texto:
                 try:
@@ -60,6 +62,7 @@ async def voice_ws(ws: WebSocket) -> None:
                 except Exception as e:
                     logger.warning("tts_error: %s", e)
                     resposta = await voice.reply_text(texto)
+            print(resposta)
             await ws.send_text(
                 orjson.dumps(
                     {

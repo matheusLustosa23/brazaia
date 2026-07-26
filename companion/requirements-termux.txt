@@ -1,0 +1,12 @@
+# Companion no TERMUX (celular) — turno de voz + actuator (RPC).
+# Áudio é 100% via CLI do Termux:API (termux-microphone-record / ffmpeg / termux-media-player),
+# NÃO sounddevice. E o JSON usa a stdlib (o shim companion/_json.py cai em json se orjson faltar).
+#
+# ⚠️ Requer os imports LAZY do Slice 2 (audio.py: numpy/sounddevice; voice.py: ConversationSession).
+#    sounddevice/numpy/openwakeword/webrtcvad NEM INSTALAM no Termux (precisam de libs nativas) —
+#    a solução é o Termux nunca importá-los, não instalá-los.
+#
+# CLI (via pkg, não pip):  pkg install python termux-api ffmpeg
+# App:                     Termux:API (F-Droid)
+
+websockets

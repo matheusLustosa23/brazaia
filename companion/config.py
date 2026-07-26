@@ -2,6 +2,20 @@ import os
 from dataclasses import dataclass, field
 
 
+def _carregar_env(caminho: str = "~/.brazaia.env") -> None:
+    p = os.path.expanduser(caminho)
+    if not os.path.exists(p):
+        return
+    for linha in open(p):
+        linha = linha.strip()
+        if not linha or linha.startswith("#"):
+            continue
+        linha = linha.removeprefix("export ").strip()
+        if "=" in linha:
+            k, v = linha.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'")) 
+
+
 @dataclass
 class CompanionConfig:
     server_ws_url: str
@@ -18,6 +32,7 @@ class CompanionConfig:
 
 
 def load_config() -> CompanionConfig:
+    _carregar_env() 
     return CompanionConfig(
         server_ws_url=os.getenv("SERVER_WS_URL", "ws://localhost:8000/api/v1"),
         device_id=os.getenv("DEVICE_ID", "device_macbook_pro_01"),
