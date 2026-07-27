@@ -4,6 +4,7 @@ import asyncio
 from typing import ClassVar, Literal, Generic, TypeVar
 
 from pydantic import BaseModel, ValidationError
+from domain.tools.guard import ToolCtx, GuardResult
 
 InputType = TypeVar("InputType", bound=BaseModel)
 
@@ -18,6 +19,12 @@ class Tool(Generic[InputType]):
     side: ClassVar[Side] = "server"
     action_class: ClassVar[ActionClass] = "read"
     timeout_s: ClassVar[float] = 15.0
+    
+    def before(self, args: dict, ctx: ToolCtx) ->  GuardResult:
+        return GuardResult(ok=True)
+    
+    def after(self, result: str, ctx: ToolCtx) -> GuardResult:
+        return GuardResult(ok=True)
     
     async def run(self, payload: InputType) -> str:
         raise NotImplementedError()

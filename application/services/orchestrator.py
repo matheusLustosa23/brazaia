@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-import orjson
+import orjson, re
 
 from collections.abc import AsyncIterator
 from typing import Awaitable, Callable,BinaryIO
 
 from domain.contracts import LLMClient
 from domain.tools.base import ToolRegistry
+from domain.tools.guard import ToolCtx, GuardResult
 from domain.contracts import SessionStore
 from domain.entities.message import Completion
 from application.services.context_service import ContextManager
@@ -130,6 +131,7 @@ class Orchestrator:
         active = self._tools.for_device(capabilities)
         user_turn: dict | None = _user_turn(user_message, image)
         seen: set[tuple[str, bytes]] = set()
+        ids_reais: set[str] = set()  
         
         for _step in range(MAX_STEPS):
             messages = self._context.build(system, memory_block, history, user_turn or {})
@@ -149,7 +151,7 @@ class Orchestrator:
                 self._flush_trace(session_id)
                 return
             history, saw_image = await self._handle_tool_calls(
-                session_id, history, user_turn, msg, active, device_id, seen
+                session_id, history, user_turn, msg, active, device_id, seen, user_message, ids_reais
             )
             if saw_image and VISION_STYLE not in system:
                 system = f"{system}\n\n{VISION_STYLE}"
@@ -173,6 +175,8 @@ class Orchestrator:
         active: ToolRegistry,
         device_id: str | None,
         seen: set[tuple[str, bytes]],
+        user_msg: str,
+        ids_reais: set[str],
     ) ->  tuple[list[dict], bool]:
         if user_turn is not None:
             history = history + [user_turn]
@@ -194,6 +198,7 @@ class Orchestrator:
             }
         ]
         saw_image = False
+        ctx = ToolCtx(fala_do_usuario=user_msg, ids_reais=ids_reais, session_id=session_id)
         for tc in msg.tool_calls:
             name = tc.name
             payload = tc.arguments
@@ -202,10 +207,11 @@ class Orchestrator:
                 obs = "[loop cortado] repetição da mesma ação detectada."
             else:
                 self._remember_call(name, payload, seen)
-                obs = await self._execute(name, payload, active, device_id)
+                obs = await self._execute(name, payload, active, device_id, ctx)
                 
             if isinstance(obs, str) and obs.startswith("data:image/"):
                 img_id = persist_image(obs, session_id, device_id, self._image_index)
+                ids_reais.add(img_id)
                 tool_content = [
                     {
                         "type": "image_url",
@@ -222,6 +228,7 @@ class Orchestrator:
                 saw_image = True
                 trace_txt = f"[imagem capturada: {img_id}]"
             else:
+                ids_reais.update(re.findall(r"image_id=([0-9a-f]{12})", obs)) 
                 tool_content =  await self._context.summarize(obs, foco=f"resultado de {name}")
                 trace_txt = tool_content
         
@@ -248,7 +255,8 @@ class Orchestrator:
         name: str,
         payload: dict,
         active: ToolRegistry,
-        device_id: str | None
+        device_id: str | None,
+        ctx: ToolCtx
     ) -> str:
         tool = active.get(name)
         if tool is None:
@@ -257,11 +265,21 @@ class Orchestrator:
         if tool.action_class == "destructive" and not await self._confirm(name, payload):
             return f"[cancelado] ação destrutiva '{name}' não confirmada pelo usuário."
         
-        if tool.side == "server":
-            return await active.run(name, payload)
+        verify = tool.before(payload, ctx)
+        if not verify.ok:
+            return f"[bloqueado] {verify.reason}" 
         
-        parsed = tool.input_schema.model_validate(payload)
-        return await self._device_gateway.dispatch(device_id, tool, parsed)
+        if tool.side == "server":
+            result =  await active.run(name, payload)
+        else:
+            parsed = tool.input_schema.model_validate(payload)
+            result = await self._device_gateway.dispatch(device_id, tool, parsed)
+        
+        confirm = tool.after(result, ctx)
+        if not confirm.ok:
+            return f"[falha] {confirm.reason}"
+        
+        return  result
     
     def _trace(
         self,
