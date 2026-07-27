@@ -13,6 +13,7 @@ from domain.entities.message import Completion
 from application.services.context_service import ContextManager
 from application.services.memory_service import MemoryService
 from application.services.helpers import _strip, persist_image
+from application.guards.output import check_output
 from infrastructure.devices.device_gateway import DeviceGateway
 from infrastructure.vision.image_index import ImageIndex
 
@@ -145,8 +146,19 @@ class Orchestrator:
                     if kind != "text":
                         continue
                     buf.append(tok)
-                    yield tok
-                history = history + [{"role": "assistant", "content": "".join(buf)}]
+                texto = "".join(buf)
+                guard = check_output(texto, ids_reais)
+                if not guard.ok:
+                    aviso = {"role": "system", "content": guard.reason}
+                    buf2: list[str] = []
+                    async for kind, tok in self._llm.stream(messages + [aviso]):
+                        if kind == "text":
+                            buf2.append(tok)
+                    texto = "".join(buf2)
+                    if not check_output(texto, ids_reais).ok:
+                        texto = f"Não consegui fazer isso agora" 
+                yield texto
+                history = history + [{"role": "assistant", "content": texto}]
                 await self._session_store.set(session_id, _strip(history)) 
                 self._flush_trace(session_id)
                 return
