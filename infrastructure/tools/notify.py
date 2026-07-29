@@ -40,7 +40,7 @@ class NotifyTool(Tool[NotifyInput]):
     input_schema = NotifyInput
     side = "server"
     action_class = "reversible"
-    router_hint = "notificar, avisar ou mandar um aviso/imagem pra tela do celular"
+    router_hint = "notificar,avisar,enviar algo"
 
     def __init__(self, gateway: DeviceGateway, index: ImageIndex) -> None:
         self._gateway = gateway

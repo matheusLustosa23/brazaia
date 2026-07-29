@@ -22,7 +22,7 @@ class DisplayMathTool(Tool[DisplayMathInput]):
     side = "server"
     action_class = "reversible"
     timeout_s = 30.0
-    router_hint = "mostrar/abrir matemática (equação, fórmula, exercícios) numa página na tela do device"
+    router_hint = "renderizar pagina para conteudo de matematica (abrir,mostrar)"
     
     def __init__(self, gateway: DeviceGateway) -> None:
         self._gateway = gateway

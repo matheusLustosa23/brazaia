@@ -26,7 +26,7 @@ class CaptureImageTool(Tool[CaptureImageInput]):
     input_schema = CaptureImageInput
     side = "server"
     action_class = "read"
-    router_hint = "ver/olhar pela câmera agora, tirar foto, o que estou vendo ou tem na minha frente"
+    router_hint = "ver/olhar pela câmera agora, tirar foto,capturar a foto, o que estou vendo ou tem na minha frente"
     
     def __init__(self, registry: VisionRegistry):
         self._registry = registry
