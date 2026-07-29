@@ -18,7 +18,7 @@ class LLMClient(Protocol):
         self,
         messages: list[dict],
         tools: list[dict] | None = None,
-        tool_choice: str = "auto",
+        tool_choice: str | dict = "auto",
         **opts: Any
     ) -> Completion: ...
     
