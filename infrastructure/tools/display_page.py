@@ -22,6 +22,7 @@ class DisplayPageTool(Tool[DisplayPageInput]):
     side = "server"
     action_class = "reversible"
     timeout_s = 30.0
+    router_hint = "montar/mostrar uma página no device: tabela, lista, card, resumo, dashboard"
     
     async def run(self, payload: DisplayPageInput) -> str:
         html = wrap_page(payload.body_html, payload.title)      # injeta o CSS base do brazaia

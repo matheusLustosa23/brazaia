@@ -27,6 +27,7 @@ class OpenImageTool(Tool[OpenImageInput]):
     input_schema = OpenImageInput
     side = "server"
     action_class = "reversible"
+    router_hint = "abrir uma imagem em tela cheia no device (zoom, ler com calma)"
 
     def __init__(self, gateway: DeviceGateway, index: ImageIndex) -> None:
         self._gateway = gateway

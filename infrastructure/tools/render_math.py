@@ -26,6 +26,7 @@ class RenderMathTool(Tool[RenderMathInput]):
     side = "server"
     action_class = "read"          # só gera; não tem efeito externo
     timeout_s = 40.0               # o chrome sobe a cada chamada (~1,4 s)
+    router_hint = "gerar/renderizar qualquer conteúdo matemático (equação, expressão, matriz, integral, derivada, sistema) como imagem — ainda sem enviar"
 
     def __init__(self, index: ImageIndex) -> None:
         self._index = index

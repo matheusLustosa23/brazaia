@@ -19,6 +19,7 @@ class Tool(Generic[InputType]):
     side: ClassVar[Side] = "server"
     action_class: ClassVar[ActionClass] = "read"
     timeout_s: ClassVar[float] = 15.0
+    router_hint: ClassVar[str] = "" 
     
     def before(self, args: dict, ctx: ToolCtx) ->  GuardResult:
         return GuardResult(ok=True)
@@ -44,6 +45,8 @@ class ToolRegistry:
         self._tools: dict[str, Tool] = {}
 
     def register(self, tool: Tool) -> None:
+        if not getattr(tool, "router_hint", ""):
+            raise ValueError(f"Tool '{tool.name}' sem router_hint (obrigatório pro roteador)")
         self._tools[tool.name] = tool
 
     def get(self, tool_name: str) -> Tool | None:
@@ -111,3 +114,11 @@ class ToolRegistry:
             elif capabilities and t.name in capabilities:
                 sub.register(t)
         return sub
+    
+    def describe_for_router(self) -> str:
+        """Lista compacta p/ o roteador: nome + intenção curta. SEM [side/action] (vaza) e SEM exemplos (ruído)."""
+        linhas = []
+        for t in self._tools.values():
+            hint = t.router_hint or t.description.split("\n")[0].split(". ")[0].strip()
+            linhas.append(f"- {t.name}: {hint}")
+        return "\n".join(linhas)
