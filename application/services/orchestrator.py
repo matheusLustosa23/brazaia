@@ -14,10 +14,11 @@ from application.services.context_service import ContextManager
 from application.services.memory_service import MemoryService
 from application.services.helpers import _strip, persist_image
 from application.guards.output import check_output
+from application.services.tool_router import ToolRouter
 from infrastructure.devices.device_gateway import DeviceGateway
 from infrastructure.vision.image_index import ImageIndex
 
-MAX_STEPS = 8
+MAX_STEPS = 15
 
 ConfirmFn = Callable[[str, dict], Awaitable[bool]]
 
@@ -53,29 +54,6 @@ HONESTIDADE = """
   Não invente fatos, caminhos, nomes, números ou infraestrutura que você não viu.
 - Se algo estiver ausente, ilegível ou incerto, diga que não sabe — nunca preencha com suposição como certeza.
 
-# Sem dado real → seja honesto (NUNCA fabrique evento, status, número ou infraestrutura)
-Pedido aberto ou sobre algo que você não tem (novidades, histórico, um registro): diga que não tem e
-ofereça ajudar — não invente um cenário plausível nem acione ferramenta pra "procurar" o que não existe.
-
-P: "me fala as novidades / o que tá pegando?"
-✓ "Por aqui, nada de novo — não tenho nenhum evento ou alerta pra te contar. Quer que eu passe a monitorar algo?"
-✗ "Recebi um alerta do sensor da garagem; a câmera mostra o portão fechado mas o sensor diz aberto…"   (INVENTADO)
-
-P: "qual meu treino de hoje? / os pesos do último treino?"
-✓ "Não tenho registro do seu treino. Quer anotar aqui que eu guardo pro próximo?"
-✗ [capturar a câmera pra "achar" o dado · inventar um treino]
-
-# A câmera vê SÓ o que está na frente dela — não "checa" a cozinha, a porta, outro cômodo, nem "o sistema"
-Pergunta sobre lugar/coisa que a câmera não enquadra: NÃO capture e NUNCA conclua a partir de outra cena.
-P: "deixei a luz da cozinha acesa? / tem alguém na porta?"
-✓ "Não tenho como ver a cozinha/porta daqui — a câmera só pega o que está na frente dela."
-✗ [capturar a webcam e dizer "não tem ninguém na porta" olhando um quadro]   (conclusão FALSA)
-
-P: "o que a gente combinou ontem? / o que você me disse antes?"
-✓ "Não tenho registro dessa conversa. Me lembra o que foi?"
-✗ "Combinamos de ir ao mercado no almoço."   (INVENTADO)
-
-# Pedido confuso/incompleto (áudio ruim) → PERGUNTE o que quis dizer; não responda ao que adivinhou nem invente
 """
 
 async def _always_true(name: str, payload: dict) -> bool:
@@ -101,7 +79,8 @@ class Orchestrator:
         image_index: ImageIndex, 
         *,
         confirm: ConfirmFn | None = None,
-        audit_log: BinaryIO | None = None
+        audit_log: BinaryIO | None = None,
+        router: ToolRouter | None = None
     ) -> None:
         self._llm = llm
         self._context = context
@@ -113,6 +92,41 @@ class Orchestrator:
         self._session_store = session_store
         self._traces: dict[str, list[dict]] = {}
         self._image_index = image_index
+        self._router = router
+    
+    @staticmethod
+    def _chamou_certo(msg: Completion, esperada: str) -> bool:
+            return bool(msg.tool_calls) and msg.tool_calls[0].name == esperada
+
+    async def _ensure_tool_call(
+        self, msg: Completion, 
+        tool_esperada: str, 
+        messages: list[dict], 
+        active: ToolRegistry
+    ) -> Completion | None:
+        print(f"[IA - AUTO] {msg.content} | {msg.tool_calls} | {msg.finish_reason}")
+        if not self._chamou_certo(msg , tool_esperada):
+            nudge = {
+                "role": "system",
+                "content": f"Você ainda precisa chamar '{tool_esperada}' para atender o pedido. Chame-a agora com os argumentos corretos"
+            }
+            print(f"[nudge] {nudge.get("content")}")
+            msg = await self._llm.complete(messages + [nudge], tools=active.as_openai_tools(), tool_choice="auto")
+            print(f"[IA] {msg.content} | {msg.tool_calls} | {msg.finish_reason}")
+        if not self._chamou_certo(msg, tool_esperada):
+            print("[chamada forçada]")
+            msg = await self._llm.complete(
+                messages, 
+                tools=active.as_openai_tools(),
+                tool_choice={"type": "function", "function": {"name": tool_esperada}}
+            )
+            print(f"[IA] {msg.content} | {msg.tool_calls} | {msg.finish_reason}")
+        
+        if not self._chamou_certo(msg, tool_esperada):
+            print("Sem sucesso")
+            return None
+        
+        return msg
 
     async def run(
         self,
@@ -132,42 +146,44 @@ class Orchestrator:
         active = self._tools.for_device(capabilities)
         user_turn: dict | None = _user_turn(user_message, image)
         seen: set[tuple[str, bytes]] = set()
-        ids_reais: set[str] = set()  
-        
+        ids_reais: set[str] = set() 
+
+        plano = await self._router.plan(user_message, active) if self._router else []
+        idx = 0
         for _step in range(MAX_STEPS):
             messages = self._context.build(system, memory_block, history, user_turn or {})
-            msg = await self._llm.complete(messages, tools=active.as_openai_tools())
-            
-            if not getattr(msg, "tool_calls", None):
+            tool_expected = plano[idx] if idx < len(plano) else None
+            #sem tools pra chamar , retorna a mensagem para o user
+            if tool_expected is None:
                 if user_turn:
                     history = history + [user_turn]
-                buf: list[str] = []
-                async for kind, tok in self._llm.stream(messages):
-                    if kind != "text":
-                        continue
-                    buf.append(tok)
-                texto = "".join(buf)
-                guard = check_output(texto, ids_reais)
-                if not guard.ok:
-                    aviso = {"role": "system", "content": guard.reason}
-                    buf2: list[str] = []
-                    async for kind, tok in self._llm.stream(messages + [aviso]):
-                        if kind == "text":
-                            buf2.append(tok)
-                    texto = "".join(buf2)
-                    if not check_output(texto, ids_reais).ok:
-                        texto = f"Não consegui fazer isso agora" 
+                texto = await self._stream_resposta(messages, ids_reais)
                 yield texto
                 history = history + [{"role": "assistant", "content": texto}]
-                await self._session_store.set(session_id, _strip(history)) 
+                await self._session_store.set(session_id, _strip(history))
                 self._flush_trace(session_id)
                 return
+            
+            resposta = await self._llm.complete(
+                messages, tools=active.as_openai_tools(), tool_choice="auto",
+            )
+            
+            msg = await self._ensure_tool_call(resposta, tool_expected, messages, active)
+            
+            if msg is None:
+                yield "Não foi possível executar a chamada" 
+                return
+                
             history, saw_image = await self._handle_tool_calls(
                 session_id, history, user_turn, msg, active, device_id, seen, user_message, ids_reais
             )
+            
             if saw_image and VISION_STYLE not in system:
                 system = f"{system}\n\n{VISION_STYLE}"
+                
             user_turn = None
+            idx += 1
+             
             
         yield "[aviso] limite de passos atingido; respondo com o que apurei até aqui."
     
@@ -316,6 +332,26 @@ class Orchestrator:
     async def create_session(self) -> str:
         return await self._session_store.create()
     
+    async def _stream_resposta(self, messages: list[dict], ids_reais: set[str]) -> str:
+        """Resposta final: streama (1 geração), roda o output guard (G2) e auto-corrige 1×."""
+        buf: list[str] = []
+        async for kind, tok in self._llm.stream(messages):
+            if kind == "text":
+                buf.append(tok)
+        texto = "".join(buf)
+        guard = check_output(texto, ids_reais)
+        if not guard.ok:
+            aviso = {"role": "system", "content": guard.reason}
+            buf2: list[str] = []
+            async for kind, tok in self._llm.stream(messages + [aviso]):
+                if kind == "text":
+                    buf2.append(tok)
+            texto = "".join(buf2)
+            if not check_output(texto, ids_reais).ok:
+                texto = "Não consegui fazer isso agora."
+        return texto
+    
+    
 def _user_turn(text: str, image: str  | None) -> dict:
     if not image:
         return {"role":"user","content": text}
@@ -326,3 +362,4 @@ def _user_turn(text: str, image: str  | None) -> dict:
             {"type": "image_url", "image_url": {"url": image}}
         ]
     }
+
