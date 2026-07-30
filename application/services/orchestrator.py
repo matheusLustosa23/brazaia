@@ -15,6 +15,7 @@ from application.services.memory_service import MemoryService
 from application.services.helpers import _strip, persist_image
 from application.guards.output import check_output
 from application.services.tool_router import ToolRouter
+from application.services._trace import trace
 from infrastructure.devices.device_gateway import DeviceGateway
 from infrastructure.vision.image_index import ImageIndex
 
@@ -104,28 +105,28 @@ class Orchestrator:
         messages: list[dict], 
         active: ToolRegistry
     ) -> Completion | None:
-        print(f"[IA - AUTO] {msg.content} | {msg.tool_calls} | {msg.finish_reason}")
+        trace(f"[auto] esperada={tool_esperada} tools={[t.name for t in msg.tool_calls]} finish={msg.finish_reason} content={(msg.content or '')[:70]!r}")
         if not self._chamou_certo(msg , tool_esperada):
             nudge = {
                 "role": "system",
                 "content": f"Você ainda precisa chamar '{tool_esperada}' para atender o pedido. Chame-a agora com os argumentos corretos"
             }
-            print(f"[nudge] {nudge.get("content")}")
+            trace(f"[nudge] pedindo {tool_esperada}")
             msg = await self._llm.complete(messages + [nudge], tools=active.as_openai_tools(), tool_choice="auto")
-            print(f"[IA] {msg.content} | {msg.tool_calls} | {msg.finish_reason}")
+            trace(f"[nudge->] tools={[t.name for t in msg.tool_calls]} content={(msg.content or '')[:70]!r}")
         if not self._chamou_certo(msg, tool_esperada):
-            print("[chamada forçada]")
+            trace(f"[force] {tool_esperada}")
             msg = await self._llm.complete(
-                messages, 
+                messages,
                 tools=active.as_openai_tools(),
                 tool_choice={"type": "function", "function": {"name": tool_esperada}}
             )
-            print(f"[IA] {msg.content} | {msg.tool_calls} | {msg.finish_reason}")
-        
+            trace(f"[force->] tools={[t.name for t in msg.tool_calls]} args={[t.arguments for t in msg.tool_calls]}")
+
         if not self._chamou_certo(msg, tool_esperada):
-            print("Sem sucesso")
+            trace(f"[ABORT] nem forçado chamou {tool_esperada}")
             return None
-        
+
         return msg
 
     async def run(
@@ -148,6 +149,7 @@ class Orchestrator:
         seen: set[tuple[str, bytes]] = set()
         ids_reais: set[str] = set() 
 
+        trace(f"===== REQUEST: {user_message[:80]!r}")
         plano = await self._router.plan(user_message, active) if self._router else []
         idx = 0
         for _step in range(MAX_STEPS):
