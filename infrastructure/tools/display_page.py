@@ -1,8 +1,19 @@
+import re
 from pydantic import BaseModel, Field
 from domain.tools.base import Tool
 from domain.tools.guard import GuardResult, ToolCtx
 from infrastructure.devices.device_gateway import DeviceGateway
 from infrastructure.render.shell import STYLE_GUIDE, wrap_page     # scaffold server-side
+
+
+_LATEX = re.compile(
+    r"\$\$.+?\$\$"                                    # bloco:  $$ ... $$
+    r"|\\(?:frac|sqrt|sum|int|prod|lim|cdot|times|div|pm|leq|geq|neq|approx|infty|"
+    r"partial|nabla|left|right|begin|end|alpha|beta|gamma|delta|theta|lambda|pi|sigma|phi|omega|hat|vec|overline)\b"
+    r"|[\^_]\{",                                      # super/subscrito:  ^{...}  _{...}
+    re.DOTALL,
+    
+)
 
 class DisplayPageInput(BaseModel):
     device: str = Field(
@@ -28,7 +39,7 @@ class DisplayPageTool(Tool[DisplayPageInput]):
     side = "server"
     action_class = "reversible"
     timeout_s = 30.0
-    router_hint = "renderizar uma página no navegador"
+    router_hint =  "PÁGINA de conteúdo GENÉRICO (tabela, lista, card, texto). NUNCA matemática/fórmula — não renderiza LaTeX (isso é display_math)."
     
     async def run(self, payload: DisplayPageInput) -> str:
         html = wrap_page(payload.body_html, payload.title)      # injeta o CSS base do brazaia
@@ -40,6 +51,12 @@ class DisplayPageTool(Tool[DisplayPageInput]):
     def before(self, args: dict, ctx: ToolCtx) -> GuardResult:
         device = args.get("device", "")
         conectados = self._gateway.connections.names()
+        
+        if _LATEX.search(args.get("body_html") or ""):
+            return GuardResult(ok=False, reason=(
+                "esse conteúdo tem matemática (LaTeX) — display_page não renderiza fórmula, fica quebrado. "
+                "Use display_math."))
+            
         if not device:
             return GuardResult(ok=False, reason="em qual device é pra mostrar a página?")
         if device not in conectados:
