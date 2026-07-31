@@ -1,10 +1,16 @@
 from pydantic import BaseModel, Field
 from domain.tools.base import Tool
+from domain.tools.guard import GuardResult, ToolCtx
 from infrastructure.devices.device_gateway import DeviceGateway
 from infrastructure.render.shell import STYLE_GUIDE, wrap_page     # scaffold server-side
 
 class DisplayPageInput(BaseModel):
-    device: str = Field(description="Nome EXATO do device conectado.")
+    device: str = Field(
+        description=(
+            "Nome do device que o dono citou (ex.: 'ubuntu', 'celular'). Use SEMPRE o que ele pediu; "
+            "se estiver offline, você recebe um aviso e informa o dono — nunca troque por outro."
+        )
+    )
     title: str = Field(description="Título curto (aba/topo).")
     body_html: str = Field(description="HTML do corpo. " + STYLE_GUIDE)
 
@@ -31,10 +37,14 @@ class DisplayPageTool(Tool[DisplayPageInput]):
     def __init__(self, gateway: DeviceGateway) -> None:
         self._gateway = gateway
     
-    def openai_schema(self) -> dict:
-        schema = super().openai_schema()
-        devs = self._gateway.connections.names()
-        device = schema["function"]["parameters"]["properties"]["device"]
-        device["enum"] = devs
-        device["description"] = f"Device que recebe. CONECTADOS: {devs}. Nome EXATO."
-        return schema
+    def before(self, args: dict, ctx: ToolCtx) -> GuardResult:
+        device = args.get("device", "")
+        conectados = self._gateway.connections.names()
+        if not device:
+            return GuardResult(ok=False, reason="em qual device é pra mostrar a página?")
+        if device not in conectados:
+            disp = ", ".join(f"'{d}'" for d in conectados) or "nenhum"
+            return GuardResult(ok=False, reason=(
+                f"o device '{device}' está offline — não mostrei. Conectados agora: {disp}. "
+                f"Quer que eu mostre em um desses?"))
+        return GuardResult(ok=True)
