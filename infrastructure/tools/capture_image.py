@@ -33,6 +33,7 @@ class CaptureImageTool(Tool[CaptureImageInput]):
     side = "server"
     action_class = "read"
     router_hint = "ver/olhar pela câmera agora, tirar foto,capturar a foto, o que estou vendo ou tem na minha frente"
+    timeout_s = 45.0
     
     def __init__(self, registry: VisionRegistry):
         self._registry = registry
