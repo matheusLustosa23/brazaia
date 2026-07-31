@@ -38,4 +38,8 @@ class RenderMathTool(Tool[RenderMathInput]):
         except Exception as e:
             return f"[erro] render falhou: {e}"
         image_id = stash(self._index, png)
-        return f"imagem pronta (image_id={image_id}). Use em 'notify' ou 'open_image'."
+        titulo = payload.title or "matemática"
+        return (
+            f"[imagem GERADA (render_math) · '{titulo}' · image_id={image_id}] "
+            f"— pronta; use em 'notify' ou 'open_image'."
+        )

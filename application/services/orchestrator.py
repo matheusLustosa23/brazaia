@@ -26,6 +26,8 @@ ConfirmFn = Callable[[str, dict], Awaitable[bool]]
 VISION_STYLE = """\
 Você está olhando uma IMAGEM real capturada agora.
 Grounding (regra absoluta): descreva/leia SÓ o que está de fato na imagem; NÃO invente elementos/textos.
+NÃO projete a resposta ESPERADA: leia o que ESTÁ escrito na foto, mesmo que seja diferente do problema que você gerou ou esteja errado. Nunca assuma que o usuário acertou.
+Se a foto está borrada/escura/cortada e você NÃO consegue ler os símbolos, diga "não consegui ler, manda uma foto mais nítida" — NÃO invente uma resolução plausível.
 Se algo estiver ilegível, DIGA que não conseguiu ler — nunca preencha com suposição.
 Ao avaliar (quadro/exercício): CONFIRA cada passo e o resultado circulado; diga o que está CERTO e ERRADO e ONDE.
 Se o resultado escrito estiver errado, APONTE — nunca "corrija em silêncio". É por voz: curto, veredito primeiro.
@@ -54,6 +56,9 @@ HONESTIDADE = """
 - Fale apenas do que você realmente sabe ou observou: resultado de ferramenta, imagem capturada, memória.
   Não invente fatos, caminhos, nomes, números ou infraestrutura que você não viu.
 - Se algo estiver ausente, ilegível ou incerto, diga que não sabe — nunca preencha com suposição como certeza.
+- Você só descreve/lê uma imagem VISÍVEL neste turno. Sem imagem agora (só o placeholder [imagem capturada · id]), NÃO afirme o que ela mostra — reabra com load_image e ESPERE.
+  ✗ "qual a resposta que você viu?" (sem imagem aberta) → "Vi $(x+5)^2$." (INVENTADO)
+  ✓ "Não tenho a imagem aberta pra reler — deixa eu reabrir." → chama load_image, ESPERA, só então responde.
 
 """
 
@@ -243,6 +248,10 @@ class Orchestrator:
             if isinstance(obs, str) and obs.startswith("data:image/"):
                 img_id = persist_image(obs, session_id, device_id, self._image_index)
                 ids_reais.add(img_id)
+                origem = (
+                    f"foto · camera={payload.get("source", "?")}"
+                    if name == "capture_image" else "imagem recarregada"
+                )
                 tool_content = [
                     {
                         "type": "image_url",
@@ -253,11 +262,11 @@ class Orchestrator:
                     },
                     {
                         "type": "text", 
-                        "text": f"[imagem capturada · image_id={img_id}]" 
+                        "text": f"[{origem} · image_id={img_id}]" 
                     },
                 ]
                 saw_image = True
-                trace_txt = f"[imagem capturada: {img_id}]"
+                trace_txt = f"[{origem} · image_id={img_id}]"
             else:
                 ids_reais.update(re.findall(r"image_id=([0-9a-f]{12})", obs)) 
                 tool_content =  await self._context.summarize(obs, foco=f"resultado de {name}")
