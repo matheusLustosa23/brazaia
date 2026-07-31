@@ -1,12 +1,18 @@
 from pydantic import BaseModel, Field
 from domain.tools.base import Tool
+from domain.tools.guard import GuardResult, ToolCtx
 from infrastructure.vision.sources import VisionRegistry
 
 class CaptureImageInput(BaseModel):
     source: str = Field(
-        default="webcam",
-        description="Fonte da câmera: 'webcam' (câmera do próprio server) OU o NOME EXATO de um device conectado "
-                    "(ex.: 'ubuntu-teste'). Se o usuário pedir a câmera de um aparelho específico, use o nome desse device."
+        description=(
+            "Nome da câmera a capturar — FORME pelo que o dono pediu (convenção):\n"
+            "- 'câmera do <device>' → nome do device (ex.: 'câmera do ubuntu' → 'ubuntu')\n"
+            "- frontal/traseira → '<device>_frontal' / '<device>_traseira' (ex.: 'frontal do celular' → 'celular_frontal')\n"
+            "- 'webcam' / 'aqui' / sem citar device → 'webcam' (câmera do próprio server)\n"
+            "Use SEMPRE o device que o DONO pediu. NUNCA substitua por outro só porque está disponível — "
+            "se a câmera não existir, você recebe um aviso e confirma com ele."
+        )
     )
 
 class CaptureImageTool(Tool[CaptureImageInput]):
@@ -32,15 +38,16 @@ class CaptureImageTool(Tool[CaptureImageInput]):
         self._registry = registry
     
     async def run(self, payload: CaptureImageInput):
-        return await self._registry.capture(payload.source)
+        return await self._registry.capture(payload.source)  
     
-    def openai_schema(self) -> dict:
-        schema = super().openai_schema()
-        sources = self._registry.names()
-        src = schema["function"]["parameters"]["properties"]["source"]
-        src["enum"] = sources
-        src["description"] = (
-            f"De qual câmera capturar. Fontes CONECTADAS agora: {sources}. Use o nome EXATO. "
-            f"'webcam' = câmera do próprio server; os outros nomes são devices conectados."
-        )
-        return schema
+    def before(self, args: dict, ctx: ToolCtx) -> GuardResult:
+        source = args.get("source", "")
+        fontes = self._registry.names()
+        if not source:
+            return GuardResult(ok=False, reason="informe qual câmera (source).")
+        if source not in fontes:
+            disp = ", ".join(f"'{f}'" for f in fontes) or "nenhuma"
+            return GuardResult(ok=False, reason=(
+                f"não encontrei a câmera '{source}'. No momento só tenho {disp} disponível. "
+                f"É essa que você quer, ou era outro aparelho?"))
+        return GuardResult(ok=True)
