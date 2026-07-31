@@ -105,7 +105,8 @@ class Orchestrator:
         messages: list[dict], 
         active: ToolRegistry
     ) -> Completion | None:
-        trace(f"[auto] esperada={tool_esperada} tools={[t.name for t in msg.tool_calls]} finish={msg.finish_reason} content={(msg.content or '')[:70]!r}")
+        trace(f"[auto] esperada={tool_esperada} tools={[{t.name: t.arguments} for t in msg.tool_calls]} finish={msg.finish_reason} content={(msg.content or '')}")
+        
         if not self._chamou_certo(msg , tool_esperada):
             nudge = {
                 "role": "system",
@@ -113,7 +114,7 @@ class Orchestrator:
             }
             trace(f"[nudge] pedindo {tool_esperada}")
             msg = await self._llm.complete(messages + [nudge], tools=active.as_openai_tools(), tool_choice="auto")
-            trace(f"[nudge->] tools={[t.name for t in msg.tool_calls]} content={(msg.content or '')[:70]!r}")
+            trace(f"[nudge->] tools={[t.name for t in msg.tool_calls]} content={(msg.content or '')}")
         if not self._chamou_certo(msg, tool_esperada):
             trace(f"[force] {tool_esperada}")
             msg = await self._llm.complete(
@@ -149,7 +150,7 @@ class Orchestrator:
         seen: set[tuple[str, bytes]] = set()
         ids_reais: set[str] = set() 
 
-        trace(f"===== REQUEST: {user_message[:80]!r}")
+        trace(f"===== REQUEST: {user_message}")
         plano = await self._router.plan(user_message, active) if self._router else []
         idx = 0
         for _step in range(MAX_STEPS):
