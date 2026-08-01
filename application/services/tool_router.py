@@ -23,6 +23,7 @@ _INSTR_PLAN = (
     "Exemplos (pedido → plano):\n"
     "- \"mostra a matéria de derivadas na tela\" → [\"display_math\"]\n"
     "- \"preciso de um problema de matemática no navegador do celular\" → [\"display_math\"]\n"
+    "- \"gere um problema de matemática e abre em uma página no ubuntu\" → [\"display_math\"]\n"
     "- \"faz uma tabela dos planos e mostra\" → [\"display_page\"]\n"
     "- \"gera bhaskara e abre a IMAGEM em tela cheia\" → [\"render_math\", \"open_image\"]\n"
     "- \"gere a fórmula e envie pro celular\" → [\"render_math\", \"notify\"]\n"
