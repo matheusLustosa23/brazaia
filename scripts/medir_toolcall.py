@@ -22,6 +22,7 @@ from infrastructure.llm.client import OpenAILLMClient
 from infrastructure.llm import tokenizer
 from application.services.context_service import ContextManager
 from application.services.orchestrator import Orchestrator
+from application.services.juiz import Juiz
 from application.services.voice_service import VOICE_STYLE
 from application.services.memory_service import MemoryService
 from application.services.device_service import DeviceService
@@ -119,7 +120,8 @@ def _build():
     registry.register(OpenImageTool(device_gateway, image_index))
     orch = Orchestrator(
         llm=llm, context=context, tools=registry, memory=memory,
-        device_gateway=device_gateway, session_store=session_store, image_index=image_index)
+        device_gateway=device_gateway, session_store=session_store, image_index=image_index,
+        juiz=Juiz(llm))
     return llm, context, registry, orch
 
 
