@@ -15,6 +15,7 @@ from application.services.memory_service import MemoryService
 from application.services.helpers import _strip, persist_image
 from application.guards.output import check_output
 from application.services.tool_router import ToolRouter
+from application.services.juiz import Juiz
 from application.services._trace import trace
 from infrastructure.devices.device_gateway import DeviceGateway
 from infrastructure.vision.image_index import ImageIndex
@@ -86,7 +87,8 @@ class Orchestrator:
         *,
         confirm: ConfirmFn | None = None,
         audit_log: BinaryIO | None = None,
-        router: ToolRouter | None = None
+        router: ToolRouter | None = None,
+        juiz: Juiz
     ) -> None:
         self._llm = llm
         self._context = context
@@ -99,6 +101,7 @@ class Orchestrator:
         self._traces: dict[str, list[dict]] = {}
         self._image_index = image_index
         self._router = router
+        self._juiz = juiz
     
     @staticmethod
     def _chamou_certo(msg: Completion, esperada: str) -> bool:
@@ -110,16 +113,16 @@ class Orchestrator:
         messages: list[dict], 
         active: ToolRegistry
     ) -> Completion | None:
-        trace(f"[auto] esperada={tool_esperada} tools={[{t.name: t.arguments} for t in msg.tool_calls]} finish={msg.finish_reason} content={(msg.content or '')}")
         
-        if not self._chamou_certo(msg , tool_esperada):
-            nudge = {
-                "role": "system",
-                "content": f"Você ainda precisa chamar '{tool_esperada}' para atender o pedido. Chame-a agora com os argumentos corretos"
-            }
-            trace(f"[nudge] pedindo {tool_esperada}")
-            msg = await self._llm.complete(messages + [nudge], tools=active.as_openai_tools(), tool_choice="auto")
-            trace(f"[nudge->] tools={[t.name for t in msg.tool_calls]} content={(msg.content or '')}")
+        
+        nudge = {
+            "role": "system",
+            "content": f"Você ainda precisa chamar '{tool_esperada}' para atender o pedido. Chame-a agora com os argumentos corretos"
+        }
+        trace(f"[nudge] pedindo {tool_esperada}")
+        msg = await self._llm.complete(messages + [nudge], tools=active.as_openai_tools(), tool_choice="auto")
+        trace(f"[nudge->] tools={[t.name for t in msg.tool_calls]} content={(msg.content or '')}")
+        
         if not self._chamou_certo(msg, tool_esperada):
             trace(f"[force] {tool_esperada}")
             msg = await self._llm.complete(
@@ -157,30 +160,93 @@ class Orchestrator:
 
         trace(f"===== REQUEST: {user_message}")
         plano = await self._router.plan(user_message, active) if self._router else []
-        idx = 0
+        tools_restantes = list(plano)
+      
         for _step in range(MAX_STEPS):
             messages = self._context.build(system, memory_block, history, user_turn or {})
-            tool_expected = plano[idx] if idx < len(plano) else None
+            msg = None
             #sem tools pra chamar , retorna a mensagem para o user
-            if tool_expected is None:
-                if user_turn:
-                    history = history + [user_turn]
-                texto = await self._stream_resposta(messages, ids_reais)
+            if not tools_restantes:
+                trace(f"===== SEM TOOLS PARA CHAMR")
+                texto = await self._finalizar_turno(
+                    messages=messages,
+                    user_turn=user_turn,
+                    history=history,
+                    ids_reais=ids_reais,
+                    session_id=session_id,
+                    mensagem_llm=None
+                )
                 yield texto
-                history = history + [{"role": "assistant", "content": texto}]
-                await self._session_store.set(session_id, _strip(history))
-                self._flush_trace(session_id)
                 return
             
-            resposta = await self._llm.complete(
+            resposta_llm = await self._llm.complete(
                 messages, tools=active.as_openai_tools(), tool_choice="auto",
             )
             
-            msg = await self._ensure_tool_call(resposta, tool_expected, messages, active)
+            tool_requisitada = resposta_llm.tool_calls[0].name if resposta_llm.tool_calls else None
+            mensagem_llm = resposta_llm.content or ""
             
-            if msg is None:
-                yield "Não foi possível executar a chamada" 
-                return
+            trace(f"[auto]  tools={[{t.name: t.arguments} for t in resposta_llm.tool_calls]} finish={resposta_llm.finish_reason} content={mensagem_llm}")
+            
+            #chamou uma tool esperada
+            if tool_requisitada in tools_restantes:
+                msg = resposta_llm
+            # OMITIU
+            elif tool_requisitada is None:
+                #Motivo plausivio , retornamos ao usuario
+                trace(f"===== LLM NÃO CHAMOU TOOL")
+                if await self._juiz.classifica_omissao(user_message, mensagem_llm, active.describe_for_router()) == "RESPONDER":
+                    trace(f"===== MOTIVO DE OMISSAO PLAUSIVEL")
+                    texto = await self._finalizar_turno(
+                        messages=messages,
+                        user_turn=user_turn,
+                        history=history,
+                        ids_reais=ids_reais,
+                        session_id=session_id,
+                        mensagem_llm=mensagem_llm
+                    )
+                    yield texto
+                    return
+                
+                #Aluncinou , forçamos a chamada
+                trace(f"===== LLM ALUNCINOU")
+                msg = await self._ensure_tool_call(
+                    messages=messages,
+                    active=active,
+                    msg=resposta_llm,
+                    tool_esperada=tools_restantes[0],
+                )
+                if msg is None: yield "Não foi possível executar a chamada"; return
+                tool_requisitada = msg.tool_calls[0].name
+            # Chamou uma tool fora do plano
+            else:
+                #se faz sentido , aceitamos , abordamos o plano
+                trace(f"===== LLM CHAMOU UMA TOOL FORA DO PLAO")
+                autorizado, tools_substituidas = await self._juiz.aceita_divergencia(
+                    pedido=user_message, 
+                    tool_chamada=tool_requisitada, 
+                    args=resposta_llm.tool_calls[0].arguments, 
+                    tools=active.describe_for_router(),
+                    restante=tools_restantes
+                )
+                if autorizado:
+                    trace(f"===== CHAMADA AUTORIZADA - TOOLS {tools_substituidas} FORAM SUBSTITUIDAS POR {tool_requisitada}")
+                    msg = resposta_llm
+                    for t in tools_substituidas:
+                        tools_restantes.remove(t)
+                # caso seja divergencia sem sentido tentamos forças
+                else:
+                    trace(f"===== LLM ALUNCINOU")
+                    msg = await self._ensure_tool_call(
+                        messages=messages,
+                        active=active,
+                        msg=resposta_llm,
+                        tool_esperada=tools_restantes[0],
+                    )
+                    if msg is None: yield "Não foi possível executar a chamada"; return
+                    tool_requisitada = msg.tool_calls[0].name
+            
+            if tool_requisitada in tools_restantes: tools_restantes.remove(tool_requisitada)
                 
             history, saw_image = await self._handle_tool_calls(
                 session_id, history, user_turn, msg, active, device_id, seen, user_message, ids_reais
@@ -190,7 +256,7 @@ class Orchestrator:
                 system = f"{system}\n\n{VISION_STYLE}"
                 
             user_turn = None
-            idx += 1
+          
              
             
         yield "[aviso] limite de passos atingido; respondo com o que apurei até aqui."
@@ -303,10 +369,12 @@ class Orchestrator:
             return f"[erro] ferramenta '{name}' não existe"
         
         if tool.action_class == "destructive" and not await self._confirm(name, payload):
+            trace(f"[cancelado] ação destrutiva '{name}' não confirmada pelo usuário.")
             return f"[cancelado] ação destrutiva '{name}' não confirmada pelo usuário."
         
         verify = tool.before(payload, ctx)
         if not verify.ok:
+            trace(f"[bloqueado] {verify.reason}" )
             return f"[bloqueado] {verify.reason}" 
         
         if tool.side == "server":
@@ -317,8 +385,10 @@ class Orchestrator:
         
         confirm = tool.after(result, ctx)
         if not confirm.ok:
+            trace(f"[falha] {confirm.reason}")
             return f"[falha] {confirm.reason}"
         
+        trace(f"[execute tool] {name} ({payload}) device:{device_id}")
         return  result
     
     def _trace(
@@ -344,24 +414,40 @@ class Orchestrator:
     async def create_session(self) -> str:
         return await self._session_store.create()
     
-    async def _stream_resposta(self, messages: list[dict], ids_reais: set[str]) -> str:
+    async def _finalizar_turno(
+        self, 
+        messages: list[dict], 
+        ids_reais: set[str],
+        user_turn: dict | None,
+        history: list[dict],
+        session_id: str,
+        mensagem_llm: str | None
+    ) -> str:
         """Resposta final: streama (1 geração), roda o output guard (G2) e auto-corrige 1×."""
-        buf: list[str] = []
-        async for kind, tok in self._llm.stream(messages):
-            if kind == "text":
-                buf.append(tok)
-        texto = "".join(buf)
-        guard = check_output(texto, ids_reais)
-        if not guard.ok:
-            aviso = {"role": "system", "content": guard.reason}
-            buf2: list[str] = []
-            async for kind, tok in self._llm.stream(messages + [aviso]):
+        if mensagem_llm is None:
+            buf: list[str] = []
+            async for kind, tok in self._llm.stream(messages):
                 if kind == "text":
-                    buf2.append(tok)
-            texto = "".join(buf2)
-            if not check_output(texto, ids_reais).ok:
-                texto = "Não consegui fazer isso agora."
-        return texto
+                    buf.append(tok)
+            mensagem_llm = "".join(buf)
+            guard = check_output(mensagem_llm, ids_reais)
+            if not guard.ok:
+                aviso = {"role": "system", "content": guard.reason}
+                buf2: list[str] = []
+                async for kind, tok in self._llm.stream(messages + [aviso]):
+                    if kind == "text":
+                        buf2.append(tok)
+                mensagem_llm = "".join(buf2)
+                if not check_output(mensagem_llm, ids_reais).ok:
+                    mensagem_llm  = "Não consegui fazer isso agora."
+        
+        if user_turn:
+            history = history + [user_turn]
+        history = history + [{"role": "assistant", "content": mensagem_llm}]
+        await self._session_store.set(session_id, _strip(history))
+        self._flush_trace(session_id)
+                
+        return mensagem_llm
     
     
 def _user_turn(text: str, image: str  | None) -> dict:
