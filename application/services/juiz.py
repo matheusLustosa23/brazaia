@@ -4,14 +4,31 @@ from application.services._trace import trace
 
 
 _INSTR_DIVERGENCIA = (
+        "Você é o juiz. O plano previa umas ferramentas; o modelo chamou uma FORA do plano.\n"
+        "Decida se essa troca ENTREGA pro dono o mesmo resultado que o pedido exige — ou se foi erro.\n\n"
         "Ferramentas (o que cada uma faz / quando usar):\n{tools}\n\n"
         "Pedido do dono: {pedido}\n"
         "Ferramentas do PLANO ainda não executadas: {restante}\n"
-        "O modelo chamou '{chamou}' (args: {args}), que NÃO está no plano.\n"
-        "Responda em JSON:\n"
-        "- aceita: true se '{chamou}' atende BEM alguma parte do pedido; false se foi escolha errada.\n"
-        "- substitui: lista das ferramentas do PLANO acima que '{chamou}' torna REDUNDANTES (faz o mesmo papel); "
-        "[] se ela só ADICIONA (não cobre nenhuma do plano).")
+        "O modelo chamou '{chamou}' (args: {args}), que NÃO está no plano.\n\n"
+        "REGRAS:\n"
+        "- aceita = true SÓ se '{chamou}' entrega pro dono o MESMO resultado que o pedido pede. "
+        "Tocar no assunto não basta: se o dono quer algo MOSTRADO/ABERTO/ENVIADO e '{chamou}' apenas gera e "
+        "GUARDA (não exibe, não envia), o dono não veria nada → é um DOWNGRADE → aceita = false.\n"
+        "- IMAGEM ≠ PÁGINA. 'render_math' cria uma IMAGEM que fica GUARDADA (não aparece sozinha). "
+        "'display_math' MOSTRA uma PÁGINA no navegador. Se o dono pediu pra MOSTRAR/ABRIR/VER matemática numa "
+        "página/tela/navegador e o modelo chamou 'render_math', o dono NÃO veria nada → aceita = false "
+        "(o plano tinha 'display_math', mantenha ele — NÃO substitua). O contrário PODE: 'display_math' já mostra, "
+        "então cobre um plano que previa 'render_math'.\n"
+        "- substitui = ferramentas do PLANO que '{chamou}' torna REDUNDANTES por fazer o MESMO papel COMPLETO. "
+        "Nunca liste uma que '{chamou}' cobre só pela metade — essa continua no plano. [] se '{chamou}' só ADICIONA. "
+        "Se aceita = false, substitui DEVE ser [].\n\n"
+        "Exemplos:\n"
+        "- pedido 'abre a matemática numa página no ubuntu', plano ['display_math'], chamou 'render_math' → "
+        "{{\"aceita\": false, \"substitui\": []}}  (render_math não mostra; a página não apareceria)\n"
+        "- pedido 'gera a fórmula, me mostra e me lembra de revisar', plano ['render_math','open_image','lembrar'], "
+        "chamou 'display_math' → {{\"aceita\": true, \"substitui\": [\"render_math\", \"open_image\"]}}  "
+        "(a página já mostra tudo; 'lembrar' continua pendente)\n\n"
+        "Responda em JSON: {{\"aceita\": bool, \"substitui\": [nomes do plano]}}.")
 
 _INSTR_OMISSAO = (
         "Ferramentas:\n{tools}\n\n"
