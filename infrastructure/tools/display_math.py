@@ -28,7 +28,7 @@ class DisplayMathTool(Tool[DisplayMathInput]):
     side = "server"
     action_class = "reversible"
     timeout_s = 30.0
-    router_hint =  "PÁGINA de MATEMÁTICA no device — fórmulas/exercícios/LaTeX renderizados (KaTeX). ÚNICA pra matemática em página."
+    router_hint =  "gera E MOSTRA uma PÁGINA de matemática no navegador do device (KaTeX, pra ler/resolver). Já monta tudo — DISPENSA render_math. ÚNICA pra matemática em página."
     
     def __init__(self, gateway: DeviceGateway) -> None:
         self._gateway = gateway
