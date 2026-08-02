@@ -246,11 +246,12 @@ class Orchestrator:
                     if msg is None: yield "Não foi possível executar a chamada"; return
                     tool_requisitada = msg.tool_calls[0].name
             
-            if tool_requisitada in tools_restantes: tools_restantes.remove(tool_requisitada)
-                
-            history, saw_image = await self._handle_tool_calls(
+            
+            history, saw_image, exec_ok = await self._handle_tool_calls(
                 session_id, history, user_turn, msg, active, device_id, seen, user_message, ids_reais
             )
+            
+            if exec_ok and tool_requisitada in tools_restantes: tools_restantes.remove(tool_requisitada)
             
             if saw_image and VISION_STYLE not in system:
                 system = f"{system}\n\n{VISION_STYLE}"
@@ -279,7 +280,7 @@ class Orchestrator:
         seen: set[tuple[str, bytes]],
         user_msg: str,
         ids_reais: set[str],
-    ) ->  tuple[list[dict], bool]:
+    ) ->  tuple[list[dict], bool, bool]:
         if user_turn is not None:
             history = history + [user_turn]
         history = history + [
@@ -301,6 +302,7 @@ class Orchestrator:
         ]
         saw_image = False
         ctx = ToolCtx(fala_do_usuario=user_msg, ids_reais=ids_reais, session_id=session_id)
+        success = False
         for tc in msg.tool_calls:
             name = tc.name
             payload = tc.arguments
@@ -309,7 +311,9 @@ class Orchestrator:
                 obs = "[loop cortado] repetição da mesma ação detectada."
             else:
                 self._remember_call(name, payload, seen)
-                obs = await self._execute(name, payload, active, device_id, ctx)
+                obs, exec_ok = await self._execute(name, payload, active, device_id, ctx)
+                success = exec_ok
+                
                 
             if isinstance(obs, str) and obs.startswith("data:image/"):
                 img_id = persist_image(obs, session_id, device_id, self._image_index)
@@ -348,7 +352,7 @@ class Orchestrator:
             ]
             self._trace(session_id, name, payload, obs,  trace_txt)
             
-        return (history, saw_image)
+        return (history, saw_image, success)
 
     def _is_repeat(self, name: str, payload: dict, seen: set[tuple[str, bytes]]) -> bool:
         return (name, orjson.dumps(payload, option=orjson.OPT_SORT_KEYS),) in seen
@@ -363,19 +367,19 @@ class Orchestrator:
         active: ToolRegistry,
         device_id: str | None,
         ctx: ToolCtx
-    ) -> str:
+    ) -> tuple[str, bool]:
         tool = active.get(name)
         if tool is None:
-            return f"[erro] ferramenta '{name}' não existe"
+            return f"[erro] ferramenta '{name}' não existe", False
         
         if tool.action_class == "destructive" and not await self._confirm(name, payload):
             trace(f"[cancelado] ação destrutiva '{name}' não confirmada pelo usuário.")
-            return f"[cancelado] ação destrutiva '{name}' não confirmada pelo usuário."
+            return f"[cancelado] ação destrutiva '{name}' não confirmada pelo usuário.", False
         
         verify = tool.before(payload, ctx)
         if not verify.ok:
             trace(f"[bloqueado] {verify.reason}" )
-            return f"[bloqueado] {verify.reason}" 
+            return f"[bloqueado] {verify.reason}", False
         
         if tool.side == "server":
             result =  await active.run(name, payload)
@@ -386,10 +390,10 @@ class Orchestrator:
         confirm = tool.after(result, ctx)
         if not confirm.ok:
             trace(f"[falha] {confirm.reason}")
-            return f"[falha] {confirm.reason}"
+            return f"[falha] {confirm.reason}", False
         
         trace(f"[execute tool] {name} ({payload}) device:{device_id}")
-        return  result
+        return  result, True
     
     def _trace(
         self,
