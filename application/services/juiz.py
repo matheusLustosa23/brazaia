@@ -31,11 +31,28 @@ _INSTR_DIVERGENCIA = (
         "Responda em JSON: {{\"aceita\": bool, \"substitui\": [nomes do plano]}}.")
 
 _INSTR_OMISSAO = (
-        "Ferramentas:\n{tools}\n\n"
-        "Pedido do dono: {pedido}\n"
-        "Faltava chamar uma ferramenta, mas o modelo só ESCREVEU (não chamou): {texto}\n"
-        "RESPONDER = é pergunta/confirmação ao dono OU falha honesta (offline/não encontrado) → entrega o texto pro dono.\n"
-        "EXECUTAR = entregou em prosa o que era AÇÃO, ou fingiu que fez → força a ferramenta.")
+    "O modelo NÃO chamou nenhuma ferramenta; só escreveu um texto. Nenhuma ação aconteceu. "
+    "Classifique o texto em RESPONDER (entrega ao dono e encerra) ou EXECUTAR (força a ferramenta que faltou).\n\n"
+    "Texto do modelo: \"{texto}\"\n\n"
+    "Decida NESTA ordem:\n"
+    "1) O texto faz uma PERGUNTA ao dono (tem '?', pede decisão/permissão/confirmação/alternativa) "
+    "OU ADMITE que NÃO deu ('não consegui', 'não foi possível', 'não abri/enviei/mostrei', 'deu erro', "
+    "'falhou', 'offline', 'não encontrei', 'ilegível')? -> RESPONDER. "
+    "Isso VENCE mesmo que o texto cite a ação ou ofereça alternativa — quem decide é o dono.\n"
+    "2) SENÃO: o texto AFIRMA que a ação foi FEITA ('pronto, enviei', 'aqui está a foto', 'já mostrei/"
+    "abri/anotei') ou só ANUNCIA que vai fazer ('vou capturar', 'agora envio') sem ter chamado? "
+    "-> EXECUTAR (a tool não rodou, então é falso: force).\n\n"
+    "Exemplos:\n"
+    "  - 'não abri a imagem, o ubuntu está offline. abro em outro?' -> RESPONDER\n"
+    "  - 'deu erro ao gerar a fórmula, tento de novo?' -> RESPONDER\n"
+    "  - 'posso registrar isso na memória, confirma?' -> RESPONDER\n"
+    "  - 'a foto ficou preta, não consegui ler' -> RESPONDER\n"
+    "  - 'pronto, enviei a notificação!' -> EXECUTAR\n"
+    "  - 'aqui está a foto que tirei' -> EXECUTAR\n"
+    "  - 'já mostrei os exercícios na tela' -> EXECUTAR\n"
+    "  - 'vou capturar e enviar' -> EXECUTAR"
+)
+
 
 
 _INSTR_TURNO = ("Ferramentas (o que cada uma faz):\n{tools}\n\n"
@@ -102,32 +119,22 @@ class Juiz:
             }
         )
         data = orjson.loads(resposta.content or "{}")
-        trace(f"[JUIZ] {data}")
+        trace(f"[JUIZ (divergencia)] {data}")
         return bool(data.get("aceita")), [tool for tool in data.get("substitui", []) if tool in restante]
     
     async def classifica_omissao(self, pedido: str, texto: str, tools: str) -> str:
         if not (texto or "").strip():
             return "EXECUTAR"
+        schema = {"type": "object", "required": ["decisao"],
+                  "properties": {"decisao": {"type": "string", "enum": ["RESPONDER", "EXECUTAR"]}}}
         response = await self._llm.complete(
-            messages=[
-                {
-                    "role":"system",
-                    "content":_INSTR_OMISSAO.format(
-                        tools=tools, 
-                        pedido=pedido, 
-                        texto=texto
-                    )
-                }
-            ],
+            messages=[{"role": "system", "content": _INSTR_OMISSAO.format(texto=texto)}],
             temperature=0.0,
-            extra_body={
-                "guided_choice":[
-                    "RESPONDER",
-                    "EXECUTAR"
-                ]
-            }
-        )
-        return (response.content or "").strip().upper()
+            extra_body={"response_format": {"type": "json_schema",
+                        "json_schema": {"name": "omissao", "schema": schema}}})
+        decisao = orjson.loads(response.content or "{}").get("decisao", "EXECUTAR")
+        trace(f"[JUIZ (omissao)] {decisao}")
+        return decisao
     
     async def finalizou_turno(self, pedido: str, trajetoria: str, resposta: str, tools: str) -> tuple[bool, str]:
         response = await self._llm.complete(
@@ -145,7 +152,7 @@ class Juiz:
             temperature=0.0
         )
         txt = (response.content or "").strip()
-        trace(f"[JUIZ] {txt}")
+        trace(f"[JUIZ (turno)] {txt}")
         return (not txt.upper().startswith("FALTOU"), txt)
         
     
