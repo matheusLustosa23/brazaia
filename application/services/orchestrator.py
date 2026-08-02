@@ -163,7 +163,12 @@ class Orchestrator:
         tools_restantes = list(plano)
       
         for _step in range(MAX_STEPS):
+            trace(f"==================== {_step + 1} ITERAÇÃO DO LOOP ====================")
             messages = self._context.build(system, memory_block, history, user_turn or {})
+            skeleton = self._skeleton(user_message, plano, tools_restantes)
+            if skeleton:
+                print(skeleton)
+                messages = messages + [skeleton]
             msg = None
             #sem tools pra chamar , retorna a mensagem para o user
             if not tools_restantes:
@@ -453,6 +458,30 @@ class Orchestrator:
                 
         return mensagem_llm
     
+    def _skeleton(self, pedido: str, plano: list[str], restantes: list[str]) -> dict:
+        trace("[SKELETON]")
+        if not plano:
+            return {}
+        def checklist(tool: str) -> str:
+            if tool not in restantes: return "✔"
+            if restantes and tool == restantes[0]: return "▸"
+            return "☐"
+        passos = "\n".join(
+            f"{checklist(tool)} {i+1}. {tool}"
+            for i,tool in enumerate(plano)
+        )
+        feito = [t for t in plano if t not in restantes]
+        trace(f"Passos:\n {passos}")
+        trace(f"restante:\n {restantes}")
+        return {
+            "role": "system",
+            "content": (
+                f"O usuário pediu: '{pedido}'.\n"
+                f"Faça NESTA ordem, conferindo o RESULTADO REAL de cada passo antes do próximo:\n{passos}\n"
+                f"Estado → feito: {feito or '[]'} · falta: {restantes or '[]'}.\n"
+                "Se um passo falhar ou pedir permissão, PARE e relate — não pule, não invente id."
+            )
+        }
     
 def _user_turn(text: str, image: str  | None) -> dict:
     if not image:
