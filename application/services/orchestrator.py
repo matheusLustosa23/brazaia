@@ -103,41 +103,6 @@ class Orchestrator:
         self._router = router
         self._juiz = juiz
     
-    @staticmethod
-    def _chamou_certo(msg: Completion, esperada: str) -> bool:
-            return bool(msg.tool_calls) and msg.tool_calls[0].name == esperada
-
-    async def _ensure_tool_call(
-        self, msg: Completion, 
-        tool_esperada: str, 
-        messages: list[dict], 
-        active: ToolRegistry
-    ) -> Completion | None:
-        
-        
-        nudge = {
-            "role": "system",
-            "content": f"Você ainda precisa chamar '{tool_esperada}' para atender o pedido. Chame-a agora com os argumentos corretos"
-        }
-        trace(f"[nudge] pedindo {tool_esperada}")
-        msg = await self._llm.complete(messages + [nudge], tools=active.as_openai_tools(), tool_choice="auto")
-        trace(f"[nudge->] tools={[t.name for t in msg.tool_calls]} content={(msg.content or '')}")
-        
-        if not self._chamou_certo(msg, tool_esperada):
-            trace(f"[force] {tool_esperada}")
-            msg = await self._llm.complete(
-                messages,
-                tools=active.as_openai_tools(),
-                tool_choice={"type": "function", "function": {"name": tool_esperada}}
-            )
-            trace(f"[force->] tools={[t.name for t in msg.tool_calls]} args={[t.arguments for t in msg.tool_calls]}")
-
-        if not self._chamou_certo(msg, tool_esperada):
-            trace(f"[ABORT] nem forçado chamou {tool_esperada}")
-            return None
-
-        return msg
-
     async def run(
         self,
         session_id: str,
@@ -157,7 +122,8 @@ class Orchestrator:
         user_turn: dict | None = _user_turn(user_message, image)
         seen: set[tuple[str, bytes]] = set()
         ids_reais: set[str] = set() 
-
+        nudges_omissao = 0
+        nudges_diverg  = 0
         trace(f"===== REQUEST: {user_message}")
         plano = await self._router.plan(user_message, active) if self._router else []
         tools_restantes = list(plano)
@@ -213,16 +179,22 @@ class Orchestrator:
                     yield texto
                     return
                 
-                #Aluncinou , forçamos a chamada
-                trace(f"===== LLM ALUNCINOU")
-                msg = await self._ensure_tool_call(
-                    messages=messages,
-                    active=active,
-                    msg=resposta_llm,
-                    tool_esperada=tools_restantes[0],
-                )
-                if msg is None: yield "Não foi possível executar a chamada"; return
-                tool_requisitada = msg.tool_calls[0].name
+                if nudges_omissao >= 1: 
+                    texto = await self._finalizar_turno(messages, ids_reais, user_turn, history, session_id, None)
+                    yield texto
+                    return
+                
+                nudges_omissao += 1
+                system_extra = {
+                    "role":"system","content":
+                    f"Você disse que ia agir mas não chamou a ferramenta. Chame '{tools_restantes[0]}' "
+                    "agora com os argumentos certos, ou relate a falha ao dono."
+                }
+                if user_turn is not None:
+                    history = history + [user_turn]
+                    user_turn = None
+                history = history + [system_extra]
+                continue
             # Chamou uma tool fora do plano
             else:
                 #se faz sentido , aceitamos , abordamos o plano
@@ -239,31 +211,41 @@ class Orchestrator:
                     msg = resposta_llm
                     for t in tools_substituidas:
                         tools_restantes.remove(t)
-                # caso seja divergencia sem sentido tentamos forças
+                # caso seja divergencia sem sentido -> nudge
                 else:
-                    trace(f"===== LLM ALUNCINOU")
-                    msg = await self._ensure_tool_call(
-                        messages=messages,
-                        active=active,
-                        msg=resposta_llm,
-                        tool_esperada=tools_restantes[0],
-                    )
-                    if msg is None: yield "Não foi possível executar a chamada"; return
-                    tool_requisitada = msg.tool_calls[0].name
+                    trace("===== DIVERGENCIA REJEITADA - nudge corretivo")
+                    if nudges_diverg >= 1:
+                        texto = await self._finalizar_turno(messages, ids_reais, user_turn, history, session_id, None)
+                        yield texto
+                        return
+                    if user_turn is not None:
+                        history = history + [user_turn]
+                        user_turn = None
+                    history = history + [
+                        {
+                            "role":"system","content":
+                            f"'{tool_requisitada}' não atende o pedido aqui. O certo é '{tools_restantes[0]}'. "
+                            "Chame a ferramenta certa."
+                        }
+                    ]
+                    nudges_diverg += 1
+                    continue
             
             
             history, saw_image, exec_ok = await self._handle_tool_calls(
                 session_id, history, user_turn, msg, active, device_id, seen, user_message, ids_reais
             )
             
-            if exec_ok and tool_requisitada in tools_restantes: tools_restantes.remove(tool_requisitada)
+            if exec_ok and tool_requisitada in tools_restantes: 
+                tools_restantes.remove(tool_requisitada)
+                
             
             if saw_image and VISION_STYLE not in system:
                 system = f"{system}\n\n{VISION_STYLE}"
                 
             user_turn = None
-          
-             
+            nudges_omissao = 0
+            nudges_diverg  = 0
             
         yield "[aviso] limite de passos atingido; respondo com o que apurei até aqui."
     
