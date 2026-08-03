@@ -2,7 +2,7 @@ from pydantic import BaseModel, Field
 from domain.tools.base import Tool
 from domain.tools.guard import GuardResult, ToolCtx
 from infrastructure.devices.device_gateway import DeviceGateway
-from infrastructure.render.store import resolve_data_uri
+from infrastructure.render.store import resolve_data_uri, _id_valido
 from infrastructure.vision.image_index import ImageIndex
 
 
@@ -65,6 +65,7 @@ class NotifyTool(Tool[NotifyInput]):
     
     def before(self, args: dict, ctx: ToolCtx) -> GuardResult:
         device = args.get("device", "")
+        image_id = args.get("image_id")
         conectados = self._gateway.connections.names()
         if not device:
             return GuardResult(ok=False, reason="pra qual device é a notificação?")
@@ -73,6 +74,10 @@ class NotifyTool(Tool[NotifyInput]):
             return GuardResult(ok=False, reason=(
                 f"o device '{device}' está offline — não enviei. Conectados agora: {disp}. "
                 f"Quer que eu envie pra um desses?"))
+        if image_id and not _id_valido(self._index, ctx, image_id):
+            return GuardResult(ok=False, reason=(
+                f"não tenho a imagem '{image_id}' — não foi gerada nem capturada neste turno. "
+                "Gere/capture primeiro, ou me diga qual usar."))
         return GuardResult(ok=True)
     
     

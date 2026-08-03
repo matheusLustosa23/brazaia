@@ -2,7 +2,7 @@ from pydantic import BaseModel, Field
 from domain.tools.base import Tool
 from domain.tools.guard import GuardResult, ToolCtx
 from infrastructure.devices.device_gateway import DeviceGateway
-from infrastructure.render.store import resolve_data_uri
+from infrastructure.render.store import resolve_data_uri, _id_valido
 from infrastructure.vision.image_index import ImageIndex
 
 class OpenImageInput(BaseModel):
@@ -59,4 +59,9 @@ class OpenImageTool(Tool[OpenImageInput]):
             return GuardResult(ok=False, reason=(
                 f"o device '{device}' está offline — não abri. Conectados agora: {disp}. "
                 f"Quer que eu abra em um desses?"))
+        image_id = args.get("image_id")
+        if image_id and not _id_valido(self._index, ctx, image_id):
+            return GuardResult(ok=False, reason=(
+                f"não tenho a imagem '{image_id}' — não foi gerada nem capturada neste turno. "
+                "Gere/capture primeiro, ou me diga qual usar."))
         return GuardResult(ok=True)

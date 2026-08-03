@@ -7,6 +7,7 @@ import os
 import uuid
 
 from infrastructure.vision.image_index import ImageIndex
+from domain.tools.guard import ToolCtx
 
 _CACHE = os.path.expanduser("~/brazaia/cache")
 _MIME_POR_EXT = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
@@ -33,3 +34,6 @@ def resolve_data_uri(index: ImageIndex, img_id: str) -> str | None:
     with open(caminho, "rb") as f:
         base64_str = base64.b64encode(f.read()).decode()
     return f"data:{mime};base64,{base64_str}"
+
+def _id_valido(index, ctx: ToolCtx, image_id: str) -> bool:
+    return image_id in ctx.ids_reais or resolve_data_uri(index, image_id) is not None
