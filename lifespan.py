@@ -26,6 +26,8 @@ from application.services.orchestrator import Orchestrator
 from application.services.device_service import DeviceService
 from application.services.device_handshake import DeviceHandshakeService
 from application.tools.lembrar import LembrarTool
+from application.services.tool_router import ToolRouter
+from application.services.juiz import Juiz
 from domain.tools.base import ToolRegistry
 from infrastructure.voice.asr import ASR
 from infrastructure.voice.tts import TTS
@@ -47,6 +49,12 @@ async def lifespan(app: FastAPI):
         count_tokens=lambda msgs: tokenizer.count_tokens(msgs, settings.model_name),
         llm=llm,
     )
+    
+    # --- Router ---
+    router = ToolRouter(llm)
+    
+    # --- JUIZ ---
+    juiz = Juiz(llm)
 
     # ── Memory ──
     os.makedirs(os.path.dirname(settings.memory_db_path), exist_ok=True)
@@ -97,7 +105,9 @@ async def lifespan(app: FastAPI):
         memory=memory,
         device_gateway=device_gateway,
         session_store=_session_store,
-        image_index=image_index
+        image_index=image_index,
+        router=router,
+        juiz=juiz
     )
 
     # ── Sub-Containers ──

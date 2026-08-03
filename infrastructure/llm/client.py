@@ -35,19 +35,22 @@ class OpenAILLMClient:
         self._model = s.model_name
         self._retries = s.llm_max_retries
         self._backoff = s.llm_backoff_base_s
+        self._max_out = s.reserved_output_tokens
         
     async def complete(
         self,
         messages: list[dict],
         tools: list[dict] | None = None,
-        tool_choice: str = "auto",
+        tool_choice: str | dict = "auto",
         **opts: Any
     ) -> Completion:
         """Chamada não-stream. Function calling NATIVO via `tools`/`tool_choice`."""
         kwargs: dict[str, Any] = dict(model=self._model,messages=messages,**opts)
+        kwargs.setdefault("max_tokens", self._max_out)
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice
+            kwargs.setdefault("parallel_tool_calls", False) 
         try:
             r = await self._call(**kwargs)
         except RetryError as e:
@@ -112,7 +115,7 @@ class OpenAILLMClient:
         self,
         messages: list[dict],
         tools: list[dict] | None = None,
-        tool_choice: str = "auto",
+        tool_choice: str | dict = "auto",
         **opts: Any
     ) -> AsyncIterator[tuple[str, Any]]:
         """Itera deltas. Cada item: ('text', str) ou ('tool_call_delta', obj).
@@ -121,9 +124,11 @@ class OpenAILLMClient:
         O acúmulo/parse final dos arguments fica a cargo do consumidor (feat-agent-loop).
         """
         kwargs: dict[str, Any] = dict(model=self._model, messages=messages, stream=True, **opts)
+        kwargs.setdefault("max_tokens", self._max_out)
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice
+            kwargs.setdefault("parallel_tool_calls", False) 
         try:
             s: AsyncIterator[ChatCompletionChunk] = await self._c.chat.completions.create(**kwargs)
             async for chunk in s:

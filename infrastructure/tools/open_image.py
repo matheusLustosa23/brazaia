@@ -1,11 +1,17 @@
 from pydantic import BaseModel, Field
 from domain.tools.base import Tool
+from domain.tools.guard import GuardResult, ToolCtx
 from infrastructure.devices.device_gateway import DeviceGateway
-from infrastructure.render.store import resolve_data_uri
+from infrastructure.render.store import resolve_data_uri, _id_valido
 from infrastructure.vision.image_index import ImageIndex
 
 class OpenImageInput(BaseModel):
-    device: str = Field(description="Nome EXATO do device conectado.")
+    device: str = Field(
+        description=(
+            "Nome do device que o dono citou (ex.: 'ubuntu', 'celular'). Use SEMPRE o que ele pediu; "
+            "se estiver offline, você recebe um aviso e informa o dono — nunca troque por outro."
+        )
+    )
     image_id: str = Field(description=(
         "image_id de uma imagem que JÁ apareceu nesta conversa. DUAS origens valem: 'render_math' "
         "(image_id=XXXX) ou uma captura ([imagem capturada · image_id=...]). NÃO invente o id.\n"
@@ -27,6 +33,7 @@ class OpenImageTool(Tool[OpenImageInput]):
     input_schema = OpenImageInput
     side = "server"
     action_class = "reversible"
+    router_hint = "abrir uma imagem em tela cheia no device (zoom, ler com calma)"
 
     def __init__(self, gateway: DeviceGateway, index: ImageIndex) -> None:
         self._gateway = gateway
@@ -42,10 +49,19 @@ class OpenImageTool(Tool[OpenImageInput]):
                     f"você gere ou capture uma. Não faça por conta própria.")
         return await self._gateway.request(payload.device, "open_image", {"image": data_uri})
 
-    def openai_schema(self) -> dict:
-        schema = super().openai_schema()
-        devs = self._gateway.connections.names()
-        device = schema["function"]["parameters"]["properties"]["device"]
-        device["enum"] = devs
-        device["description"] = f"Device que recebe. CONECTADOS: {devs}. Nome EXATO."
-        return schema
+    def before(self, args: dict, ctx: ToolCtx) -> GuardResult:
+        device = args.get("device", "")
+        conectados = self._gateway.connections.names()
+        if not device:
+            return GuardResult(ok=False, reason="em qual device é pra abrir a imagem?")
+        if device not in conectados:
+            disp = ", ".join(f"'{d}'" for d in conectados) or "nenhum"
+            return GuardResult(ok=False, reason=(
+                f"o device '{device}' está offline — não abri. Conectados agora: {disp}. "
+                f"Quer que eu abra em um desses?"))
+        image_id = args.get("image_id")
+        if image_id and not _id_valido(self._index, ctx, image_id):
+            return GuardResult(ok=False, reason=(
+                f"não tenho a imagem '{image_id}' — não foi gerada nem capturada neste turno. "
+                "Gere/capture primeiro, ou me diga qual usar."))
+        return GuardResult(ok=True)

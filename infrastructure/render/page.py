@@ -92,7 +92,7 @@ def render_page(content: str, title: str | None = None) -> str:
     e o browser devolve '&' no textContent -> o KaTeX lê o LaTeX certinho.
     Sem escape, um 'x < 5' quebraria o HTML.
     """
-    content = re.sub(r"\\n(?![A-Za-z])", "\n", content)
+    content = re.sub(r"\\n(?![a-z])", "\n", content)
     if "$" not in content and _TEM_MACRO.search(content):
         content = f"$$\n{content.strip()}\n$$"
     titulo_txt = title or "brazaia"

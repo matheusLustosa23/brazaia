@@ -20,6 +20,7 @@ class LembrarTool(Tool[LembrarInput]):
     input_schema = LembrarInput
     side = "server"
     action_class = "reversible"
+    router_hint = "anotar, guardar ou lembrar um fato, preferência ou config do dono"
 
     def __init__(self, memory: MemoryService) -> None:
         self._memory = memory

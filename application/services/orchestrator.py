@@ -1,27 +1,34 @@
 from __future__ import annotations
 
-import orjson
+import orjson, re
 
 from collections.abc import AsyncIterator
 from typing import Awaitable, Callable,BinaryIO
 
 from domain.contracts import LLMClient
 from domain.tools.base import ToolRegistry
+from domain.tools.guard import ToolCtx, GuardResult
 from domain.contracts import SessionStore
 from domain.entities.message import Completion
 from application.services.context_service import ContextManager
 from application.services.memory_service import MemoryService
 from application.services.helpers import _strip, persist_image
+from application.guards.output import check_output
+from application.services.tool_router import ToolRouter
+from application.services.juiz import Juiz
+from application.services._trace import trace
 from infrastructure.devices.device_gateway import DeviceGateway
 from infrastructure.vision.image_index import ImageIndex
 
-MAX_STEPS = 8
+MAX_STEPS = 15
 
 ConfirmFn = Callable[[str, dict], Awaitable[bool]]
 
 VISION_STYLE = """\
 Você está olhando uma IMAGEM real capturada agora.
 Grounding (regra absoluta): descreva/leia SÓ o que está de fato na imagem; NÃO invente elementos/textos.
+NÃO projete a resposta ESPERADA: leia o que ESTÁ escrito na foto, mesmo que seja diferente do problema que você gerou ou esteja errado. Nunca assuma que o usuário acertou.
+Se a foto está borrada/escura/cortada e você NÃO consegue ler os símbolos, diga "não consegui ler, manda uma foto mais nítida" — NÃO invente uma resolução plausível.
 Se algo estiver ilegível, DIGA que não conseguiu ler — nunca preencha com suposição.
 Ao avaliar (quadro/exercício): CONFIRA cada passo e o resultado circulado; diga o que está CERTO e ERRADO e ONDE.
 Se o resultado escrito estiver errado, APONTE — nunca "corrija em silêncio". É por voz: curto, veredito primeiro.
@@ -50,6 +57,10 @@ HONESTIDADE = """
 - Fale apenas do que você realmente sabe ou observou: resultado de ferramenta, imagem capturada, memória.
   Não invente fatos, caminhos, nomes, números ou infraestrutura que você não viu.
 - Se algo estiver ausente, ilegível ou incerto, diga que não sabe — nunca preencha com suposição como certeza.
+- Você só descreve/lê uma imagem VISÍVEL neste turno. Sem imagem agora (só o placeholder [imagem capturada · id]), NÃO afirme o que ela mostra — reabra com load_image e ESPERE.
+  ✗ "qual a resposta que você viu?" (sem imagem aberta) → "Vi $(x+5)^2$." (INVENTADO)
+  ✓ "Não tenho a imagem aberta pra reler — deixa eu reabrir." → chama load_image, ESPERA, só então responde.
+
 """
 
 async def _always_true(name: str, payload: dict) -> bool:
@@ -75,7 +86,9 @@ class Orchestrator:
         image_index: ImageIndex, 
         *,
         confirm: ConfirmFn | None = None,
-        audit_log: BinaryIO | None = None
+        audit_log: BinaryIO | None = None,
+        router: ToolRouter | None = None,
+        juiz: Juiz
     ) -> None:
         self._llm = llm
         self._context = context
@@ -87,7 +100,9 @@ class Orchestrator:
         self._session_store = session_store
         self._traces: dict[str, list[dict]] = {}
         self._image_index = image_index
-
+        self._router = router
+        self._juiz = juiz
+    
     async def run(
         self,
         session_id: str,
@@ -106,30 +121,131 @@ class Orchestrator:
         active = self._tools.for_device(capabilities)
         user_turn: dict | None = _user_turn(user_message, image)
         seen: set[tuple[str, bytes]] = set()
-        
+        ids_reais: set[str] = set() 
+        nudges_omissao = 0
+        nudges_diverg  = 0
+        trace(f"===== REQUEST: {user_message}")
+        plano = await self._router.plan(user_message, active) if self._router else []
+        tools_restantes = list(plano)
+      
         for _step in range(MAX_STEPS):
+            trace(f"==================== {_step + 1} ITERAÇÃO DO LOOP ====================")
             messages = self._context.build(system, memory_block, history, user_turn or {})
-            msg = await self._llm.complete(messages, tools=active.as_openai_tools())
-            
-            if not getattr(msg, "tool_calls", None):
-                if user_turn:
-                    history = history + [user_turn]
-                buf: list[str] = []
-                async for kind, tok in self._llm.stream(messages):
-                    if kind != "text":
-                        continue
-                    buf.append(tok)
-                    yield tok
-                history = history + [{"role": "assistant", "content": "".join(buf)}]
-                await self._session_store.set(session_id, _strip(history)) 
-                self._flush_trace(session_id)
+            skeleton = self._skeleton(user_message, plano, tools_restantes)
+            if skeleton:
+                print(skeleton)
+                messages = messages + [skeleton]
+            msg = None
+            #sem tools pra chamar , retorna a mensagem para o user
+            if not tools_restantes:
+                trace(f"===== SEM TOOLS PARA CHAMR")
+                texto = await self._finalizar_turno(
+                    messages=messages,
+                    user_turn=user_turn,
+                    history=history,
+                    ids_reais=ids_reais,
+                    session_id=session_id,
+                    mensagem_llm=None
+                )
+                yield texto
                 return
-            history, saw_image = await self._handle_tool_calls(
-                session_id, history, user_turn, msg, active, device_id, seen
+            
+            resposta_llm = await self._llm.complete(
+                messages, tools=active.as_openai_tools(), tool_choice="auto",
             )
+            
+            tool_requisitada = resposta_llm.tool_calls[0].name if resposta_llm.tool_calls else None
+            mensagem_llm = resposta_llm.content or ""
+            
+            trace(f"[auto]  tools={[{t.name: t.arguments} for t in resposta_llm.tool_calls]} finish={resposta_llm.finish_reason} content={mensagem_llm}")
+            
+            #chamou uma tool esperada
+            if tool_requisitada in tools_restantes:
+                msg = resposta_llm
+            # OMITIU
+            elif tool_requisitada is None:
+                #Motivo plausivio , retornamos ao usuario
+                trace(f"===== LLM NÃO CHAMOU TOOL")
+                if await self._juiz.classifica_omissao(user_message, mensagem_llm, active.describe_for_router()) == "RESPONDER":
+                    trace(f"===== MOTIVO DE OMISSAO PLAUSIVEL")
+                    texto = await self._finalizar_turno(
+                        messages=messages,
+                        user_turn=user_turn,
+                        history=history,
+                        ids_reais=ids_reais,
+                        session_id=session_id,
+                        mensagem_llm=mensagem_llm
+                    )
+                    yield texto
+                    return
+                
+                if nudges_omissao >= 1: 
+                    texto = await self._finalizar_turno(messages, ids_reais, user_turn, history, session_id, None)
+                    yield texto
+                    return
+                
+                nudges_omissao += 1
+                system_extra = {
+                    "role":"system","content":
+                    f"Você disse que ia agir mas não chamou a ferramenta. Chame '{tools_restantes[0]}' "
+                    "agora com os argumentos certos, ou relate a falha ao dono."
+                }
+                if user_turn is not None:
+                    history = history + [user_turn]
+                    user_turn = None
+                history = history + [system_extra]
+                continue
+            # Chamou uma tool fora do plano
+            else:
+                #se faz sentido , aceitamos , abordamos o plano
+                trace(f"===== LLM CHAMOU UMA TOOL FORA DO PLAO")
+                autorizado, tools_substituidas = await self._juiz.aceita_divergencia(
+                    pedido=user_message, 
+                    tool_chamada=tool_requisitada, 
+                    args=resposta_llm.tool_calls[0].arguments, 
+                    tools=active.describe_for_router(),
+                    restante=tools_restantes
+                )
+                if autorizado:
+                    trace(f"===== CHAMADA AUTORIZADA - TOOLS {tools_substituidas} FORAM SUBSTITUIDAS POR {tool_requisitada}")
+                    msg = resposta_llm
+                    for t in tools_substituidas:
+                        tools_restantes.remove(t)
+                # caso seja divergencia sem sentido -> nudge
+                else:
+                    trace("===== DIVERGENCIA REJEITADA - nudge corretivo")
+                    if nudges_diverg >= 1:
+                        texto = await self._finalizar_turno(messages, ids_reais, user_turn, history, session_id, None)
+                        yield texto
+                        return
+                    if user_turn is not None:
+                        history = history + [user_turn]
+                        user_turn = None
+                    history = history + [
+                        {
+                            "role":"system","content":
+                            f"'{tool_requisitada}' não atende o pedido aqui. O certo é '{tools_restantes[0]}'. "
+                            "Chame a ferramenta certa."
+                        }
+                    ]
+                    nudges_diverg += 1
+                    continue
+            
+            
+            history, saw_image, exec_ok = await self._handle_tool_calls(
+                session_id, history, user_turn, msg, active, device_id, seen, user_message, ids_reais
+            )
+            
+            if exec_ok and tool_requisitada in tools_restantes: 
+                tools_restantes.remove(tool_requisitada)
+                
+            
             if saw_image and VISION_STYLE not in system:
                 system = f"{system}\n\n{VISION_STYLE}"
+                
             user_turn = None
+            nudges_omissao = 0
+            nudges_diverg  = 0
             
         yield "[aviso] limite de passos atingido; respondo com o que apurei até aqui."
     
@@ -149,7 +265,9 @@ class Orchestrator:
         active: ToolRegistry,
         device_id: str | None,
         seen: set[tuple[str, bytes]],
-    ) ->  tuple[list[dict], bool]:
+        user_msg: str,
+        ids_reais: set[str],
+    ) ->  tuple[list[dict], bool, bool]:
         if user_turn is not None:
             history = history + [user_turn]
         history = history + [
@@ -170,6 +288,8 @@ class Orchestrator:
             }
         ]
         saw_image = False
+        ctx = ToolCtx(fala_do_usuario=user_msg, ids_reais=ids_reais, session_id=session_id)
+        success = False
         for tc in msg.tool_calls:
             name = tc.name
             payload = tc.arguments
@@ -178,10 +298,17 @@ class Orchestrator:
                 obs = "[loop cortado] repetição da mesma ação detectada."
             else:
                 self._remember_call(name, payload, seen)
-                obs = await self._execute(name, payload, active, device_id)
+                obs, exec_ok = await self._execute(name, payload, active, device_id, ctx)
+                success = exec_ok
+                
                 
             if isinstance(obs, str) and obs.startswith("data:image/"):
                 img_id = persist_image(obs, session_id, device_id, self._image_index)
+                ids_reais.add(img_id)
+                origem = (
+                    f"foto · camera={payload.get("source", "?")}"
+                    if name == "capture_image" else "imagem recarregada"
+                )
                 tool_content = [
                     {
                         "type": "image_url",
@@ -192,12 +319,13 @@ class Orchestrator:
                     },
                     {
                         "type": "text", 
-                        "text": f"[imagem capturada · image_id={img_id}]" 
+                        "text": f"[{origem} · image_id={img_id}]" 
                     },
                 ]
                 saw_image = True
-                trace_txt = f"[imagem capturada: {img_id}]"
+                trace_txt = f"[{origem} · image_id={img_id}]"
             else:
+                ids_reais.update(re.findall(r"image_id=([0-9a-f]{12})", obs)) 
                 tool_content =  await self._context.summarize(obs, foco=f"resultado de {name}")
                 trace_txt = tool_content
         
@@ -211,7 +339,7 @@ class Orchestrator:
             ]
             self._trace(session_id, name, payload, obs,  trace_txt)
             
-        return (history, saw_image)
+        return (history, saw_image, success)
 
     def _is_repeat(self, name: str, payload: dict, seen: set[tuple[str, bytes]]) -> bool:
         return (name, orjson.dumps(payload, option=orjson.OPT_SORT_KEYS),) in seen
@@ -224,20 +352,35 @@ class Orchestrator:
         name: str,
         payload: dict,
         active: ToolRegistry,
-        device_id: str | None
-    ) -> str:
+        device_id: str | None,
+        ctx: ToolCtx
+    ) -> tuple[str, bool]:
         tool = active.get(name)
         if tool is None:
-            return f"[erro] ferramenta '{name}' não existe"
+            return f"[erro] ferramenta '{name}' não existe", False
         
         if tool.action_class == "destructive" and not await self._confirm(name, payload):
-            return f"[cancelado] ação destrutiva '{name}' não confirmada pelo usuário."
+            trace(f"[cancelado] ação destrutiva '{name}' não confirmada pelo usuário.")
+            return f"[cancelado] ação destrutiva '{name}' não confirmada pelo usuário.", False
+        
+        verify = tool.before(payload, ctx)
+        if not verify.ok:
+            trace(f"[bloqueado] {verify.reason}" )
+            return f"[bloqueado] {verify.reason}", False
         
         if tool.side == "server":
-            return await active.run(name, payload)
+            result =  await active.run(name, payload)
+        else:
+            parsed = tool.input_schema.model_validate(payload)
+            result = await self._device_gateway.dispatch(device_id, tool, parsed)
         
-        parsed = tool.input_schema.model_validate(payload)
-        return await self._device_gateway.dispatch(device_id, tool, parsed)
+        confirm = tool.after(result, ctx)
+        if not confirm.ok:
+            trace(f"[falha] {confirm.reason}")
+            return f"[falha] {confirm.reason}", False
+        
+        trace(f"[execute tool] {name} ({payload}) device:{device_id}")
+        return  result, True
     
     def _trace(
         self,
@@ -262,6 +405,66 @@ class Orchestrator:
     async def create_session(self) -> str:
         return await self._session_store.create()
     
+    async def _finalizar_turno(
+        self, 
+        messages: list[dict], 
+        ids_reais: set[str],
+        user_turn: dict | None,
+        history: list[dict],
+        session_id: str,
+        mensagem_llm: str | None
+    ) -> str:
+        """Resposta final: streama (1 geração), roda o output guard (G2) e auto-corrige 1×."""
+        if mensagem_llm is None:
+            buf: list[str] = []
+            async for kind, tok in self._llm.stream(messages):
+                if kind == "text":
+                    buf.append(tok)
+            mensagem_llm = "".join(buf)
+            guard = check_output(mensagem_llm, ids_reais)
+            if not guard.ok:
+                aviso = {"role": "system", "content": guard.reason}
+                buf2: list[str] = []
+                async for kind, tok in self._llm.stream(messages + [aviso]):
+                    if kind == "text":
+                        buf2.append(tok)
+                mensagem_llm = "".join(buf2)
+                if not check_output(mensagem_llm, ids_reais).ok:
+                    mensagem_llm  = "Não consegui fazer isso agora."
+        
+        if user_turn:
+            history = history + [user_turn]
+        history = history + [{"role": "assistant", "content": mensagem_llm}]
+        await self._session_store.set(session_id, _strip(history))
+        self._flush_trace(session_id)
+                
+        return mensagem_llm
+    
+    def _skeleton(self, pedido: str, plano: list[str], restantes: list[str]) -> dict:
+        trace("[SKELETON]")
+        if not plano:
+            return {}
+        def checklist(tool: str) -> str:
+            if tool not in restantes: return "✔"
+            if restantes and tool == restantes[0]: return "▸"
+            return "☐"
+        passos = "\n".join(
+            f"{checklist(tool)} {i+1}. {tool}"
+            for i,tool in enumerate(plano)
+        )
+        feito = [t for t in plano if t not in restantes]
+        trace(f"Passos:\n{passos}")
+        trace(f"restante:\n{restantes}")
+        return {
+            "role": "system",
+            "content": (
+                f"O usuário pediu: '{pedido}'.\n"
+                f"Faça NESTA ordem, conferindo o RESULTADO REAL de cada passo antes do próximo:\n{passos}\n"
+                f"Estado → feito: {feito or '[]'} · falta: {restantes or '[]'}.\n"
+                "Se um passo falhar ou pedir permissão, PARE e relate — não pule, não invente id."
+            )
+        }
+    
 def _user_turn(text: str, image: str  | None) -> dict:
     if not image:
         return {"role":"user","content": text}
@@ -272,3 +475,4 @@ def _user_turn(text: str, image: str  | None) -> dict:
             {"type": "image_url", "image_url": {"url": image}}
         ]
     }
+

@@ -26,6 +26,7 @@ class RenderMathTool(Tool[RenderMathInput]):
     side = "server"
     action_class = "read"          # só gera; não tem efeito externo
     timeout_s = 40.0               # o chrome sobe a cada chamada (~1,4 s)
+    router_hint = "gera uma IMAGEM (arquivo) de matemática pra depois ENVIAR (notify) ou ABRIR a imagem (open_image). NÃO mostra na tela sozinha."
 
     def __init__(self, index: ImageIndex) -> None:
         self._index = index
@@ -37,4 +38,8 @@ class RenderMathTool(Tool[RenderMathInput]):
         except Exception as e:
             return f"[erro] render falhou: {e}"
         image_id = stash(self._index, png)
-        return f"imagem pronta (image_id={image_id}). Use em 'notify' ou 'open_image'."
+        titulo = payload.title or "matemática"
+        return (
+            f"[imagem GERADA (render_math) · '{titulo}' · image_id={image_id}] "
+            f"— pronta; use em 'notify' ou 'open_image'."
+        )

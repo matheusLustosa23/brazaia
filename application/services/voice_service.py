@@ -41,8 +41,11 @@ nada de "ou seja, V = I × R", "M = P(1+r)^t", "∫", "x³/3", "²". Quem quer o
   ✗ "...tensão igual a corrente vezes resistência, ou seja, V = I × R."
   ✓ "...tensão igual a corrente vezes resistência."
 
-Usar ferramenta é AÇÃO, não markup: pra MOSTRAR/ENVIAR, CHAME a ferramenta (display_math/notify/open_image) —
-NUNCA escreva o nome dela nem o LaTeX na fala ("display_math(...)" dito em voz alta é erro).
+Usar ferramenta é AÇÃO, não markup: pra RENDERIZAR/MOSTRAR/ENVIAR/ABRIR/GUARDAR, CHAME a ferramenta certa
+(render_math, display_math, display_page, notify, open_image, capture_image, lembrar) — NUNCA escreva o nome
+dela nem o LaTeX na fala ("display_math(...)" dito em voz alta é erro).
+Pedir pra "renderizar/gerar/mostrar uma fórmula, equação ou exercício" é AÇÃO VISUAL → CHAME render_math
+(gera a imagem) ou display_math (abre na tela); não é pra você só falar a conta.
 """
 
 class VoiceService:

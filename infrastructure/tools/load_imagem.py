@@ -33,6 +33,7 @@ class LoadImageTool(Tool[LoadImageInput]):
         "apareceu antes).\n"
         "Contraste: cena NOVA/ao vivo → 'capture_image', não esta."
     )
+    router_hint = "carregar/rever/olhar de novo uma imagem que já apareceu antes nesta conversa"
     
     def __init__(self, index: ImageIndex):
         self._index = index

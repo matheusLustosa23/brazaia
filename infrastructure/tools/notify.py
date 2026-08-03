@@ -1,12 +1,18 @@
 from pydantic import BaseModel, Field
 from domain.tools.base import Tool
+from domain.tools.guard import GuardResult, ToolCtx
 from infrastructure.devices.device_gateway import DeviceGateway
-from infrastructure.render.store import resolve_data_uri
+from infrastructure.render.store import resolve_data_uri, _id_valido
 from infrastructure.vision.image_index import ImageIndex
 
 
 class NotifyInput(BaseModel):
-    device: str = Field(description="Nome EXATO do device conectado.")
+    device: str = Field(
+        description=(
+            "Nome do device que o dono citou (ex.: 'ubuntu', 'celular'). Use SEMPRE o que ele pediu; "
+            "se estiver offline, você recebe um aviso e informa o dono — nunca troque por outro."
+        )
+    )
     title: str = Field(description="Título curto.")
     message: str = Field(default="", description=(
         "Mensagem em TEXTO PURO pro usuário ler (a notificação NÃO renderiza LaTeX). Unicode ok (√ ² π ≤ →). "
@@ -40,6 +46,7 @@ class NotifyTool(Tool[NotifyInput]):
     input_schema = NotifyInput
     side = "server"
     action_class = "reversible"
+    router_hint = "notificar,avisar,enviar algo"
 
     def __init__(self, gateway: DeviceGateway, index: ImageIndex) -> None:
         self._gateway = gateway
@@ -56,10 +63,21 @@ class NotifyTool(Tool[NotifyInput]):
             args["image"] = data_uri
         return await self._gateway.request(payload.device, "notify", args)
     
-    def openai_schema(self) -> dict:
-        schema = super().openai_schema()
-        devs = self._gateway.connections.names()
-        device = schema["function"]["parameters"]["properties"]["device"]
-        device["enum"] = devs
-        device["description"] = f"Device que recebe. CONECTADOS: {devs}. Nome EXATO."
-        return schema
+    def before(self, args: dict, ctx: ToolCtx) -> GuardResult:
+        device = args.get("device", "")
+        image_id = args.get("image_id")
+        conectados = self._gateway.connections.names()
+        if not device:
+            return GuardResult(ok=False, reason="pra qual device é a notificação?")
+        if device not in conectados:
+            disp = ", ".join(f"'{d}'" for d in conectados) or "nenhum"
+            return GuardResult(ok=False, reason=(
+                f"o device '{device}' está offline — não enviei. Conectados agora: {disp}. "
+                f"Quer que eu envie pra um desses?"))
+        if image_id and not _id_valido(self._index, ctx, image_id):
+            return GuardResult(ok=False, reason=(
+                f"não tenho a imagem '{image_id}' — não foi gerada nem capturada neste turno. "
+                "Gere/capture primeiro, ou me diga qual usar."))
+        return GuardResult(ok=True)
+    
+    
