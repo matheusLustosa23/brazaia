@@ -133,7 +133,6 @@ class Orchestrator:
             messages = self._context.build(system, memory_block, history, user_turn or {})
             skeleton = self._skeleton(user_message, plano, tools_restantes)
             if skeleton:
-                print(skeleton)
                 messages = messages + [skeleton]
             msg = None
             #sem tools pra chamar , retorna a mensagem para o user
@@ -159,11 +158,8 @@ class Orchestrator:
             
             trace(f"[auto]  tools={[{t.name: t.arguments} for t in resposta_llm.tool_calls]} finish={resposta_llm.finish_reason} content={mensagem_llm}")
             
-            #chamou uma tool esperada
-            if tool_requisitada in tools_restantes:
-                msg = resposta_llm
-            # OMITIU
-            elif tool_requisitada is None:
+            #não chamou tool
+            if tool_requisitada is None:
                 #Motivo plausivio , retornamos ao usuario
                 trace(f"===== LLM NÃO CHAMOU TOOL")
                 if await self._juiz.classifica_omissao(user_message, mensagem_llm, active.describe_for_router()) == "RESPONDER":
@@ -187,7 +183,7 @@ class Orchestrator:
                 nudges_omissao += 1
                 system_extra = {
                     "role":"system","content":
-                    f"Você disse que ia agir mas não chamou a ferramenta. Chame '{tools_restantes[0]}' "
+                    f"Você disse que ia agir mas não chamou a ferramenta. Chame '{tools_restantes[0]['tool']}' "
                     "agora com os argumentos certos, ou relate a falha ao dono."
                 }
                 if user_turn is not None:
@@ -197,47 +193,57 @@ class Orchestrator:
                 continue
             # Chamou uma tool fora do plano
             else:
-                #se faz sentido , aceitamos , abordamos o plano
-                trace(f"===== LLM CHAMOU UMA TOOL FORA DO PLAO")
-                autorizado, tools_substituidas = await self._juiz.aceita_divergencia(
-                    pedido=user_message, 
-                    tool_chamada=tool_requisitada, 
-                    args=resposta_llm.tool_calls[0].arguments, 
-                    tools=active.describe_for_router(),
-                    restante=tools_restantes
-                )
-                if autorizado:
-                    trace(f"===== CHAMADA AUTORIZADA - TOOLS {tools_substituidas} FORAM SUBSTITUIDAS POR {tool_requisitada}")
+                idx_plano = self._slot_pendente(tools_restantes, tool_requisitada)
+                
+                if idx_plano is not None:
                     msg = resposta_llm
-                    for t in tools_substituidas:
-                        tools_restantes.remove(t)
-                # caso seja divergencia sem sentido -> nudge
+                    porque_exec = tools_restantes[idx_plano]["porque"]
                 else:
-                    trace("===== DIVERGENCIA REJEITADA - nudge corretivo")
-                    if nudges_diverg >= 1:
-                        texto = await self._finalizar_turno(messages, ids_reais, user_turn, history, session_id, None)
-                        yield texto
-                        return
-                    if user_turn is not None:
-                        history = history + [user_turn]
-                        user_turn = None
-                    history = history + [
-                        {
-                            "role":"system","content":
-                            f"'{tool_requisitada}' não atende o pedido aqui. O certo é '{tools_restantes[0]}'. "
-                            "Chame a ferramenta certa."
-                        }
-                    ]
-                    nudges_diverg += 1
-                    continue
+                    #se faz sentido , aceitamos , abordamos o plano
+                    trace(f"===== LLM CHAMOU UMA TOOL FORA DO PLANO")
+                    autorizado, tools_substituidas = await self._juiz.aceita_divergencia(
+                        pedido=user_message, 
+                        tool_chamada=tool_requisitada, 
+                        args=resposta_llm.tool_calls[0].arguments, 
+                        tools=active.describe_for_router(),
+                        restante=tools_restantes,
+                        porque_llm=resposta_llm.content or ""
+                    )
+                    if autorizado:
+                        trace(f"===== CHAMADA AUTORIZADA - TOOLS {tools_substituidas} FORAM SUBSTITUIDAS POR {tool_requisitada}")
+                        msg = resposta_llm
+                        tools_restantes = [slot for slot in tools_restantes if slot["porque"] not in tools_substituidas]
+                        slot = {"tool": tool_requisitada, "porque": resposta_llm.content}
+                        plano.append(slot)
+                        tools_restantes.append(slot)
+                        porque_exec = resposta_llm.content 
+                    # caso seja divergencia sem sentido -> nudge
+                    else:
+                        trace("===== DIVERGENCIA REJEITADA - nudge corretivo")
+                        if nudges_diverg >= 1:
+                            texto = await self._finalizar_turno(messages, ids_reais, user_turn, history, session_id, None)
+                            yield texto
+                            return
+                        if user_turn is not None:
+                            history = history + [user_turn]
+                            user_turn = None
+                        history = history + [
+                            {
+                                "role":"system","content":
+                                f"'{tool_requisitada}' não atende o pedido aqui. O certo é '{tools_restantes[0]['tool']}'. "
+                                "Chame a ferramenta certa."
+                            }
+                        ]
+                        nudges_diverg += 1
+                        continue
             
             
             history, saw_image, exec_ok = await self._handle_tool_calls(
                 session_id, history, user_turn, msg, active, device_id, seen, user_message, ids_reais
             )
             
-            if exec_ok and tool_requisitada in tools_restantes: 
-                tools_restantes.remove(tool_requisitada)
+            if exec_ok:
+                tools_restantes = [slot for slot in tools_restantes if slot["porque"] != porque_exec]
                 
             
             if saw_image and VISION_STYLE not in system:
@@ -440,19 +446,19 @@ class Orchestrator:
                 
         return mensagem_llm
     
-    def _skeleton(self, pedido: str, plano: list[str], restantes: list[str]) -> dict:
+    def _skeleton(self, pedido: str, plano: list[dict[str, str]], restantes: list[dict[str, str]]) -> dict:
         trace("[SKELETON]")
         if not plano:
             return {}
-        def checklist(tool: str) -> str:
-            if tool not in restantes: return "✔"
-            if restantes and tool == restantes[0]: return "▸"
+        def checklist(slot: dict) -> str:
+            if slot not in restantes: return "✔"
+            if restantes and slot == restantes[0]: return "▸"
             return "☐"
         passos = "\n".join(
-            f"{checklist(tool)} {i+1}. {tool}"
-            for i,tool in enumerate(plano)
+            f"{checklist(slot)} {i+1}. {slot["porque"]}"
+            for i,slot in enumerate(plano)
         )
-        feito = [t for t in plano if t not in restantes]
+        feito = [slot["porque"] for slot in plano if slot not in restantes]
         trace(f"Passos:\n{passos}")
         trace(f"restante:\n{restantes}")
         return {
@@ -460,10 +466,15 @@ class Orchestrator:
             "content": (
                 f"O usuário pediu: '{pedido}'.\n"
                 f"Faça NESTA ordem, conferindo o RESULTADO REAL de cada passo antes do próximo:\n{passos}\n"
-                f"Estado → feito: {feito or '[]'} · falta: {restantes or '[]'}.\n"
+                f"Estado → feito: {feito or '[]'} · falta: {[s['porque'] for s in restantes]  or '[]'}.\n"
                 "Se um passo falhar ou pedir permissão, PARE e relate — não pule, não invente id."
             )
         }
+    
+    @staticmethod
+    def _slot_pendente(restantes: list[dict], name: str) -> int | None:
+        return next((i for i,tool in enumerate(restantes) if tool["tool"] == name), None)
+    
     
 def _user_turn(text: str, image: str  | None) -> dict:
     if not image:

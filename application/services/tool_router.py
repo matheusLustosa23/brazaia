@@ -34,6 +34,9 @@ _INSTR_PLAN = (
     "- \"avisa que o deploy terminou\" → [\"notify\"]\n"
     "- \"oi, tudo bem?\" → []\n"
     "Ferramentas:\n{tools}"
+    "\n\nAGORA, para CADA ferramenta do plano, além do NOME, escreva um 'porque': a intenção ESPECÍFICA "
+    "daquela chamada — device/alvo/conteúdo — curto e didático (ex.: 'abrir a foto do celular em tela "
+    "cheia no ubuntu'). Cada item do plano é um objeto {{tool, porque}}."
 )
 
 class ToolRouter:
@@ -42,7 +45,7 @@ class ToolRouter:
     def __init__(self, llm: LLMClient) -> None:
         self._llm = llm
         
-    async def plan(self, user_message: str, active: ToolRegistry) -> list[str]:
+    async def plan(self, user_message: str, active: ToolRegistry) -> list[dict[str, str]]:
         
         names = active.get_all_tool_names()
         
@@ -52,8 +55,20 @@ class ToolRouter:
                 "plano": {
                     "type": "array",
                     "items": {
-                        "type": "string",
-                        "enum": names
+                        "type": "object",
+                        "required": [
+                            "tool",
+                            "porque"
+                        ],
+                        "properties": {
+                            "tool": {
+                                "type": "string",
+                                "enum": names
+                            },
+                            "porque": {
+                                "type": "string"
+                            }
+                        }
                     },
                     "maxItems": 10
                 }
@@ -88,6 +103,6 @@ class ToolRouter:
             trace(f"[router-agente] plano={plano}")
         except Exception: 
             return []
-        return [t for t in plano if t in names]
+        return [s for s in plano if s.get("tool") in names]
         
     

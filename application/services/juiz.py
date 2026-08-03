@@ -4,35 +4,22 @@ from application.services._trace import trace
 
 
 _INSTR_DIVERGENCIA = (
-    "O plano previa umas ferramentas; o modelo chamou uma FORA do plano. Decida se foi um bom movimento.\n\n"
+    "O plano previa ferramentas — cada uma com o PORQUÊ dela. O modelo chamou uma FORA do plano, também com um porquê. Julgue.\n\n"
     "Ferramentas (o que cada uma faz):\n{tools}\n\n"
     "Pedido do dono: {pedido}\n"
-    "Ferramentas do PLANO ainda não executadas: {restante}\n"
-    "O modelo chamou '{chamou}' (args: {args}), fora do plano.\n\n"
-    "aceita = true se '{chamou}' AJUDA a atender o pedido, seja:\n"
-    "  (a) um PASSO NECESSÁRIO antes de um do plano (ex.: gerar a imagem com render_math antes de notify/open_image), OU\n"
-    "  (b) uma ferramenta que faz o trabalho pedido TÃO BEM OU MELHOR que a do plano (ex.: display_math MOSTRA "
-    "a página no navegador, cobrindo render_math+open_image).\n"
-    "aceita = false se '{chamou}' é a escolha ERRADA:\n"
-    "  - DOWNGRADE: faz MENOS do que o pedido precisa. Ex.: o dono quer MOSTRAR/ABRIR matemática numa página "
-    "(plano tem display_math) e o modelo chamou render_math, que só GERA uma imagem guardada e NÃO mostra — o dono não veria nada.\n"
-    "  - ferramenta que NÃO serve o pedido (ex.: lembrar pra 'avisar'; capture_image pra 'olhar de novo' o que já existe), OU\n"
-    "  - uma ação que o dono NÃO pediu.\n\n"
-    "substitui = ferramentas do PLANO cujo trabalho '{chamou}' cobre POR COMPLETO (torna redundantes). "
-    "[] se '{chamou}' só ADICIONA um passo (não cobre nenhuma). Se aceita=false, substitui=[].\n\n"
-    "Exemplos:\n"
-    "- pedido 'abre a matemática numa página', plano ['display_math'], chamou 'render_math' -> "
-    "{{\"aceita\": false, \"substitui\": []}} (render só gera, não mostra; downgrade)\n"
-    "- pedido 'gera a fórmula, me mostra e me lembra de revisar', plano ['render_math','open_image','lembrar'], "
-    "chamou 'display_math' -> {{\"aceita\": true, \"substitui\": [\"render_math\",\"open_image\"]}} (a página mostra tudo; lembrar continua)\n"
-    "- pedido 'manda a fórmula pro ubuntu', plano ['notify'], chamou 'render_math' -> "
-    "{{\"aceita\": true, \"substitui\": []}} (precisa gerar a imagem antes de enviar; só adiciona)\n"
-    "- pedido 'avisa o ubuntu', plano ['notify'], chamou 'lembrar' -> {{\"aceita\": false, \"substitui\": []}} (lembrar não avisa)\n"
-    "- pedido 'abre a fórmula de bhaskara em tela cheia', plano ['open_image'], chamou 'render_math' -> "
-    "{{\"aceita\": true, \"substitui\": []}} (a imagem não existe ainda; gera antes de abrir; só adiciona)\n"
-    "- pedido 'mostra os exercícios de derivada pra resolver', plano ['display_math'], chamou 'display_page' -> "
-    "{{\"aceita\": false, \"substitui\": []}} (display_page é HTML genérico e NÃO renderiza a matemática; downgrade)\n\n"
-    "Responda em JSON: {{\"aceita\": bool, \"substitui\": [nomes do plano]}}.")
+    "Plano ainda não executado (tool ← por que estava no plano):\n{restante_rotulado}\n"
+    "O modelo chamou '{chamou}' (args: {args})\n"
+    "  porque, nas palavras dele: \"{porque_llm}\"\n\n"
+    "aceita = true se '{chamou}' AJUDA o pedido: passo necessário antes de um do plano, OU faz o trabalho tão bem/melhor. "
+    "false se é downgrade (faz menos), tool errada, ou ação não pedida.\n"
+    "substitui = a lista dos PORQUÊS (texto EXATO da lista acima) dos slots que '{chamou}' cobre por completo. "
+    "Use o PORQUÊ como identificador — NUNCA o nome da tool (pode haver duas tools de mesmo nome). "
+    "Inclua um porquê SÓ se o alvo/intenção é o MESMO do '{chamou}'; NUNCA um porquê de OUTRO alvo (outra imagem, outro device). "
+    "[] se '{chamou}' só adiciona. Se aceita=false, substitui=[].\n\n"
+    "Exemplo: plano tem 'render_math ← renderizar a fórmula no navegador' e 'open_image ← abrir a foto do celular no ubuntu'; "
+    "o modelo chamou 'display_math' porque 'mostrar a fórmula no navegador' → substitui=['renderizar a fórmula no navegador'] "
+    "(o porquê do slot da fórmula; o 'abrir a foto' é de OUTRA imagem, fica).\n\n"
+    "Responda em JSON: {{\"aceita\": bool, \"substitui\": [porquês exatos]}}.")
 
 _INSTR_OMISSAO = (
     "O modelo NÃO chamou nenhuma ferramenta; só escreveu um texto. Nenhuma ação aconteceu. "
@@ -90,9 +77,11 @@ class Juiz:
         pedido: str, 
         tool_chamada: str, 
         args: dict, 
-        restante: list[str], 
+        porque_llm: str,
+        restante: list[dict[str, str]], 
         tools: str
     ) -> tuple[bool, list[str]]:
+        porques = [slot["porque"] for slot in restante]
         schema = {
             "type":"object",
             "required":[
@@ -107,11 +96,13 @@ class Juiz:
                     "type":"array",
                     "items":{
                         "type":"string",
-                        "enum":restante
+                        "enum":porques
+                        
                     }
                 }
             }
         }
+        restante_txt = "\n".join(f" - {slot["tool"]} <- \"{slot["porque"]}\" " for slot in restante)
         resposta = await self._llm.complete(
             messages=[
                 {
@@ -119,9 +110,10 @@ class Juiz:
                     "content":_INSTR_DIVERGENCIA.format(
                         tools=tools, 
                         pedido=pedido, 
+                        restante_rotulado=restante_txt,
                         chamou=tool_chamada, 
-                        args=args,
-                        restante=restante
+                        args=args, 
+                        porque_llm=porque_llm
                     )
                 }
             ],
@@ -138,7 +130,7 @@ class Juiz:
         )
         data = orjson.loads(resposta.content or "{}")
         trace(f"[JUIZ (divergencia)] {data}")
-        return bool(data.get("aceita")), [tool for tool in data.get("substitui", []) if tool in restante]
+        return bool(data.get("aceita")), [p for p in data.get("substitui", []) if p in porques]
     
     async def classifica_omissao(self, pedido: str, texto: str, tools: str) -> str:
         if not (texto or "").strip():
