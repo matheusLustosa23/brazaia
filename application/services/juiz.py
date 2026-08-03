@@ -154,7 +154,7 @@ class Juiz:
         trace(f"[JUIZ (omissao)] {decisao}")
         return decisao
     
-    async def finalizou_turno(self, pedido: str, trajetoria: str, resposta: str, tools: str) -> tuple[bool, str]:
+    async def aprova_turno(self, pedido: str, trajetoria: str, resposta: str, tools: str) -> tuple[bool, str]:
         schema = {"type":"object","required":["cumpriu","motivo"],
                   "properties":{"cumpriu":{"type":"boolean"},"motivo":{"type":"string"}}}
         response = await self._llm.complete(
