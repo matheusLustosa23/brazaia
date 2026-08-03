@@ -471,8 +471,8 @@ class Orchestrator:
             for i,tool in enumerate(plano)
         )
         feito = [t for t in plano if t not in restantes]
-        trace(f"Passos:\n {passos}")
-        trace(f"restante:\n {restantes}")
+        trace(f"Passos:\n{passos}")
+        trace(f"restante:\n{restantes}")
         return {
             "role": "system",
             "content": (
