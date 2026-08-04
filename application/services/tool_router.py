@@ -34,9 +34,15 @@ _INSTR_PLAN = (
     "- \"avisa que o deploy terminou\" → [\"notify\"]\n"
     "- \"oi, tudo bem?\" → []\n"
     "Ferramentas:\n{tools}"
-    "\n\nAGORA, para CADA ferramenta do plano, além do NOME, escreva um 'porque': a intenção ESPECÍFICA "
-    "daquela chamada — device/alvo/conteúdo — curto e didático (ex.: 'abrir a foto do celular em tela "
-    "cheia no ubuntu'). Cada item do plano é um objeto {{tool, porque}}."
+    "\n\nPara CADA ferramenta do plano escreva um 'porque': a intenção ESPECÍFICA daquela chamada "
+    "(device/alvo/conteúdo), curta e fiel. REGRAS:\n"
+    "- UM item por ação concreta, na ORDEM exata que o dono pediu.\n"
+    "- Cada porque é ÚNICO e distingue a chamada das outras. Se há duas capturas ('foto do ubuntu' e "
+    "'foto do celular'), são DOIS itens com porquês DIFERENTES — NUNCA repita o mesmo porque.\n"
+    "- Multi-device = multi-item: 'avisa o ubuntu E o celular' vira DOIS notify (um por device). "
+    "Nunca junte dois devices num porque só.\n"
+    "- Seja FIEL ao alvo: se o pedido é 'abrir a foto capturada', o porque é sobre a FOTO, não a fórmula.\n"
+    "Cada item do plano é um objeto {{tool, porque}}."
 )
 
 class ToolRouter:
