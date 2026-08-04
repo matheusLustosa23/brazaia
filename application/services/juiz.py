@@ -4,22 +4,22 @@ from application.services._trace import trace
 
 
 _INSTR_DIVERGENCIA = (
-    "O plano previa ferramentas — cada uma com o PORQUÊ dela. O modelo chamou uma FORA do plano, também com um porquê. Julgue.\n\n"
+    "O plano previa ferramentas — cada slot tem um id, a tool e o PORQUÊ dela. O modelo chamou uma FORA do plano, também com um porquê. Julgue.\n\n"
     "Ferramentas (o que cada uma faz):\n{tools}\n\n"
     "Pedido do dono: {pedido}\n"
-    "Plano ainda não executado (tool ← por que estava no plano):\n{restante_rotulado}\n"
+    "Plano ainda não executado (id · tool ← por que estava no plano):\n{restante_rotulado}\n"
     "O modelo chamou '{chamou}' (args: {args})\n"
     "  porque, nas palavras dele: \"{porque_llm}\"\n\n"
     "aceita = true se '{chamou}' AJUDA o pedido: passo necessário antes de um do plano, OU faz o trabalho tão bem/melhor. "
     "false se é downgrade (faz menos), tool errada, ou ação não pedida.\n"
-    "substitui = a lista dos PORQUÊS (texto EXATO da lista acima) dos slots que '{chamou}' cobre por completo. "
-    "Use o PORQUÊ como identificador — NUNCA o nome da tool (pode haver duas tools de mesmo nome). "
-    "Inclua um porquê SÓ se o alvo/intenção é o MESMO do '{chamou}'; NUNCA um porquê de OUTRO alvo (outra imagem, outro device). "
+    "substitui = a lista dos IDs (o número em [id=N]) dos slots que '{chamou}' cobre por completo. "
+    "RACIOCINE pelo PORQUÊ de cada slot, mas RESPONDA com o id. Inclua um id SÓ se o alvo/intenção é o MESMO do '{chamou}'; "
+    "NUNCA o id de um slot de OUTRO alvo (outra imagem, outro device), mesmo que a tool tenha o mesmo nome. "
     "[] se '{chamou}' só adiciona. Se aceita=false, substitui=[].\n\n"
-    "Exemplo: plano tem 'render_math ← renderizar a fórmula no navegador' e 'open_image ← abrir a foto do celular no ubuntu'; "
-    "o modelo chamou 'display_math' porque 'mostrar a fórmula no navegador' → substitui=['renderizar a fórmula no navegador'] "
-    "(o porquê do slot da fórmula; o 'abrir a foto' é de OUTRA imagem, fica).\n\n"
-    "Responda em JSON: {{\"aceita\": bool, \"substitui\": [porquês exatos]}}.")
+    "Exemplo: plano tem '[id=2] render_math ← renderizar a fórmula no navegador' e '[id=5] open_image ← abrir a foto do celular no ubuntu'; "
+    "o modelo chamou 'display_math' porque 'mostrar a fórmula no navegador' → substitui=['2'] "
+    "(o id do slot da fórmula; o id=5 da foto fica).\n\n"
+    "Responda em JSON: {{\"aceita\": bool, \"substitui\": [ids]}}.")
 
 _INSTR_OMISSAO = (
     "O modelo NÃO chamou nenhuma ferramenta; só escreveu um texto. Nenhuma ação aconteceu. "
@@ -81,7 +81,7 @@ class Juiz:
         restante: list[dict[str, str]], 
         tools: str
     ) -> tuple[bool, list[str]]:
-        porques = [slot["porque"] for slot in restante]
+        ids = [str(s["id"]) for s in restante]
         schema = {
             "type":"object",
             "required":[
@@ -96,13 +96,13 @@ class Juiz:
                     "type":"array",
                     "items":{
                         "type":"string",
-                        "enum":porques
+                        "enum":ids
                         
                     }
                 }
             }
         }
-        restante_txt = "\n".join(f" - {slot["tool"]} <- \"{slot["porque"]}\" " for slot in restante)
+        restante_txt = "\n".join(f"  - [id={s['id']}] {s['tool']} ← \"{s['porque']}\"" for s in restante)
         resposta = await self._llm.complete(
             messages=[
                 {
@@ -130,7 +130,7 @@ class Juiz:
         )
         data = orjson.loads(resposta.content or "{}")
         trace(f"[JUIZ (divergencia)] {data}")
-        return bool(data.get("aceita")), [p for p in data.get("substitui", []) if p in porques]
+        return bool(data.get("aceita")), [i for i in data.get("substitui",[]) if i in ids]
     
     async def classifica_omissao(self, pedido: str, texto: str, tools: str) -> str:
         if not (texto or "").strip():

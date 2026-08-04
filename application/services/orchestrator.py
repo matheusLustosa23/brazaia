@@ -124,8 +124,12 @@ class Orchestrator:
         ids_reais: set[str] = set() 
         nudges_omissao = 0
         nudges_diverg  = 0
+        
         trace(f"===== REQUEST: {user_message}")
         plano = await self._router.plan(user_message, active) if self._router else []
+        for i, slot in enumerate(plano):
+            slot["id"] = str(i)
+        proximo_id = len(plano)
         tools_restantes = list(plano)
       
         for _step in range(MAX_STEPS):
@@ -197,11 +201,11 @@ class Orchestrator:
                 
                 if idx_plano is not None:
                     msg = resposta_llm
-                    porque_exec = tools_restantes[idx_plano]["porque"]
+                    id_exec = tools_restantes[idx_plano]["id"]
                 else:
                     #se faz sentido , aceitamos , abordamos o plano
                     trace(f"===== LLM CHAMOU UMA TOOL FORA DO PLANO")
-                    autorizado, tools_substituidas = await self._juiz.aceita_divergencia(
+                    autorizado, ids_substiuidos = await self._juiz.aceita_divergencia(
                         pedido=user_message, 
                         tool_chamada=tool_requisitada, 
                         args=resposta_llm.tool_calls[0].arguments, 
@@ -210,13 +214,14 @@ class Orchestrator:
                         porque_llm=resposta_llm.content or ""
                     )
                     if autorizado:
-                        trace(f"===== CHAMADA AUTORIZADA - TOOLS {tools_substituidas} FORAM SUBSTITUIDAS POR {tool_requisitada}")
+                        trace(f"===== CHAMADA AUTORIZADA - TOOLS {ids_substiuidos} FORAM SUBSTITUIDAS POR {tool_requisitada}")
                         msg = resposta_llm
-                        tools_restantes = [slot for slot in tools_restantes if slot["porque"] not in tools_substituidas]
-                        slot = {"tool": tool_requisitada, "porque": resposta_llm.content}
+                        tools_restantes = [slot for slot in tools_restantes if slot["id"] not in ids_substiuidos]
+                        slot = {"id": str(proximo_id), "tool": tool_requisitada, "porque": resposta_llm.content}
+                        proximo_id += 1
                         plano.append(slot)
                         tools_restantes.append(slot)
-                        porque_exec = resposta_llm.content 
+                        id_exec = slot["id"] 
                     # caso seja divergencia sem sentido -> nudge
                     else:
                         trace("===== DIVERGENCIA REJEITADA - nudge corretivo")
@@ -243,7 +248,7 @@ class Orchestrator:
             )
             
             if exec_ok:
-                tools_restantes = [slot for slot in tools_restantes if slot["porque"] != porque_exec]
+                tools_restantes = [slot for slot in tools_restantes if slot["id"] != id_exec]
                 
             
             if saw_image and VISION_STYLE not in system:
@@ -450,9 +455,10 @@ class Orchestrator:
         trace("[SKELETON]")
         if not plano:
             return {}
+        ids_rest = {s["id"] for s in restantes}
         def checklist(slot: dict) -> str:
-            if slot not in restantes: return "✔"
-            if restantes and slot == restantes[0]: return "▸"
+            if slot["id"] not in ids_rest: return "✔"
+            if restantes and slot["id"] == restantes[0]["id"]: return "▸"
             return "☐"
         passos = "\n".join(
             f"{checklist(slot)} {i+1}. {slot["porque"]}"
