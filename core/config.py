@@ -26,7 +26,8 @@ class Settings(BaseSettings):
     agent_api_key: SecretStr = SecretStr("change-me")
 
     # modelo + orçamento de contexto (defaults travados pela arquitetura)
-    model_name: str = "QuantTrio/Qwen3-VL-30B-A3B-Instruct-AWQ"
+    model_name: str = "cyankiwi/Qwen3-VL-8B-Instruct-AWQ-4bit"
+    # model_name: str = "QuantTrio/Qwen3-VL-30B-A3B-Instruct-AWQ"
     max_context_tokens: int = 45056
     reserved_output_tokens: int =  8192
     
