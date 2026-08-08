@@ -1,4 +1,6 @@
 from typing import Any
+import re
+import logging
 import orjson
 from openai import (
     AsyncOpenAI,
@@ -20,6 +22,30 @@ from domain.exceptions.llm_exceptions import LLMUnavailable,LLMTimeout
 from collections.abc import AsyncIterator
 
 _TRANSIENT = (APIConnectionError, InternalServerError)
+_salvage_log = logging.getLogger("router_trace")
+
+_TOOLCALL_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.S)
+
+
+def _salvage_first_toolcall(content: str) -> tuple[str, dict] | None:
+    """O Qwen3-VL às vezes batela vários <tool_call> num turno e escapa as aspas do valor
+    do 2º+ bloco (\\"A = ...\\"). O hermes_tool_parser faz json.loads em CADA bloco e, ao
+    falhar num, dropa TODOS → volta content bruto com tools=[]. Recupera o 1º bloco (sempre
+    válido nos testes) e executa; o loop re-pede o resto (o open_image vem com o id REAL no
+    turno seguinte). Delimita por TAG (não por chave — JSON tem braces aninhados) e tenta
+    consertar o \\" como fallback caso o próprio 1º bloco venha degradado."""
+    m = _TOOLCALL_RE.search(content or "")
+    if not m:
+        return None
+    raw = m.group(1)
+    for cand in (raw, raw.replace('\\"', '"')):
+        try:
+            d = orjson.loads(cand)
+        except orjson.JSONDecodeError:
+            continue
+        if isinstance(d, dict) and d.get("name"):
+            return d["name"], (d.get("arguments") or {})
+    return None
 
 
 class OpenAILLMClient:
@@ -89,13 +115,23 @@ class OpenAILLMClient:
                     arguments=args
                 )
             )
-        u = r.usage 
+        u = r.usage
         if u is None:
             usage = Usage()
         else:
             usage = Usage(u.prompt_tokens,u.completion_tokens,u.total_tokens)
+        content = msg.content
+        if not tools_calls and content and "<tool_call>" in content:
+            sc = _salvage_first_toolcall(content)
+            if sc:
+                name, args = sc
+                _salvage_log.info(
+                    "[salvage] hermes dropou o batch — recuperei 1o tool_call: %s", name
+                )
+                tools_calls.append(ToolCall(id="salvage-0", name=name, arguments=args))
+                content = content[:content.index("<tool_call>")].strip() or None
         return Completion(
-            content=msg.content,
+            content=content,
             tool_calls=tools_calls,
             finish_reason=r.choices[0].finish_reason,
             usage=usage
