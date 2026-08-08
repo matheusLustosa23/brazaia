@@ -23,10 +23,9 @@ class NotifyInput(BaseModel):
     image_id: str | None = Field(
         default=None,
         description=(
-            "OPCIONAL — omita pra notificação SÓ DE TEXTO.\n"
-            "Pra anexar imagem, use um image_id que JÁ apareceu nesta conversa. DUAS origens "
-            "valem: 'render_math' (image_id=XXXX) ou uma captura ([imagem capturada · image_id=...]). "
-            "NÃO invente o id.\n"
+            "OPCIONAL — o PADRÃO é NÃO anexar. Só use se o dono pediu pra enviar/mostrar uma imagem.\n"
+            "Quando anexar, o id tem que JÁ ter aparecido nesta conversa — de 'render_math' (image_id=XXXX) "
+            "ou de uma captura ([imagem capturada · image_id=...]). NÃO invente o id.\n"
             "Se NENHUM image_id apareceu ainda: não gere nem capture por conta própria — diga que "
             "não encontrou imagem e PERGUNTE se quer que gere ou capture.\n"
             "Se o próprio usuário pediu as duas coisas (gerar/capturar E entregar): encadeie — "
@@ -34,14 +33,16 @@ class NotifyInput(BaseModel):
 
 
 
+
 class NotifyTool(Tool[NotifyInput]):
     name = "notify"
     description = (
-        "Manda uma NOTIFICAÇÃO pra tela de um device conectado. Só texto: passe title/message. "
-        "Com imagem: passe também o image_id (de qualquer origem — matemática, foto, arquivo).\n"
-        "Ex. só texto: \"avisa no celular que o build terminou\" → notify(device, title, message).\n"
-        "Ex. com imagem: \"manda a fórmula que você gerou pro celular\" → notify(device, title, "
-        "message=legenda curta em palavras, image_id)."
+        "Manda uma NOTIFICAÇÃO de TEXTO pra tela de um device. O padrão é SÓ title/message.\n"
+        "Anexe image_id APENAS quando o dono pedir explicitamente pra ENVIAR/MOSTRAR uma imagem "
+        "('manda a foto', 'envia a fórmula que você gerou'). Aviso de status "
+        "('backup terminou', 'sistema online', 'processo concluído') → NUNCA anexa imagem, só texto.\n"
+        "Ex. status: \"avisa que o build terminou\" → notify(device, title, message).\n"
+        "Ex. com imagem (pedido): \"manda a fórmula pro celular\" → notify(device, title, message=legenda, image_id)."
     )
     input_schema = NotifyInput
     side = "server"
