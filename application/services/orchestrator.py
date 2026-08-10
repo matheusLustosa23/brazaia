@@ -177,7 +177,7 @@ class Orchestrator:
         ids_reais: set[str] = set() 
         nudges_omissao = 0
         nudges_diverg  = 0
-        
+        trajetoria: list[str] = []
         trace(f"===== REQUEST: {user_message}")
         plano = await self._router.plan(user_message, active) if self._router else []
         for i, slot in enumerate(plano):
@@ -300,10 +300,11 @@ class Orchestrator:
                         continue
             
             
-            history, saw_image, exec_ok = await self._handle_tool_calls(
+            history, saw_image, exec_ok, passos = await self._handle_tool_calls(
                 session_id, history, user_turn, msg, active, device_id, seen, user_message, ids_reais
             )
-            
+            trajetoria += [f"{name} -> {result}" for name, result in passos]
+            trace(f"[trajetoria] {trajetoria}")
             if exec_ok:
                 tools_restantes = [slot for slot in tools_restantes if slot["id"] != id_exec]
                 
@@ -335,7 +336,8 @@ class Orchestrator:
         seen: set[tuple[str, bytes]],
         user_msg: str,
         ids_reais: set[str],
-    ) ->  tuple[list[dict], bool, bool]:
+    ) ->  tuple[list[dict], bool, bool, list[tuple]]:
+        passos: list[tuple[str, str]] = []
         if user_turn is not None:
             history = history + [user_turn]
         history = history + [
@@ -397,6 +399,7 @@ class Orchestrator:
                 tool_content =  await self._context.summarize(obs, foco=f"resultado de {name}")
                 trace_txt = tool_content
         
+            passos.append((tc.name, trace_txt))
         
             history = history + [
                 {
@@ -407,7 +410,8 @@ class Orchestrator:
             ]
             self._trace(session_id, name, payload, obs,  trace_txt)
             
-        return (history, saw_image, success)
+            
+        return (history, saw_image, success, passos)
 
     def _is_repeat(self, name: str, payload: dict, seen: set[tuple[str, bytes]]) -> bool:
         return (name, orjson.dumps(payload, option=orjson.OPT_SORT_KEYS),) in seen
