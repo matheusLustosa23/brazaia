@@ -6,6 +6,11 @@ from application.services._trace import trace
 _INSTR_DIVERGENCIA = (
     "O plano previa ferramentas — cada slot tem um id, a tool e o PORQUÊ dela. O modelo chamou uma FORA do plano, também com um porquê. Julgue.\n\n"
     "Ferramentas (o que cada uma faz):\n{tools}\n\n"
+    "RESTRIÇÕES das ferramentas (respeite ao julgar e ao sugerir proxima_tool):\n"
+    "  - display_page NÃO renderiza LaTeX/fórmula — é só pra páginas/tabelas de TEXTO. Conteúdo com fórmula "
+    "($…$, \\frac, \\sqrt, etc.) vai em display_math. NUNCA sugira display_page pra fórmula.\n"
+    "  - render_math só GERA a imagem da fórmula (devolve image_id); NÃO mostra em device. Pra exibir, é open_image/display_math.\n"
+    "  - display_math MOSTRA a fórmula (LaTeX) na tela do device.\n\n"
     "Pedido do dono: {pedido}\n"
     "Plano ainda não executado (id · tool ← por que estava no plano):\n{restante_rotulado}\n"
     "O modelo chamou '{chamou}' (args: {args})\n"
@@ -16,10 +21,20 @@ _INSTR_DIVERGENCIA = (
     "RACIOCINE pelo PORQUÊ de cada slot, mas RESPONDA com o id. Inclua um id SÓ se o alvo/intenção é o MESMO do '{chamou}'; "
     "NUNCA o id de um slot de OUTRO alvo (outra imagem, outro device), mesmo que a tool tenha o mesmo nome. "
     "[] se '{chamou}' só adiciona. Se aceita=false, substitui=[].\n\n"
+    "IMPORTANTE: 'aceita' e 'substitui' são INDEPENDENTES. Uma ação CORRETA/necessária que só ADICIONA um passo "
+    "(não cobre nenhum slot) = aceita=TRUE, substitui=[]. NUNCA marque aceita=false só porque não substitui slot — "
+    "aceita=false é EXCLUSIVO pra chamada ERRADA (downgrade, tool errada, ação não pedida). Se você concluiu que a "
+    "ferramenta está certa e é a ação ideal agora, é aceita=true (mesmo que o plano não a listasse).\n\n"
     "Exemplo: plano tem '[id=2] render_math ← renderizar a fórmula no navegador' e '[id=5] open_image ← abrir a foto do celular no ubuntu'; "
     "o modelo chamou 'display_math' porque 'mostrar a fórmula no navegador' → substitui=['2'] "
     "(o id do slot da fórmula; o id=5 da foto fica).\n\n"
-    "Responda em JSON: {{\"aceita\": bool, \"substitui\": [ids]}}.")
+    "Quando aceita=false, NÃO devolva nudge cego — analise a INTENÇÃO do modelo:\n"
+    "  - se a intenção FAZ SENTIDO, aponte a ferramenta que REALMENTE a atende (pode NÃO ser a próxima do plano — a ordem do plano pode estar errada);\n"
+    "  - se NÃO faz sentido, cruze a trajetória com o plano e ache o PRÓXIMO PASSO IDEAL.\n"
+    "  Preencha 'proxima_tool' (nome da ferramenta) e 'motivo' (1-2 linhas: por que a chamada não encaixa e por que a proxima_tool encaixa, ancorado na trajetória).\n\n"
+    "Trajetória real até agora (ferramenta -> resultado):\n{trajetoria}\n\n"
+    "Responda em JSON: {{\"aceita\": bool, \"substitui\": [ids], \"proxima_tool\": \"<nome ou vazio>\", \"motivo\": \"<vazio se aceita>\"}}."
+    )
 
 _INSTR_OMISSAO = (
     "O modelo NÃO chamou nenhuma ferramenta; só escreveu um texto. Nenhuma ação aconteceu. "
@@ -79,28 +94,19 @@ class Juiz:
         args: dict, 
         porque_llm: str,
         restante: list[dict[str, str]], 
-        tools: str
-    ) -> tuple[bool, list[str]]:
+        tools: str,
+        trajetoria: str = "",
+    ) -> tuple[bool, list[str], str, str]:
         ids = [str(s["id"]) for s in restante]
         schema = {
             "type":"object",
-            "required":[
-                "aceita",
-                "substitui"
-            ],
+            "required":["aceita","substitui","proxima_tool","motivo"],
             "properties":{
-                "aceita": {
-                    "type":"boolean"
-                },
-                "substitui": {
-                    "type":"array",
-                    "items":{
-                        "type":"string",
-                        "enum":ids
-                        
-                    }
-                }
-            }
+                "aceita":{"type":"boolean"},
+                "substitui":{"type":"array","items":{"type":"string","enum":ids}},
+                "proxima_tool":{"type":"string"},
+                "motivo":{"type":"string"},
+            },
         }
         restante_txt = "\n".join(f"  - [id={s['id']}] {s['tool']} ← \"{s['porque']}\"" for s in restante)
         resposta = await self._llm.complete(
@@ -108,29 +114,26 @@ class Juiz:
                 {
                     "role":"system",
                     "content":_INSTR_DIVERGENCIA.format(
-                        tools=tools, 
+                        tools=tools,
                         pedido=pedido, 
                         restante_rotulado=restante_txt,
                         chamou=tool_chamada, 
                         args=args, 
-                        porque_llm=porque_llm
+                        porque_llm=porque_llm, 
+                        trajetoria=trajetoria or "(nada ainda)"
                     )
                 }
             ],
             temperature=0.0,
-            extra_body={
-               "response_format":{
-                   "type":"json_schema",
-                   "json_schema":{
-                       "name":"veredito",
-                       "schema":schema
-                    }
-               }
-            }
-        )
+            extra_body={"response_format":{"type":"json_schema","json_schema":{"name":"veredito","schema":schema}}})
         data = orjson.loads(resposta.content or "{}")
         trace(f"[JUIZ (divergencia)] {data}")
-        return bool(data.get("aceita")), [i for i in data.get("substitui",[]) if i in ids]
+        return (
+            bool(data.get("aceita")),
+                [i for i in data.get("substitui",[]) if i in ids],
+                data.get("proxima_tool",""),
+                data.get("motivo","")
+            )
     
     async def classifica_omissao(self, pedido: str, texto: str, tools: str) -> str:
         if not (texto or "").strip():

@@ -236,7 +236,7 @@ class Orchestrator:
             
             tool_requisitada = resposta_llm.tool_calls[0].name if resposta_llm.tool_calls else None
             mensagem_llm = resposta_llm.content or ""
-            
+            history += [{"role": "assistant", "content": mensagem_llm}]
             trace(f"[auto]  tools={[{t.name: t.arguments} for t in resposta_llm.tool_calls]} finish={resposta_llm.finish_reason} content={mensagem_llm}")
             
             #não chamou tool
@@ -282,13 +282,14 @@ class Orchestrator:
                 else:
                     #se faz sentido , aceitamos , abordamos o plano
                     trace(f"===== LLM CHAMOU UMA TOOL FORA DO PLANO")
-                    autorizado, ids_substiuidos = await self._juiz.aceita_divergencia(
+                    autorizado, ids_substiuidos, prox_tool, motivo = await self._juiz.aceita_divergencia(
                         pedido=user_message, 
                         tool_chamada=tool_requisitada, 
                         args=resposta_llm.tool_calls[0].arguments, 
                         tools=active.describe_for_router(),
                         restante=tools_restantes,
-                        porque_llm=resposta_llm.content or ""
+                        porque_llm=resposta_llm.content or "",
+                        trajetoria="\n".join(trajetoria),
                     )
                     if autorizado:
                         trace(f"===== CHAMADA AUTORIZADA - TOOLS {ids_substiuidos} FORAM SUBSTITUIDAS POR {tool_requisitada}")
@@ -309,13 +310,12 @@ class Orchestrator:
                         if user_turn is not None:
                             history = history + [user_turn]
                             user_turn = None
-                        history = history + [
-                            {
-                                "role":"system","content":
-                                f"'{tool_requisitada}' não atende o pedido aqui. O certo é '{tools_restantes[0]['tool']}'. "
-                                "Chame a ferramenta certa."
-                            }
-                        ]
+                        history = history + [{
+                            "role":"system","content":(
+                                f"[Revisão] Uma verificação da última ação apontou: {motivo}. "
+                                f"A ferramenta adequada agora é '{prox_tool}'. Prossiga com ela e siga o restante do pedido."
+                            )
+                        }]
                         nudges_diverg += 1
                         continue
             
