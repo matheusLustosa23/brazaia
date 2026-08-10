@@ -198,7 +198,6 @@ class Orchestrator:
             if not tools_restantes:
                 trace(f"===== SEM TOOLS PARA CHAMR")
                 #trace(f"==== ENVIADO PARA O LLM: {messages}")
-                
                 texto = await self._finalizar_turno(
                     messages=messages,
                     user_turn=user_turn,
@@ -207,6 +206,27 @@ class Orchestrator:
                     session_id=session_id,
                     mensagem_llm=None
                 )
+                if trajetoria:
+                    cumpriu, motivo = await self._juiz.aprova_turno(
+                         pedido=user_message, 
+                         trajetoria="\n".join(trajetoria), 
+                         resposta=texto, 
+                         tools=active.describe_for_router()
+                    )
+                    if not cumpriu:
+                        aviso = {"role": "system", "content": (
+                            f"[Revisão do turno] Uma verificação apontou: {motivo}. "
+                            f"Responda ao dono de forma HONESTA sobre o que REALMENTE aconteceu "
+                            f"(veja os resultados das ferramentas) — não afirme o que não foi feito."
+                        )}
+                        texto = await self._finalizar_turno(
+                            messages=messages + [aviso],
+                            user_turn=user_turn,
+                            history=history,
+                            ids_reais=ids_reais,
+                            session_id=session_id,
+                            mensagem_llm=None,
+                        )               
                 yield texto
                 return
             #trace(f"==== ENVIADO PARA O LLM: {messages}")
