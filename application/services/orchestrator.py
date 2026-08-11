@@ -63,6 +63,59 @@ HONESTIDADE = """
 
 """
 
+STUDY_MODE = (
+    "MODO ESTUDO — você é um tutor ANCORADO, não um oráculo.\n"
+    "Numa tutoria, resposta errada dita com confiança é PIOR que 'não sei' — ensina algo falso "
+    "e prejudica o aprendizado do Dono. Sua precisão vem de ANCORAR, não de lembrar.\n"
+
+    "\nANCORE antes de responder:\n"
+    "- Dúvida sobre um conteúdo específico (página, slide, enunciado, exercício, caderno)? "
+    "Peça pra ver — 'tira uma foto do que te confundiu' → capture_image. Responda sobre o que está "
+    "VISÍVEL, apoiado no próprio texto, não de memória.\n"
+    "- Sem o material à vista, explique só o que você tem CERTEZA; o resto, mande conferir.\n"
+
+    "\nDERIVÁVEL vs LEMBRADO — trate diferente:\n"
+    "- DERIVÁVEL (uma conta, uma demonstração, um passo lógico): MOSTRE o passo a passo — o Dono "
+    "confere cada passo e aprende o caminho. Renderize com render_math/display_math; nunca escreva "
+    "LaTeX cru no chat.\n"
+    "- LEMBRADO (data, valor exato, enunciado de teorema, citação, referência): risco de alucinar. "
+    "NÃO crave — marque 'acho que é X, confere no material'.\n"
+
+    "\nNUNCA:\n"
+    "- ✗ inventar referência, título, autor, página, nome de teorema ou valor pra 'parecer completo'.\n"
+    "- ✗ afirmar seco um fato de memória sobre o qual você não tem certeza.\n"
+    "✓ 'não tenho a referência exata — isso está no seu material, confere lá.'\n"
+    "✓ 'não tenho certeza desse valor; o jeito de checar é [método].'\n"
+
+    "\nCOMO ensinar (adapte ao pedido):\n"
+    "- Dúvida pontual → esclareça CURTO e preciso.\n"
+    "- Conceito novo → não entregue mastigado: veja o que ele já sabe, guie até a resposta, "
+    "cheque o entendimento no fim.\n"
+    "- 'Onde errei?' → aponte o passo EXATO do erro dele; não reescreva tudo do zero.\n"
+
+    "\nESTRUTURA da explicação (padrão didático):\n"
+    "- Se o conceito depende de um PRÉ-REQUISITO (freq. relativa usa freq. absoluta), ensine o "
+    "pré-requisito ANTES. Decomponha em partes numeradas, cada uma sobre a anterior.\n"
+    "- Toda fórmula: renderize e logo abaixo defina cada símbolo ('onde: ...').\n"
+    "- Conta: mostre PASSO A PASSO granular (a divisão, depois a multiplicação, depois o resultado) — "
+    "nunca pule pro final; o Dono confere cada passo.\n"
+    "- Dê um EXEMPLO concreto e, havendo casos, uma TABELA comparativa (display_page).\n"
+    "- Ofereça uma VERIFICAÇÃO que o Dono faça sozinho (ex.: a soma das freq. relativas dá 100%).\n"
+    "- Feche com um resumo curto.\n"
+    "- Se o material tiver falha/lacuna, aponte COM NUANCE: o que está certo, o que está incompleto, "
+    "e como ficaria melhor. Não confunda 'pressupõe pré-requisito' com 'errado'.\n"
+
+    "\nFERRAMENTAS no estudo:\n"
+    "- capture_image → ler a página/enunciado/caderno do Dono.\n"
+    "- render_math / display_math → mostrar a fórmula ou a derivação na tela.\n"
+    "- display_page → montar uma tabela/resumo comparativo quando ajudar.\n"
+    "- lembrar → registrar o ponto fraco e o que já foi explicado, pra revisar depois "
+    "('semana passada você travou em integração por partes').\n"
+
+    "\nRegra-mãe: na dúvida entre PARECER sábio e SER fiel, seja fiel. O aprendizado do Dono depende disso."
+)
+
+
 async def _always_true(name: str, payload: dict) -> bool:
     return True
 
@@ -124,8 +177,13 @@ class Orchestrator:
         ids_reais: set[str] = set() 
         nudges_omissao = 0
         nudges_diverg  = 0
+        sem_progresso  = 0
+        trajetoria: list[str] = []
         trace(f"===== REQUEST: {user_message}")
         plano = await self._router.plan(user_message, active) if self._router else []
+        for i, slot in enumerate(plano):
+            slot["id"] = str(i)
+        proximo_id = len(plano)
         tools_restantes = list(plano)
       
         for _step in range(MAX_STEPS):
@@ -133,12 +191,14 @@ class Orchestrator:
             messages = self._context.build(system, memory_block, history, user_turn or {})
             skeleton = self._skeleton(user_message, plano, tools_restantes)
             if skeleton:
-                print(skeleton)
                 messages = messages + [skeleton]
+            trace(f"[ctx] passo {_step + 1}: {self._context.count(messages)} tokens · "
+                  f"{len(messages)} msgs · budget {self._context.input_budget}")
             msg = None
             #sem tools pra chamar , retorna a mensagem para o user
             if not tools_restantes:
                 trace(f"===== SEM TOOLS PARA CHAMR")
+                #trace(f"==== ENVIADO PARA O LLM: {messages}")
                 texto = await self._finalizar_turno(
                     messages=messages,
                     user_turn=user_turn,
@@ -147,23 +207,40 @@ class Orchestrator:
                     session_id=session_id,
                     mensagem_llm=None
                 )
+                if trajetoria:
+                    cumpriu, motivo = await self._juiz.aprova_turno(
+                         pedido=user_message, 
+                         trajetoria="\n".join(trajetoria), 
+                         resposta=texto, 
+                         tools=active.describe_for_router()
+                    )
+                    if not cumpriu:
+                        aviso = {"role": "system", "content": (
+                            f"[Revisão do turno] Uma verificação apontou: {motivo}. "
+                            f"Responda ao dono de forma HONESTA sobre o que REALMENTE aconteceu "
+                            f"(veja os resultados das ferramentas) — não afirme o que não foi feito."
+                        )}
+                        texto = await self._finalizar_turno(
+                            messages=messages + [aviso],
+                            user_turn=user_turn,
+                            history=history,
+                            ids_reais=ids_reais,
+                            session_id=session_id,
+                            mensagem_llm=None,
+                        )               
                 yield texto
                 return
-            
+            #trace(f"==== ENVIADO PARA O LLM: {messages}")
             resposta_llm = await self._llm.complete(
                 messages, tools=active.as_openai_tools(), tool_choice="auto",
             )
             
             tool_requisitada = resposta_llm.tool_calls[0].name if resposta_llm.tool_calls else None
             mensagem_llm = resposta_llm.content or ""
-            
             trace(f"[auto]  tools={[{t.name: t.arguments} for t in resposta_llm.tool_calls]} finish={resposta_llm.finish_reason} content={mensagem_llm}")
             
-            #chamou uma tool esperada
-            if tool_requisitada in tools_restantes:
-                msg = resposta_llm
-            # OMITIU
-            elif tool_requisitada is None:
+            #não chamou tool
+            if tool_requisitada is None:
                 #Motivo plausivio , retornamos ao usuario
                 trace(f"===== LLM NÃO CHAMOU TOOL")
                 if await self._juiz.classifica_omissao(user_message, mensagem_llm, active.describe_for_router()) == "RESPONDER":
@@ -185,10 +262,15 @@ class Orchestrator:
                     return
                 
                 nudges_omissao += 1
+                prox_tool, motivo = await self._juiz.corrige_omissao(
+                    pedido=user_message, texto=mensagem_llm,
+                    restante=tools_restantes, trajetoria="\n".join(trajetoria),
+                    tools=active.describe_for_router())
+                prox_tool = prox_tool or tools_restantes[0]["tool"]   # fallback seguro
                 system_extra = {
-                    "role":"system","content":
-                    f"Você disse que ia agir mas não chamou a ferramenta. Chame '{tools_restantes[0]}' "
-                    "agora com os argumentos certos, ou relate a falha ao dono."
+                    "role":"system","content":(
+                        f"[Revisão] Uma verificação apontou: {motivo}. A ferramenta adequada agora é "
+                        f"'{prox_tool}'. Chame ela com os argumentos certos, ou relate a falha ao dono.")
                 }
                 if user_turn is not None:
                     history = history + [user_turn]
@@ -197,49 +279,75 @@ class Orchestrator:
                 continue
             # Chamou uma tool fora do plano
             else:
-                #se faz sentido , aceitamos , abordamos o plano
-                trace(f"===== LLM CHAMOU UMA TOOL FORA DO PLAO")
-                autorizado, tools_substituidas = await self._juiz.aceita_divergencia(
-                    pedido=user_message, 
-                    tool_chamada=tool_requisitada, 
-                    args=resposta_llm.tool_calls[0].arguments, 
-                    tools=active.describe_for_router(),
-                    restante=tools_restantes
-                )
-                if autorizado:
-                    trace(f"===== CHAMADA AUTORIZADA - TOOLS {tools_substituidas} FORAM SUBSTITUIDAS POR {tool_requisitada}")
+                idx_plano = self._slot_pendente(tools_restantes, tool_requisitada)
+                
+                if idx_plano is not None:
                     msg = resposta_llm
-                    for t in tools_substituidas:
-                        tools_restantes.remove(t)
-                # caso seja divergencia sem sentido -> nudge
+                    id_exec = tools_restantes[idx_plano]["id"]
                 else:
-                    trace("===== DIVERGENCIA REJEITADA - nudge corretivo")
-                    if nudges_diverg >= 1:
-                        texto = await self._finalizar_turno(messages, ids_reais, user_turn, history, session_id, None)
-                        yield texto
-                        return
-                    if user_turn is not None:
-                        history = history + [user_turn]
-                        user_turn = None
-                    history = history + [
-                        {
-                            "role":"system","content":
-                            f"'{tool_requisitada}' não atende o pedido aqui. O certo é '{tools_restantes[0]}'. "
-                            "Chame a ferramenta certa."
-                        }
-                    ]
-                    nudges_diverg += 1
-                    continue
+                    #se faz sentido , aceitamos , abordamos o plano
+                    trace(f"===== LLM CHAMOU UMA TOOL FORA DO PLANO")
+                    autorizado, ids_substiuidos, prox_tool, motivo = await self._juiz.aceita_divergencia(
+                        pedido=user_message, 
+                        tool_chamada=tool_requisitada, 
+                        args=resposta_llm.tool_calls[0].arguments, 
+                        tools=active.describe_for_router(),
+                        restante=tools_restantes,
+                        porque_llm=resposta_llm.content or "",
+                        trajetoria="\n".join(trajetoria),
+                    )
+                    if autorizado:
+                        trace(f"===== CHAMADA AUTORIZADA - TOOLS {ids_substiuidos} FORAM SUBSTITUIDAS POR {tool_requisitada}")
+                        msg = resposta_llm
+                        tools_restantes = [slot for slot in tools_restantes if slot["id"] not in ids_substiuidos]
+                        slot = {"id": str(proximo_id), "tool": tool_requisitada, "porque": resposta_llm.content}
+                        proximo_id += 1
+                        plano.append(slot)
+                        tools_restantes.append(slot)
+                        id_exec = slot["id"] 
+                    # caso seja divergencia sem sentido -> nudge
+                    else:
+                        trace("===== DIVERGENCIA REJEITADA - nudge corretivo")
+                        if nudges_diverg >= 1:
+                            texto = await self._finalizar_turno(messages, ids_reais, user_turn, history, session_id, None)
+                            yield texto
+                            return
+                        if user_turn is not None:
+                            history = history + [user_turn]
+                            user_turn = None
+                        history = history + [{
+                            "role":"system","content":(
+                                f"[Revisão] Uma verificação da última ação apontou: {motivo}. "
+                                f"A ferramenta adequada agora é '{prox_tool}'. Prossiga com ela e siga o restante do pedido."
+                            )
+                        }]
+                        nudges_diverg += 1
+                        continue
             
             
-            history, saw_image, exec_ok = await self._handle_tool_calls(
+            history, saw_image, exec_ok, passos = await self._handle_tool_calls(
                 session_id, history, user_turn, msg, active, device_id, seen, user_message, ids_reais
             )
-            
-            if exec_ok and tool_requisitada in tools_restantes: 
-                tools_restantes.remove(tool_requisitada)
-                
-            
+            trajetoria += [f"{name} -> {result}" for name, result in passos]
+            trace(f"[trajetoria] {trajetoria}")
+            if exec_ok:
+                tools_restantes = [slot for slot in tools_restantes if slot["id"] != id_exec]
+                sem_progresso = 0
+            else:
+                sem_progresso += 1
+                if sem_progresso >= 2:       # bloqueio/repetição que não anda -> quebra
+                    trace(f"[loop-break] {sem_progresso} passos sem progresso — finalizo honesto")
+                    texto = await self._finalizar_turno(
+                        messages=messages + [{"role": "system", "content": (
+                            "Você travou repetindo ações que NÃO avançam (bloqueadas ou duplicadas). "
+                            "PARE de repetir. Responda ao dono de forma HONESTA: o que você CONSEGUIU "
+                            "fazer (veja os resultados reais) e o que NÃO deu — sem reafirmar o que falhou.")}],
+                        user_turn=user_turn, history=history, ids_reais=ids_reais,
+                        session_id=session_id, mensagem_llm=None,
+                    )
+                    yield texto
+                    return
+
             if saw_image and VISION_STYLE not in system:
                 system = f"{system}\n\n{VISION_STYLE}"
                 
@@ -267,7 +375,8 @@ class Orchestrator:
         seen: set[tuple[str, bytes]],
         user_msg: str,
         ids_reais: set[str],
-    ) ->  tuple[list[dict], bool, bool]:
+    ) ->  tuple[list[dict], bool, bool, list[tuple]]:
+        passos: list[tuple[str, str]] = []
         if user_turn is not None:
             history = history + [user_turn]
         history = history + [
@@ -329,6 +438,7 @@ class Orchestrator:
                 tool_content =  await self._context.summarize(obs, foco=f"resultado de {name}")
                 trace_txt = tool_content
         
+            passos.append((tc.name, trace_txt))
         
             history = history + [
                 {
@@ -339,7 +449,8 @@ class Orchestrator:
             ]
             self._trace(session_id, name, payload, obs,  trace_txt)
             
-        return (history, saw_image, success)
+            
+        return (history, saw_image, success, passos)
 
     def _is_repeat(self, name: str, payload: dict, seen: set[tuple[str, bytes]]) -> bool:
         return (name, orjson.dumps(payload, option=orjson.OPT_SORT_KEYS),) in seen
@@ -431,7 +542,10 @@ class Orchestrator:
                 mensagem_llm = "".join(buf2)
                 if not check_output(mensagem_llm, ids_reais).ok:
                     mensagem_llm  = "Não consegui fazer isso agora."
-        
+
+        if not (mensagem_llm or "").strip():        # stream veio vazio -> nunca devolver ""
+            mensagem_llm = "Fiz o que deu; não consegui concluir o resto agora."
+
         if user_turn:
             history = history + [user_turn]
         history = history + [{"role": "assistant", "content": mensagem_llm}]
@@ -440,19 +554,20 @@ class Orchestrator:
                 
         return mensagem_llm
     
-    def _skeleton(self, pedido: str, plano: list[str], restantes: list[str]) -> dict:
+    def _skeleton(self, pedido: str, plano: list[dict[str, str]], restantes: list[dict[str, str]]) -> dict:
         trace("[SKELETON]")
         if not plano:
             return {}
-        def checklist(tool: str) -> str:
-            if tool not in restantes: return "✔"
-            if restantes and tool == restantes[0]: return "▸"
+        ids_rest = {s["id"] for s in restantes}
+        def checklist(slot: dict) -> str:
+            if slot["id"] not in ids_rest: return "✔"
+            if restantes and slot["id"] == restantes[0]["id"]: return "▸"
             return "☐"
         passos = "\n".join(
-            f"{checklist(tool)} {i+1}. {tool}"
-            for i,tool in enumerate(plano)
+            f"{checklist(slot)} {i+1}. {slot["porque"]}"
+            for i,slot in enumerate(plano)
         )
-        feito = [t for t in plano if t not in restantes]
+        feito = [slot["porque"] for slot in plano if slot not in restantes]
         trace(f"Passos:\n{passos}")
         trace(f"restante:\n{restantes}")
         return {
@@ -460,10 +575,15 @@ class Orchestrator:
             "content": (
                 f"O usuário pediu: '{pedido}'.\n"
                 f"Faça NESTA ordem, conferindo o RESULTADO REAL de cada passo antes do próximo:\n{passos}\n"
-                f"Estado → feito: {feito or '[]'} · falta: {restantes or '[]'}.\n"
+                f"Estado → feito: {feito or '[]'} · falta: {[s['porque'] for s in restantes]  or '[]'}.\n"
                 "Se um passo falhar ou pedir permissão, PARE e relate — não pule, não invente id."
             )
         }
+    
+    @staticmethod
+    def _slot_pendente(restantes: list[dict], name: str) -> int | None:
+        return next((i for i,tool in enumerate(restantes) if tool["tool"] == name), None)
+    
     
 def _user_turn(text: str, image: str  | None) -> dict:
     if not image:

@@ -142,6 +142,10 @@ class ContextManager:
             max_tokens=target_tokens + max(64,target_tokens//4)
         )
         return out.content or previous_summary
+    def count(self, messages: list[dict]) -> int:
+        """Tokens de uma lista de mensagens (mesmo contador do budget)."""
+        return self._count(messages)
+
     
 def _render_turns(turns: list[dict]) -> str:
     """Serializa turnos p/ o prompt de resumo: 'user: ...\\nassistant: ...'."""

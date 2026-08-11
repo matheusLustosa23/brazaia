@@ -4,35 +4,37 @@ from application.services._trace import trace
 
 
 _INSTR_DIVERGENCIA = (
-    "O plano previa umas ferramentas; o modelo chamou uma FORA do plano. Decida se foi um bom movimento.\n\n"
+    "O plano previa ferramentas — cada slot tem um id, a tool e o PORQUÊ dela. O modelo chamou uma FORA do plano, também com um porquê. Julgue.\n\n"
     "Ferramentas (o que cada uma faz):\n{tools}\n\n"
+    "RESTRIÇÕES das ferramentas (respeite ao julgar e ao sugerir proxima_tool):\n"
+    "  - display_page NÃO renderiza LaTeX/fórmula — é só pra páginas/tabelas de TEXTO. Conteúdo com fórmula "
+    "($…$, \\frac, \\sqrt, etc.) vai em display_math. NUNCA sugira display_page pra fórmula.\n"
+    "  - render_math só GERA a imagem da fórmula (devolve image_id); NÃO mostra em device. Pra exibir, é open_image/display_math.\n"
+    "  - display_math MOSTRA a fórmula (LaTeX) na tela do device.\n\n"
     "Pedido do dono: {pedido}\n"
-    "Ferramentas do PLANO ainda não executadas: {restante}\n"
-    "O modelo chamou '{chamou}' (args: {args}), fora do plano.\n\n"
-    "aceita = true se '{chamou}' AJUDA a atender o pedido, seja:\n"
-    "  (a) um PASSO NECESSÁRIO antes de um do plano (ex.: gerar a imagem com render_math antes de notify/open_image), OU\n"
-    "  (b) uma ferramenta que faz o trabalho pedido TÃO BEM OU MELHOR que a do plano (ex.: display_math MOSTRA "
-    "a página no navegador, cobrindo render_math+open_image).\n"
-    "aceita = false se '{chamou}' é a escolha ERRADA:\n"
-    "  - DOWNGRADE: faz MENOS do que o pedido precisa. Ex.: o dono quer MOSTRAR/ABRIR matemática numa página "
-    "(plano tem display_math) e o modelo chamou render_math, que só GERA uma imagem guardada e NÃO mostra — o dono não veria nada.\n"
-    "  - ferramenta que NÃO serve o pedido (ex.: lembrar pra 'avisar'; capture_image pra 'olhar de novo' o que já existe), OU\n"
-    "  - uma ação que o dono NÃO pediu.\n\n"
-    "substitui = ferramentas do PLANO cujo trabalho '{chamou}' cobre POR COMPLETO (torna redundantes). "
-    "[] se '{chamou}' só ADICIONA um passo (não cobre nenhuma). Se aceita=false, substitui=[].\n\n"
-    "Exemplos:\n"
-    "- pedido 'abre a matemática numa página', plano ['display_math'], chamou 'render_math' -> "
-    "{{\"aceita\": false, \"substitui\": []}} (render só gera, não mostra; downgrade)\n"
-    "- pedido 'gera a fórmula, me mostra e me lembra de revisar', plano ['render_math','open_image','lembrar'], "
-    "chamou 'display_math' -> {{\"aceita\": true, \"substitui\": [\"render_math\",\"open_image\"]}} (a página mostra tudo; lembrar continua)\n"
-    "- pedido 'manda a fórmula pro ubuntu', plano ['notify'], chamou 'render_math' -> "
-    "{{\"aceita\": true, \"substitui\": []}} (precisa gerar a imagem antes de enviar; só adiciona)\n"
-    "- pedido 'avisa o ubuntu', plano ['notify'], chamou 'lembrar' -> {{\"aceita\": false, \"substitui\": []}} (lembrar não avisa)\n"
-    "- pedido 'abre a fórmula de bhaskara em tela cheia', plano ['open_image'], chamou 'render_math' -> "
-    "{{\"aceita\": true, \"substitui\": []}} (a imagem não existe ainda; gera antes de abrir; só adiciona)\n"
-    "- pedido 'mostra os exercícios de derivada pra resolver', plano ['display_math'], chamou 'display_page' -> "
-    "{{\"aceita\": false, \"substitui\": []}} (display_page é HTML genérico e NÃO renderiza a matemática; downgrade)\n\n"
-    "Responda em JSON: {{\"aceita\": bool, \"substitui\": [nomes do plano]}}.")
+    "Plano ainda não executado (id · tool ← por que estava no plano):\n{restante_rotulado}\n"
+    "O modelo chamou '{chamou}' (args: {args})\n"
+    "  porque, nas palavras dele: \"{porque_llm}\"\n\n"
+    "aceita = true se '{chamou}' AJUDA o pedido: passo necessário antes de um do plano, OU faz o trabalho tão bem/melhor. "
+    "false se é downgrade (faz menos), tool errada, ou ação não pedida.\n"
+    "substitui = a lista dos IDs (o número em [id=N]) dos slots que '{chamou}' cobre por completo. "
+    "RACIOCINE pelo PORQUÊ de cada slot, mas RESPONDA com o id. Inclua um id SÓ se o alvo/intenção é o MESMO do '{chamou}'; "
+    "NUNCA o id de um slot de OUTRO alvo (outra imagem, outro device), mesmo que a tool tenha o mesmo nome. "
+    "[] se '{chamou}' só adiciona. Se aceita=false, substitui=[].\n\n"
+    "IMPORTANTE: 'aceita' e 'substitui' são INDEPENDENTES. Uma ação CORRETA/necessária que só ADICIONA um passo "
+    "(não cobre nenhum slot) = aceita=TRUE, substitui=[]. NUNCA marque aceita=false só porque não substitui slot — "
+    "aceita=false é EXCLUSIVO pra chamada ERRADA (downgrade, tool errada, ação não pedida). Se você concluiu que a "
+    "ferramenta está certa e é a ação ideal agora, é aceita=true (mesmo que o plano não a listasse).\n\n"
+    "Exemplo: plano tem '[id=2] render_math ← renderizar a fórmula no navegador' e '[id=5] open_image ← abrir a foto do celular no ubuntu'; "
+    "o modelo chamou 'display_math' porque 'mostrar a fórmula no navegador' → substitui=['2'] "
+    "(o id do slot da fórmula; o id=5 da foto fica).\n\n"
+    "Quando aceita=false, NÃO devolva nudge cego — analise a INTENÇÃO do modelo:\n"
+    "  - se a intenção FAZ SENTIDO, aponte a ferramenta que REALMENTE a atende (pode NÃO ser a próxima do plano — a ordem do plano pode estar errada);\n"
+    "  - se NÃO faz sentido, cruze a trajetória com o plano e ache o PRÓXIMO PASSO IDEAL.\n"
+    "  Preencha 'proxima_tool' (nome da ferramenta) e 'motivo' (1-2 linhas: por que a chamada não encaixa e por que a proxima_tool encaixa, ancorado na trajetória).\n\n"
+    "Trajetória real até agora (ferramenta -> resultado):\n{trajetoria}\n\n"
+    "Responda em JSON: {{\"aceita\": bool, \"substitui\": [ids], \"proxima_tool\": \"<nome ou vazio>\", \"motivo\": \"<vazio se aceita>\"}}."
+    )
 
 _INSTR_OMISSAO = (
     "O modelo NÃO chamou nenhuma ferramenta; só escreveu um texto. Nenhuma ação aconteceu. "
@@ -80,6 +82,22 @@ _INSTR_TURNO = (
     "Responda JSON: {{\"cumpriu\": bool, \"motivo\": \"1 linha: o que faltou/errou, ou 'ok'\"}}."
 )
 
+_INSTR_CORRIGE_OMISSAO = (
+    "O agente NÃO chamou ferramenta — só escreveu um texto — mas o pedido do dono AINDA tem passos. "
+    "Determine a PRÓXIMA ferramenta que ele deveria chamar agora, pela INTENÇÃO do texto e pela trajetória.\n\n"
+    "Ferramentas (o que cada uma faz):\n{tools}\n\n"
+    "RESTRIÇÕES: display_page NÃO renderiza LaTeX — fórmula vai em display_math; render_math só GERA imagem "
+    "(não mostra em device).\n\n"
+    "Pedido do dono: {pedido}\n"
+    "Plano ainda não executado (id · tool ← por que estava no plano):\n{restante}\n"
+    "Trajetória real até agora (ferramenta -> resultado):\n{trajetoria}\n"
+    "O que o agente escreveu (sem agir): \"{texto}\"\n\n"
+    "Se a intenção do texto aponta uma ferramenta clara, use ELA (pode NÃO ser a próxima do plano — a ordem pode "
+    "estar errada). Senão, cruze a trajetória com o plano e escolha o PRÓXIMO PASSO IDEAL.\n"
+    "Responda JSON: {{\"proxima_tool\": \"<nome da ferramenta>\", \"motivo\": \"<1 linha: o que falta e por que essa tool>\"}}."
+)
+
+
 class Juiz:
     
     def __init__(self, llm: LLMClient) -> None:
@@ -90,55 +108,48 @@ class Juiz:
         pedido: str, 
         tool_chamada: str, 
         args: dict, 
-        restante: list[str], 
-        tools: str
-    ) -> tuple[bool, list[str]]:
+        porque_llm: str,
+        restante: list[dict[str, str]], 
+        tools: str,
+        trajetoria: str = "",
+    ) -> tuple[bool, list[str], str, str]:
+        ids = [str(s["id"]) for s in restante]
         schema = {
             "type":"object",
-            "required":[
-                "aceita",
-                "substitui"
-            ],
+            "required":["aceita","substitui","proxima_tool","motivo"],
             "properties":{
-                "aceita": {
-                    "type":"boolean"
-                },
-                "substitui": {
-                    "type":"array",
-                    "items":{
-                        "type":"string",
-                        "enum":restante
-                    }
-                }
-            }
+                "aceita":{"type":"boolean"},
+                "substitui":{"type":"array","items":{"type":"string","enum":ids}},
+                "proxima_tool":{"type":"string"},
+                "motivo":{"type":"string"},
+            },
         }
+        restante_txt = "\n".join(f"  - [id={s['id']}] {s['tool']} ← \"{s['porque']}\"" for s in restante)
         resposta = await self._llm.complete(
             messages=[
                 {
                     "role":"system",
                     "content":_INSTR_DIVERGENCIA.format(
-                        tools=tools, 
+                        tools=tools,
                         pedido=pedido, 
+                        restante_rotulado=restante_txt,
                         chamou=tool_chamada, 
-                        args=args,
-                        restante=restante
+                        args=args, 
+                        porque_llm=porque_llm, 
+                        trajetoria=trajetoria or "(nada ainda)"
                     )
                 }
             ],
             temperature=0.0,
-            extra_body={
-               "response_format":{
-                   "type":"json_schema",
-                   "json_schema":{
-                       "name":"veredito",
-                       "schema":schema
-                    }
-               }
-            }
-        )
+            extra_body={"response_format":{"type":"json_schema","json_schema":{"name":"veredito","schema":schema}}})
         data = orjson.loads(resposta.content or "{}")
         trace(f"[JUIZ (divergencia)] {data}")
-        return bool(data.get("aceita")), [tool for tool in data.get("substitui", []) if tool in restante]
+        return (
+            bool(data.get("aceita")),
+                [i for i in data.get("substitui",[]) if i in ids],
+                data.get("proxima_tool",""),
+                data.get("motivo","")
+            )
     
     async def classifica_omissao(self, pedido: str, texto: str, tools: str) -> str:
         if not (texto or "").strip():
@@ -153,6 +164,20 @@ class Juiz:
         decisao = orjson.loads(response.content or "{}").get("decisao", "EXECUTAR")
         trace(f"[JUIZ (omissao)] {decisao}")
         return decisao
+    
+    async def corrige_omissao(self, pedido, texto, restante, trajetoria, tools) -> tuple[str, str]:
+        restante_txt = "\n".join(f"  - [id={s['id']}] {s['tool']} ← \"{s['porque']}\"" for s in restante)
+        schema = {"type":"object","required":["proxima_tool","motivo"],
+                  "properties":{"proxima_tool":{"type":"string"},"motivo":{"type":"string"}}}
+        resposta = await self._llm.complete(
+            messages=[{"role":"system","content":_INSTR_CORRIGE_OMISSAO.format(
+                tools=tools, pedido=pedido, restante=restante_txt,
+                trajetoria=trajetoria or "(nada ainda)", texto=texto)}],
+            temperature=0.0,
+            extra_body={"response_format":{"type":"json_schema","json_schema":{"name":"corretivo","schema":schema}}})
+        data = orjson.loads(resposta.content or "{}")
+        trace(f"[corretivo omissao] {data}")
+        return data.get("proxima_tool",""), data.get("motivo","")
     
     async def aprova_turno(self, pedido: str, trajetoria: str, resposta: str, tools: str) -> tuple[bool, str]:
         schema = {"type":"object","required":["cumpriu","motivo"],
