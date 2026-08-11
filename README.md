@@ -18,27 +18,26 @@ Um **cérebro central** (servidor) coordena vários **dispositivos conectados** 
 ```mermaid
 flowchart TB
     subgraph SRV["🧠 Servidor local — o cérebro (RTX 3090)"]
-        direction TB
         WW["🎙️ Wake word + VAD"]
         ASR["📝 ASR — fala para texto"]
-        ORCH["🧩 Orchestrator<br/>router · guards · juízes (LLM-as-judge)"]
-        LLM["🤖 vLLM · Qwen3-VL<br/>LLM + visão"]
+        ORCH["🧩 Orchestrator — router, guards, juízes"]
+        LLM["🤖 vLLM · Qwen3-VL — LLM + visão"]
         TTS["🔊 TTS — texto para fala"]
-        API["⚡ FastAPI<br/>/chat · /ws/voice · /ws/device"]
+        API["⚡ FastAPI — /chat, /ws/voice, /ws/device"]
     end
 
     subgraph DEV["📡 Companions — dispositivos conectados"]
-        direction TB
-        D1["🖥️ Ubuntu<br/>câmera · tela · notificação"]
-        D2["📱 Celular Termux<br/>câmera · mic · notificação"]
+        D1["🖥️ Ubuntu — câmera, tela, notificação"]
+        D2["📱 Celular Termux — câmera, mic, notificação"]
     end
 
     WW --> ASR --> ORCH
-    ORCH <-->|tool-calling| LLM
+    ORCH -->|tool-calling| LLM
+    LLM --> ORCH
     ORCH --> TTS
     ORCH -->|RPC de ações| API
-    API <-->|WebSocket| DEV
-    DEV -->|câmera / sensores| API
+    API -->|WebSocket| DEV
+    DEV -->|câmera e sensores| API
 ```
 
 - **Servidor (o "cérebro"):** FastAPI + vLLM (Qwen3-VL) numa RTX 3090 — faz *wake word*, ASR/TTS e roda o **orchestrator**.
