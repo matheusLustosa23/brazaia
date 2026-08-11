@@ -82,6 +82,22 @@ _INSTR_TURNO = (
     "Responda JSON: {{\"cumpriu\": bool, \"motivo\": \"1 linha: o que faltou/errou, ou 'ok'\"}}."
 )
 
+_INSTR_CORRIGE_OMISSAO = (
+    "O agente NÃO chamou ferramenta — só escreveu um texto — mas o pedido do dono AINDA tem passos. "
+    "Determine a PRÓXIMA ferramenta que ele deveria chamar agora, pela INTENÇÃO do texto e pela trajetória.\n\n"
+    "Ferramentas (o que cada uma faz):\n{tools}\n\n"
+    "RESTRIÇÕES: display_page NÃO renderiza LaTeX — fórmula vai em display_math; render_math só GERA imagem "
+    "(não mostra em device).\n\n"
+    "Pedido do dono: {pedido}\n"
+    "Plano ainda não executado (id · tool ← por que estava no plano):\n{restante}\n"
+    "Trajetória real até agora (ferramenta -> resultado):\n{trajetoria}\n"
+    "O que o agente escreveu (sem agir): \"{texto}\"\n\n"
+    "Se a intenção do texto aponta uma ferramenta clara, use ELA (pode NÃO ser a próxima do plano — a ordem pode "
+    "estar errada). Senão, cruze a trajetória com o plano e escolha o PRÓXIMO PASSO IDEAL.\n"
+    "Responda JSON: {{\"proxima_tool\": \"<nome da ferramenta>\", \"motivo\": \"<1 linha: o que falta e por que essa tool>\"}}."
+)
+
+
 class Juiz:
     
     def __init__(self, llm: LLMClient) -> None:
@@ -148,6 +164,20 @@ class Juiz:
         decisao = orjson.loads(response.content or "{}").get("decisao", "EXECUTAR")
         trace(f"[JUIZ (omissao)] {decisao}")
         return decisao
+    
+    async def corrige_omissao(self, pedido, texto, restante, trajetoria, tools) -> tuple[str, str]:
+        restante_txt = "\n".join(f"  - [id={s['id']}] {s['tool']} ← \"{s['porque']}\"" for s in restante)
+        schema = {"type":"object","required":["proxima_tool","motivo"],
+                  "properties":{"proxima_tool":{"type":"string"},"motivo":{"type":"string"}}}
+        resposta = await self._llm.complete(
+            messages=[{"role":"system","content":_INSTR_CORRIGE_OMISSAO.format(
+                tools=tools, pedido=pedido, restante=restante_txt,
+                trajetoria=trajetoria or "(nada ainda)", texto=texto)}],
+            temperature=0.0,
+            extra_body={"response_format":{"type":"json_schema","json_schema":{"name":"corretivo","schema":schema}}})
+        data = orjson.loads(resposta.content or "{}")
+        trace(f"[corretivo omissao] {data}")
+        return data.get("proxima_tool",""), data.get("motivo","")
     
     async def aprova_turno(self, pedido: str, trajetoria: str, resposta: str, tools: str) -> tuple[bool, str]:
         schema = {"type":"object","required":["cumpriu","motivo"],
