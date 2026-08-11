@@ -177,6 +177,7 @@ class Orchestrator:
         ids_reais: set[str] = set() 
         nudges_omissao = 0
         nudges_diverg  = 0
+        sem_progresso  = 0
         trajetoria: list[str] = []
         trace(f"===== REQUEST: {user_message}")
         plano = await self._router.plan(user_message, active) if self._router else []
@@ -236,7 +237,6 @@ class Orchestrator:
             
             tool_requisitada = resposta_llm.tool_calls[0].name if resposta_llm.tool_calls else None
             mensagem_llm = resposta_llm.content or ""
-            history += [{"role": "assistant", "content": mensagem_llm}]
             trace(f"[auto]  tools={[{t.name: t.arguments} for t in resposta_llm.tool_calls]} finish={resposta_llm.finish_reason} content={mensagem_llm}")
             
             #não chamou tool
@@ -262,10 +262,15 @@ class Orchestrator:
                     return
                 
                 nudges_omissao += 1
+                prox_tool, motivo = await self._juiz.corrige_omissao(
+                    pedido=user_message, texto=mensagem_llm,
+                    restante=tools_restantes, trajetoria="\n".join(trajetoria),
+                    tools=active.describe_for_router())
+                prox_tool = prox_tool or tools_restantes[0]["tool"]   # fallback seguro
                 system_extra = {
-                    "role":"system","content":
-                    f"Você disse que ia agir mas não chamou a ferramenta. Chame '{tools_restantes[0]['tool']}' "
-                    "agora com os argumentos certos, ou relate a falha ao dono."
+                    "role":"system","content":(
+                        f"[Revisão] Uma verificação apontou: {motivo}. A ferramenta adequada agora é "
+                        f"'{prox_tool}'. Chame ela com os argumentos certos, ou relate a falha ao dono.")
                 }
                 if user_turn is not None:
                     history = history + [user_turn]
@@ -327,8 +332,22 @@ class Orchestrator:
             trace(f"[trajetoria] {trajetoria}")
             if exec_ok:
                 tools_restantes = [slot for slot in tools_restantes if slot["id"] != id_exec]
-                
-            
+                sem_progresso = 0
+            else:
+                sem_progresso += 1
+                if sem_progresso >= 2:       # bloqueio/repetição que não anda -> quebra
+                    trace(f"[loop-break] {sem_progresso} passos sem progresso — finalizo honesto")
+                    texto = await self._finalizar_turno(
+                        messages=messages + [{"role": "system", "content": (
+                            "Você travou repetindo ações que NÃO avançam (bloqueadas ou duplicadas). "
+                            "PARE de repetir. Responda ao dono de forma HONESTA: o que você CONSEGUIU "
+                            "fazer (veja os resultados reais) e o que NÃO deu — sem reafirmar o que falhou.")}],
+                        user_turn=user_turn, history=history, ids_reais=ids_reais,
+                        session_id=session_id, mensagem_llm=None,
+                    )
+                    yield texto
+                    return
+
             if saw_image and VISION_STYLE not in system:
                 system = f"{system}\n\n{VISION_STYLE}"
                 
@@ -523,7 +542,10 @@ class Orchestrator:
                 mensagem_llm = "".join(buf2)
                 if not check_output(mensagem_llm, ids_reais).ok:
                     mensagem_llm  = "Não consegui fazer isso agora."
-        
+
+        if not (mensagem_llm or "").strip():        # stream veio vazio -> nunca devolver ""
+            mensagem_llm = "Fiz o que deu; não consegui concluir o resto agora."
+
         if user_turn:
             history = history + [user_turn]
         history = history + [{"role": "assistant", "content": mensagem_llm}]
