@@ -3,23 +3,35 @@
 Só faz I/O: captura o microfone e streama pro server; recebe os eventos e o áudio do TTS, toca
 (gapless) e mostra a transcrição ao vivo (você + agente). Toda a inteligência está no server.
 
+Barge-in é feito AQUI (mic + alto-falante convivem no mesmo processo → corte LOCAL instantâneo, igual
+ao protótipo monolítico). O server só recebe o sinal {"type":"barge"} pra parar a geração.
+
 Dependências aqui: sounddevice, numpy, websockets  (NÃO precisa de torch/kokoro/whisper).
 
 Rodar (no seu device):
   python -m voice_pipeline.companion --host 100.78.164.45            # com fone (barge-in por voz)
   python -m voice_pipeline.companion --host 100.78.164.45 --no-barge-in   # sem fone (half-duplex)
+  BARGE_MS=400 python -m voice_pipeline.companion --host ...        # barge menos sensível
 """
 from __future__ import annotations
+import os
 import json
 import asyncio
 import argparse
 
+import numpy as np
 import websockets
 
 from .config import Config
 from .capture import Microphone
 from .playback import Player
 from .transcript import Transcript
+
+
+def _frame_rms(pcm: bytes) -> float:
+    """RMS 0..~1 de um frame PCM int16."""
+    a = np.frombuffer(pcm, np.int16)
+    return float(np.sqrt(np.mean((a.astype(np.float32) / 32768.0) ** 2))) if a.size else 0.0
 
 
 async def run(host: str, port: int, barge_in: bool):
@@ -32,11 +44,27 @@ async def run(host: str, port: int, barge_in: bool):
     loop = asyncio.get_running_loop()
     sendq: asyncio.Queue = asyncio.Queue()
 
+    # barge-in: exige ~BARGE_MS de fala sustentada durante o playback (callback é a cada frame_ms)
+    barge_ms = int(os.getenv("BARGE_MS", "250"))
+    barge_need = max(2, barge_ms // max(1, cfg.audio.frame_ms))
+    st = {"muted": False, "barge_hits": 0, "barged": False}   # estado compartilhado (audio thread + loop)
+
     def on_frame(pcm: bytes):
-        # half-duplex: em modo sem fone, não manda mic enquanto a IA fala (evita eco/auto-barge)
-        if (not barge_in) and player.busy():
-            return
-        loop.call_soon_threadsafe(sendq.put_nowait, pcm)
+        # barge-in LOCAL: fala durante o playback → corta o áudio na hora + avisa o server
+        if barge_in and player.busy() and not st["muted"]:
+            if _frame_rms(pcm) >= cfg.vad.rms_threshold:
+                st["barge_hits"] += 1
+                if st["barge_hits"] >= barge_need and not st["barged"]:
+                    st["barged"] = True
+                    st["muted"] = True
+                    player.clear()                                   # CORTE LOCAL INSTANTÂNEO
+                    loop.call_soon_threadsafe(sendq.put_nowait, {"type": "barge"})
+                    tx.interrupted()
+            else:
+                st["barge_hits"] = 0
+        # stream do mic pro server (half-duplex: não envia enquanto a IA fala)
+        if barge_in or not player.busy():
+            loop.call_soon_threadsafe(sendq.put_nowait, pcm)
 
     mic = Microphone(cfg.audio, on_frame)
     uri = f"ws://{host}:{port}"
@@ -46,40 +74,41 @@ async def run(host: str, port: int, barge_in: bool):
             mic.start()
             await ws.send(json.dumps({"type": "hello"}))
             tx.info("conectado ✓ — pode falar  (Ctrl+C sai)")
-            muted = False   # após barge-in, ignora o PCM da resposta cortada até a NOVA começar
 
             async def sender():
                 while True:
-                    pcm = await sendq.get()
+                    item = await sendq.get()
                     try:
-                        await ws.send(pcm)
+                        await ws.send(item if isinstance(item, (bytes, bytearray)) else json.dumps(item))
                     except Exception:
                         break
 
             async def receiver():
-                nonlocal muted
                 async for msg in ws:
                     if isinstance(msg, (bytes, bytearray)):
-                        if not muted:
+                        if not st["muted"]:
                             player.feed(msg)
                         continue
                     m = json.loads(msg); ty = m.get("type")
-                    if ty == "partial":      tx.user_partial(m.get("text", ""))
-                    elif ty == "final":      tx.user_final(m.get("text", ""))
-                    elif ty == "thinking":   tx.thinking()
-                    elif ty == "reply_start":player.clear(); tx.agent_start(); muted = False  # corta sobra de áudio do turno anterior
-                    elif ty == "reply_delta":tx.agent_delta(m.get("text", ""))
-                    elif ty == "reply_end":  tx.agent_final()
-                    elif ty == "interrupt":  player.clear(); muted = True; tx.interrupted()
-                    elif ty == "info":       tx.info(m.get("text", ""))
-                    elif ty == "error":      tx.error(m.get("text", ""))
+                    if ty == "partial":       tx.user_partial(m.get("text", ""))
+                    elif ty == "final":       tx.user_final(m.get("text", ""))
+                    elif ty == "thinking":    tx.thinking()
+                    elif ty == "reply_start":
+                        player.clear()                               # corta sobra do turno anterior
+                        tx.agent_start()
+                        st["muted"] = False; st["barged"] = False; st["barge_hits"] = 0
+                    elif ty == "reply_delta": tx.agent_delta(m.get("text", ""))
+                    elif ty == "reply_end":   tx.agent_final()
+                    elif ty == "interrupt":   player.clear(); st["muted"] = True; tx.interrupted()
+                    elif ty == "info":        tx.info(m.get("text", ""))
+                    elif ty == "error":       tx.error(m.get("text", ""))
 
-            st = asyncio.create_task(sender())
-            rc = asyncio.create_task(receiver())
+            sndr = asyncio.create_task(sender())
+            rcvr = asyncio.create_task(receiver())
             try:
-                await rc                                   # até a conexão cair / Ctrl+C
+                await rcvr                                   # até a conexão cair / Ctrl+C
             finally:
-                st.cancel()
+                sndr.cancel()
                 try:
                     await ws.send(json.dumps({"type": "bye"}))
                 except Exception:

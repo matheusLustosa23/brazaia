@@ -117,10 +117,14 @@ async def _amain(cfg: Config):
                     buf.feed(bytes(msg))           # PCM do mic do companion → buffer da pipeline
                 else:
                     try:
-                        if json.loads(msg).get("type") == "bye":
-                            break
+                        ctrl = json.loads(msg)
                     except Exception:
-                        pass
+                        continue
+                    t = ctrl.get("type")
+                    if t == "bye":
+                        break
+                    elif t == "barge":             # client detectou fala no playback → para a geração
+                        await pipe.external_barge()
         finally:
             await pipe.shutdown()
             proc_task.cancel()

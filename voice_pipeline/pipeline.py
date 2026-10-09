@@ -35,6 +35,7 @@ class VoicePipeline:
 
         self._cancel = asyncio.Event()
         self._resp_task: asyncio.Task | None = None
+        self._barged = False          # setado por external_barge() (client cortou o áudio)
         self.quit = False
 
     # ---------- RESPOND ----------
@@ -122,29 +123,20 @@ class VoicePipeline:
         self.tx.user_partial((committed + " " + partial).strip())
         return False
 
-    # ---------- barge-in (durante RESPOND) ----------
-    async def _barge_step(self) -> bool:
-        """Checa fala do usuário enquanto a IA fala. Retorna True se interrompeu."""
-        await asyncio.sleep(self.cfg.barge.poll_s)
-        audio = self.buf.snapshot()
-        onset_win = int(self.sr * self.cfg.vad.onset_window_s)
-        if len(audio) >= self.sr * 0.2 and rms(audio, onset_win) >= self.cfg.vad.rms_threshold:
-            self._barge_hits += 1
-            if self._barge_hits >= self.cfg.barge.frames:
-                self._cancel.set()               # 1º: trava novo PCM do _speak
-                self.player.clear()              # 2º: corta o áudio já enfileirado + manda interrupt
-                await self._stop_response()      # 3º: cancela a geração/TTS
-                return True
-        else:
-            self._barge_hits = 0
-        return False
+    # ---------- barge-in (disparado pelo CLIENT) ----------
+    async def external_barge(self):
+        """O client detecta a fala durante o playback (mic+player lá) e CORTA o áudio local na hora.
+        Aqui o server só precisa PARAR a geração/TTS do turno atual."""
+        if self._resp_task and not self._resp_task.done():
+            self._barged = True
+            self._cancel.set()
+            await self._stop_response()
 
     # ---------- loop principal ----------
     async def run(self):
         self.tx.info(f"pronto — STT={self.cfg.stt.engine} · barge_in={self.cfg.barge.enabled} · fale à vontade (Ctrl+C sai)")
         state = "LISTEN"
         self.endpointer.reset()
-        self._barge_hits = 0
         while not self.quit:
             if state == "LISTEN":
                 try:
@@ -162,27 +154,17 @@ class VoicePipeline:
                         self.history.append({"role": "user", "content": final})
                         self.tx.thinking()
                         self._cancel.clear()
-                        self._barge_hits = 0
                         self._resp_task = asyncio.create_task(self._respond())
                         state = "RESPOND"
-            else:  # RESPOND
+            else:  # RESPOND — barge-in é do CLIENT; aqui só aguardamos o fim (ou o barge externo)
+                await asyncio.sleep(self.cfg.barge.poll_s)
                 if self._resp_task and self._resp_task.done():
-                    self.buf.clear()
-                    self.endpointer.reset()
-                    state = "LISTEN"
-                    continue
-                if not self.cfg.barge.enabled:
-                    await asyncio.sleep(self.cfg.barge.poll_s)
-                    continue
-                try:
-                    interrupted = await self._barge_step()
-                except Exception:
-                    interrupted = False
-                if interrupted:
-                    self.buf.keep_last(int(self.sr * 3.0))   # guarda o início da fala nova como pré-roll
+                    if self._barged:                         # client cortou: preserva a fala nova
+                        self.buf.keep_last(int(self.sr * 3.0)); self._barged = False
+                    else:                                    # terminou normal (o client cuida do áudio tocando)
+                        self.buf.clear()
                     self.stab.reset()
                     self.endpointer.reset()
-                    self._barge_hits = 0
                     state = "LISTEN"
 
     async def shutdown(self):
