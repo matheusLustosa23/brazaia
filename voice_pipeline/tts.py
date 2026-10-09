@@ -60,15 +60,33 @@ class SentenceChunker:
         return s
 
 
+def _resolve_torch_device(requested: str) -> str:
+    """'auto'/'cuda' → 'cuda' só se o torch enxergar GPU; senão 'cpu' (não quebra)."""
+    if requested not in ("auto", "cuda"):
+        return requested
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return "cuda"
+    except Exception:
+        pass
+    return "cpu"
+
+
 class KokoroTTS:
     """Síntese PT-BR. `synth(texto) -> PCM int16 bytes @ tts_sample_rate`."""
 
     def __init__(self, cfg, tts_sample_rate: int = 24000):
         from kokoro import KPipeline
-        print(f"[tts] kokoro ({cfg.voice}) @ {cfg.device} ...", flush=True)
+        device = _resolve_torch_device(cfg.device)
+        print(f"[tts] kokoro ({cfg.voice}) @ {device} ...", flush=True)
         self.cfg = cfg
         self.sr = tts_sample_rate
-        self.pipe = KPipeline(lang_code=cfg.lang_code, device=cfg.device)
+        try:
+            self.pipe = KPipeline(lang_code=cfg.lang_code, device=device); self.device = device
+        except Exception as e:                       # cuda pediu mas falhou → CPU (kokoro roda bem na CPU)
+            print(f"[tts] {device} falhou ({e}); caindo pra CPU", flush=True)
+            self.pipe = KPipeline(lang_code=cfg.lang_code, device="cpu"); self.device = "cpu"
         for _ in self.pipe("ok", cfg.voice):   # aquece (primeira síntese é mais lenta)
             pass
 

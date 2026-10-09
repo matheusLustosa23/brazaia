@@ -24,10 +24,21 @@ class WhisperTranscriber:
 
     def __init__(self, cfg):
         from faster_whisper import WhisperModel
-        print(f"[stt] faster-whisper {cfg.whisper_model} @ {cfg.device} ...", flush=True)
+        device, compute = cfg.device, cfg.compute_type
+        if device in ("auto", "cuda"):                       # ctranslate2 tem CUDA própria (≠ torch)
+            try:
+                import ctranslate2
+                device = "cuda" if ctranslate2.get_cuda_device_count() > 0 else "cpu"
+            except Exception:
+                device = "cpu"
+        if device == "cpu" and compute in ("", "float16"):   # CPU não roda float16 → int8
+            compute = "int8"
+        if not compute:
+            compute = "float16"
+        print(f"[stt] faster-whisper {cfg.whisper_model} @ {device} ({compute}) ...", flush=True)
         self.cfg = cfg
-        self.model = WhisperModel(cfg.whisper_model, device=cfg.device,
-                                  compute_type=cfg.compute_type, num_workers=1)
+        self.model = WhisperModel(cfg.whisper_model, device=device,
+                                  compute_type=compute, num_workers=1)
 
     def transcribe(self, audio, prompt):
         segs, _ = self.model.transcribe(

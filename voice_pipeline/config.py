@@ -76,8 +76,8 @@ class STTCfg:
     language: str = "pt"
     # faster-whisper
     whisper_model: str = "large-v3-turbo"
-    device: str = "cuda"
-    compute_type: str = "float16"
+    device: str = "auto"              # auto → cuda se o ctranslate2 enxergar GPU, senão cpu+int8
+    compute_type: str = ""            # vazio = auto (float16 na GPU, int8 no CPU)
     beam_size: int = 5
     hotwords: str = ""
     # Parakeet (NeMo) — opcional
@@ -91,8 +91,8 @@ class STTCfg:
             hop_s=_float_env("STT_HOP_S", 0.5),
             language=os.getenv("STT_LANGUAGE", "pt"),
             whisper_model=os.getenv("WHISPER_MODEL", "large-v3-turbo"),
-            device=os.getenv("STT_DEVICE", "cuda"),
-            compute_type=os.getenv("STT_COMPUTE", "float16"),
+            device=os.getenv("STT_DEVICE", "auto"),
+            compute_type=os.getenv("STT_COMPUTE", ""),
             parakeet_model=os.getenv("PARAKEET_MODEL", "nvidia/parakeet-tdt-0.6b-v3"),
         )
 
@@ -131,14 +131,14 @@ class LLMCfg:
 class TTSCfg:
     voice: str = "pm_santa"           # voz PT-BR do Kokoro
     lang_code: str = "p"              # 'p' = português no Kokoro
-    device: str = "cuda"
+    device: str = "auto"              # auto → cuda se o torch enxergar GPU, senão cpu (kokoro roda bem na CPU)
     first_chunk_chars: int = 20       # 1º trecho curto → TTFA (time-to-first-audio) baixo
 
     @classmethod
     def load(cls):
         return cls(
             voice=os.getenv("TTS_VOICE", "pm_santa"),
-            device=os.getenv("TTS_DEVICE", "cuda"),
+            device=os.getenv("TTS_DEVICE", "auto"),
         )
 
 
