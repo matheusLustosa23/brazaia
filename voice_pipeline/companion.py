@@ -67,7 +67,7 @@ async def run(host: str, port: int, barge_in: bool):
                     if ty == "partial":      tx.user_partial(m.get("text", ""))
                     elif ty == "final":      tx.user_final(m.get("text", ""))
                     elif ty == "thinking":   tx.thinking()
-                    elif ty == "reply_start":tx.agent_start(); muted = False
+                    elif ty == "reply_start":player.clear(); tx.agent_start(); muted = False  # corta sobra de áudio do turno anterior
                     elif ty == "reply_delta":tx.agent_delta(m.get("text", ""))
                     elif ty == "reply_end":  tx.agent_final()
                     elif ty == "interrupt":  player.clear(); muted = True; tx.interrupted()

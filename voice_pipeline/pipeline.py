@@ -131,8 +131,9 @@ class VoicePipeline:
         if len(audio) >= self.sr * 0.2 and rms(audio, onset_win) >= self.cfg.vad.rms_threshold:
             self._barge_hits += 1
             if self._barge_hits >= self.cfg.barge.frames:
-                self.player.clear()              # 1º: corta o áudio JÁ (instantâneo)
-                await self._stop_response()      # 2º: para a geração/TTS
+                self._cancel.set()               # 1º: trava novo PCM do _speak
+                self.player.clear()              # 2º: corta o áudio já enfileirado + manda interrupt
+                await self._stop_response()      # 3º: cancela a geração/TTS
                 return True
         else:
             self._barge_hits = 0

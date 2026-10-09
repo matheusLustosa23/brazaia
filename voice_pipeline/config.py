@@ -129,7 +129,7 @@ class LLMCfg:
 
 @dataclass
 class TTSCfg:
-    voice: str = "pm_santa"           # voz PT-BR do Kokoro
+    voice: str = "pf_dora"            # voz PT-BR do Kokoro (pf_dora=fem · pm_alex/pm_santa=masc)
     lang_code: str = "p"              # 'p' = português no Kokoro
     device: str = "auto"              # auto → cuda se o torch enxergar GPU, senão cpu (kokoro roda bem na CPU)
     first_chunk_chars: int = 20       # 1º trecho curto → TTFA (time-to-first-audio) baixo
@@ -137,7 +137,7 @@ class TTSCfg:
     @classmethod
     def load(cls):
         return cls(
-            voice=os.getenv("TTS_VOICE", "pm_santa"),
+            voice=os.getenv("TTS_VOICE", "pf_dora"),
             device=os.getenv("TTS_DEVICE", "auto"),
         )
 
@@ -150,7 +150,11 @@ class BargeCfg:
 
     @classmethod
     def load(cls):
-        return cls(enabled=_bool_env("BARGE_IN", True))
+        return cls(
+            enabled=_bool_env("BARGE_IN", True),
+            poll_s=_float_env("BARGE_POLL_S", 0.15),
+            frames=_int_env("BARGE_FRAMES", 2),   # ↑ p/ barge menos sensível (ex.: 3–4)
+        )
 
 
 @dataclass
