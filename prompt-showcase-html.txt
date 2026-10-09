@@ -1,0 +1,52 @@
+══════════════════════════════════════════════════════════════════════════════
+ PROMPT DE TESTE — capacidade do LLM gerando HTML rico, animado e interativo
+ (cole no brazaia: "gera um html aqui no chat pra copiar" OU display_page no navegador)
+ Objetivo: medir quão longe o modelo local chega numa página self-contained de verdade.
+══════════════════════════════════════════════════════════════════════════════
+
+Gere UMA página HTML COMPLETA e AUTOSSUFICIENTE (um único arquivo, sem nenhuma
+dependência externa: todo o CSS e JS inline; NUNCA use CDN, <script src>, imagem
+remota ou fetch — só é permitido link de fonte do Google Fonts). O arquivo tem que
+abrir e funcionar sozinho num navegador, offline.
+
+TEMA: um "painel de visualização" estilo terminal cyberpunk / Matrix (verde-fósforo
+no preto), apresentado como uma vitrine com VÁRIOS MODOS VISUAIS que o usuário troca.
+É uma demonstração de força — capriche.
+
+REQUISITOS OBRIGATÓRIOS (tudo tem que estar presente e funcionando):
+1.  Pelo menos 3 MODOS VISUAIS diferentes, cada um animado em <canvas> com
+    requestAnimationFrame (nada de GIF/vídeo). Sugestões: "digital rain" gerativo;
+    uma figura/rosto desenhado em caracteres ASCII que respira e faz glitch; uma
+    onda/orb de áudio que pulsa. Invente livremente, mas cada modo deve ser
+    visivelmente distinto e fluido (mirar ~60fps, sem travar).
+2.  Uma MÁQUINA DE ESTADOS com 4–5 estados (ex.: ocioso, escutando, processando,
+    respondendo) que MUDAM A COR e o COMPORTAMENTO da animação. Deixe claro qual
+    estado está ativo (rótulo + cor). Cada estado tem sua identidade cromática.
+3.  CONTROLES interativos de verdade: botões pra trocar de modo, botões (ou
+    segmented control) pra forçar cada estado, e um toggle de "ciclar automático".
+    Os controles têm que refletir o estado atual (aria-pressed / classe ativa).
+4.  Um valor de "intensidade" (0..1) SIMULADO por seno+ruído que dirige a reatividade
+    das animações (as barras/colunas/pulsos respondem a ele). Documente no código
+    de onde viria o valor real (ex.: nível do microfone).
+5.  Layout RESPONSIVO (funciona de celular a desktop; nada de scroll horizontal),
+    tipografia com hierarquia (título, rótulos em maiúsculas espaçadas, legenda),
+    e uma paleta coesa definida em variáveis CSS (:root).
+6.  ACESSIBILIDADE e robustez: respeite prefers-reduced-motion (menos animação),
+    foco visível no teclado, cores com contraste legível, e trate resize/DPR
+    (devicePixelRatio) pro canvas não ficar borrado.
+7.  Código LIMPO e comentado em português, organizado (um objeto/função por modo
+    visual), sem bibliotecas.
+
+CRITÉRIOS DE QUALIDADE (é isso que estou avaliando):
+- As animações são suaves e realmente diferentes entre si?
+- A troca de estado muda cor E comportamento de forma perceptível?
+- Os controles funcionam e refletem o estado?
+- É de fato self-contained (abre offline, sem erro no console)?
+- O visual é bonito e coeso, não um rascunho?
+
+FORMATO DA RESPOSTA:
+- Entregue o HTML COMPLETO num único bloco ```html ... ``` (pra eu copiar), começando
+  em <!doctype html> e terminando em </html>. Nada de texto no meio do código.
+- Antes do bloco, escreva só 2–3 linhas dizendo quais modos e estados você implementou.
+
+Capriche: quero ver o teto da sua capacidade num só arquivo.
