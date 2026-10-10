@@ -62,8 +62,9 @@ async def run(host: str, port: int, barge_in: bool):
                     tx.interrupted()
             else:
                 st["barge_hits"] = 0
-        # stream do mic pro server (half-duplex: não envia enquanto a IA fala)
-        if barge_in or not player.busy():
+        # NÃO envia o mic durante o playback → o TTS não vaza no STT (mesmo com fone/stereo-mix).
+        # O barge-in acima roda local; quando corta, player.clear() libera o envio pro novo turno.
+        if not player.busy():
             loop.call_soon_threadsafe(sendq.put_nowait, pcm)
 
     mic = Microphone(cfg.audio, on_frame)
