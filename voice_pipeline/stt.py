@@ -156,6 +156,25 @@ def _dedupe(words: list[str]) -> list[str]:
     return out
 
 
+_HALUC_WORDS = {"obrigado", "obrigada", "tchau", "valeu", "pessoal", "gente", "muito", "até",
+                "logo", "próxima", "amara", "org", "legenda", "legendas", "inscreva-se",
+                "compartilhe", "curta"}
+_HALUC_FRASES = {"legendas pela comunidade amara.org", "legendas pela comunidade",
+                 "obrigado por assistir", "obrigada por assistir"}
+
+
+def is_hallucination(text: str) -> bool:
+    """True se o texto é provável ALUCINAÇÃO do Whisper em silêncio (saudação/agradecimento/legenda
+    curta que o modelo inventa quando não há fala). Conservador: só pega frases curtas."""
+    t = text.strip().lower().strip(".,;:!?…… ")
+    if not t:
+        return True
+    if t in _HALUC_FRASES:
+        return True
+    palavras = [w.strip(".,;:!?…") for w in t.split()]
+    return len(palavras) <= 4 and all(w in _HALUC_WORDS for w in palavras if w)
+
+
 def collapse_repeats(text: str) -> str:
     """Colapsa blocos de 1–3 palavras repetidos 3+ vezes seguidas — alucinação do Whisper em ruído
     de fundo ('E aí E aí E aí', 'Eai Eai Eai'). Mantém 1 cópia; conservador (exige 3 repetições)."""

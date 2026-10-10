@@ -10,11 +10,12 @@ Depende apenas de abstrações injetadas (transcriber, responder, tts, player, t
 troca de qualquer peça — inclusive o Responder pelo agente (entrega 2) — não mexe aqui.
 """
 from __future__ import annotations
+import os
 import asyncio
 import numpy as np
 
 from .vad import SilenceEndpointer, rms
-from .stt import Stabilizer, collapse_repeats
+from .stt import Stabilizer, collapse_repeats, is_hallucination
 from .tts import clean_for_speech, SentenceChunker
 
 
@@ -149,6 +150,11 @@ class VoicePipeline:
                     final = self.stab.flush()
                     self.buf.clear()
                     self.endpointer.reset()
+                    # filtro de alucinação (desligável): o Whisper "completa" áudio ambíguo com frases
+                    # comuns (obrigado / amara.org). Descarta o turno-fantasma. HALLUC_FILTER=0 desliga.
+                    if final and os.getenv("HALLUC_FILTER", "1") != "0" and is_hallucination(final):
+                        self.tx.info(f"(ignorado — provável alucinação: “{final}”)")
+                        final = ""
                     if final:
                         self.tx.user_final(final)
                         self.history.append({"role": "user", "content": final})

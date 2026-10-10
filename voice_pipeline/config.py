@@ -48,7 +48,8 @@ class AudioCfg:
 
 @dataclass
 class VADCfg:
-    rms_threshold: float = 0.02       # abaixo disso = silêncio; ↑ se o ruído de fundo for transcrito
+    rms_threshold: float = 0.015      # abaixo disso = silêncio (validado); ↑ só se ruído for transcrito,
+                                      # mas CUIDADO: alto demais corta fala baixa → Whisper "completa" c/ obrigado
     onset_window_s: float = 0.3       # janela de RMS p/ detectar início de fala
     end_silence_s: float = 1.2        # silêncio que fecha o turno
     cont_mult: float = 2.5            # espera mais se a frase terminou em palavra de continuação
@@ -64,7 +65,7 @@ class VADCfg:
     @classmethod
     def load(cls):
         return cls(
-            rms_threshold=_float_env("VAD_RMS_THRESHOLD", 0.02),
+            rms_threshold=_float_env("VAD_RMS_THRESHOLD", 0.015),
             end_silence_s=_float_env("VAD_END_SILENCE_S", 1.2),
         )
 
@@ -133,12 +134,14 @@ class TTSCfg:
     lang_code: str = "p"              # 'p' = português no Kokoro
     device: str = "auto"              # auto → cuda se o torch enxergar GPU, senão cpu (kokoro roda bem na CPU)
     first_chunk_chars: int = 20       # 1º trecho curto → TTFA (time-to-first-audio) baixo
+    speed: float = 0.95               # <1 fala mais devagar/claro · >1 mais rápido (TTS_SPEED)
 
     @classmethod
     def load(cls):
         return cls(
             voice=os.getenv("TTS_VOICE", "pf_dora"),
             device=os.getenv("TTS_DEVICE", "auto"),
+            speed=_float_env("TTS_SPEED", 0.95),
         )
 
 

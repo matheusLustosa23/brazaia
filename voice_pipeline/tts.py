@@ -92,7 +92,7 @@ class KokoroTTS:
 
     def synth(self, texto: str) -> bytes:
         chunks = []
-        for r in self.pipe(texto, self.cfg.voice):
+        for r in self.pipe(texto, self.cfg.voice, speed=self.cfg.speed):
             a = r.audio
             if a is None:
                 continue
