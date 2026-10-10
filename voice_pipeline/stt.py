@@ -158,7 +158,10 @@ def _dedupe(words: list[str]) -> list[str]:
 
 _HALUC_WORDS = {"obrigado", "obrigada", "tchau", "valeu", "pessoal", "gente", "muito", "até",
                 "logo", "próxima", "amara", "org", "legenda", "legendas", "inscreva-se",
-                "compartilhe", "curta"}
+                "compartilhe", "curta",
+                # lixo em inglês/ruído que Parakeet/Whisper chutam em silêncio
+                "i", "think", "thinking", "okay", "ok", "yeah", "yes", "you", "thank", "thanks",
+                "bye", "so", "well", "um", "uh", "hmm", "the", "oh", "like", "right", "thank you"}
 _HALUC_FRASES = {"legendas pela comunidade amara.org", "legendas pela comunidade",
                  "obrigado por assistir", "obrigada por assistir"}
 

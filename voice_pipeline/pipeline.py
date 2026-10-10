@@ -14,7 +14,7 @@ import os
 import asyncio
 import numpy as np
 
-from .vad import SilenceEndpointer, rms
+from .vad import SilenceEndpointer, rms, make_speech_gate
 from .stt import Stabilizer, collapse_repeats, is_hallucination
 from .tts import clean_for_speech, SentenceChunker
 
@@ -32,6 +32,8 @@ class VoicePipeline:
         self.sr = cfg.audio.sample_rate
         self.stab = Stabilizer()
         self.endpointer = SilenceEndpointer(cfg.vad)
+        self.gate = make_speech_gate(self.sr)                 # Silero VAD (ou None → RMS)
+        self.vad_prob = float(os.getenv("VAD_SPEECH_PROB", "0.5"))
         self.history: list[dict] = []
 
         self._cancel = asyncio.Event()
@@ -96,6 +98,13 @@ class VoicePipeline:
         prompt = " ".join(self.stab.committed[-40:])
         return self.transcriber.transcribe(audio, prompt)
 
+    def _is_speech(self, audio) -> bool:
+        """Fala presente? Silero (neural) se disponível, senão RMS. É o que barra ruído→STT."""
+        if self.gate is not None:
+            return self.gate.speech_prob(audio) >= self.vad_prob
+        onset_win = int(self.sr * self.cfg.vad.onset_window_s)
+        return rms(audio, onset_win) >= self.cfg.vad.rms_threshold
+
     async def _listen_step(self) -> bool:
         """Um passo de escuta. Retorna True se um turno foi fechado (→ ir pra RESPOND)."""
         await asyncio.sleep(self.cfg.stt.hop_s)
@@ -103,8 +112,7 @@ class VoicePipeline:
         if len(audio) < self.sr * self.cfg.vad.min_speech_s:
             return False
 
-        onset_win = int(self.sr * self.cfg.vad.onset_window_s)
-        if rms(audio, onset_win) < self.cfg.vad.rms_threshold:
+        if not self._is_speech(audio):
             # silêncio: talvez feche o turno
             self.endpointer.update_silence(self.cfg.stt.hop_s)
             if self.stab.has_text():
