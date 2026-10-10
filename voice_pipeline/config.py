@@ -130,16 +130,22 @@ class LLMCfg:
 
 @dataclass
 class TTSCfg:
-    voice: str = "pf_dora"            # voz PT-BR do Kokoro (pf_dora=fem · pm_alex/pm_santa=masc)
+    engine: str = "kokoro"            # kokoro | piper | xtts | chatterbox  (TTS_ENGINE)
+    voice: str = "pf_dora"            # kokoro: pf_dora=fem · pm_alex/pm_santa=masc (TTS_VOICE)
+    speaker: str = "Ana Florence"     # xtts: speaker PRONTO do XTTS-v2 (TTS_SPEAKER)
+    piper_model: str = ""             # piper: caminho do .onnx (PIPER_MODEL)
     lang_code: str = "p"              # 'p' = português no Kokoro
-    device: str = "auto"              # auto → cuda se o torch enxergar GPU, senão cpu (kokoro roda bem na CPU)
+    device: str = "auto"              # auto → cuda se o torch enxergar GPU, senão cpu
     first_chunk_chars: int = 20       # 1º trecho curto → TTFA (time-to-first-audio) baixo
-    speed: float = 0.95               # <1 fala mais devagar/claro · >1 mais rápido (TTS_SPEED)
+    speed: float = 0.95               # kokoro: <1 fala mais devagar/claro · >1 mais rápido (TTS_SPEED)
 
     @classmethod
     def load(cls):
         return cls(
+            engine=os.getenv("TTS_ENGINE", "kokoro").lower(),
             voice=os.getenv("TTS_VOICE", "pf_dora"),
+            speaker=os.getenv("TTS_SPEAKER", "Ana Florence"),
+            piper_model=os.getenv("PIPER_MODEL", ""),
             device=os.getenv("TTS_DEVICE", "auto"),
             speed=_float_env("TTS_SPEED", 0.95),
         )

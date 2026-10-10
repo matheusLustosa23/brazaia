@@ -33,7 +33,7 @@ from .config import Config
 from .capture import AudioBuffer
 from .stt import make_transcriber
 from .llm import VLLMResponder
-from .tts import KokoroTTS
+from .tts import make_synth
 from .pipeline import VoicePipeline
 
 
@@ -95,7 +95,7 @@ class WSOutput:
 async def _amain(cfg: Config):
     print("[server] carregando modelos (STT + TTS)…", flush=True)
     transcriber = make_transcriber(cfg.stt)       # carrega UMA vez, compartilhado
-    tts = KokoroTTS(cfg.tts, cfg.audio.tts_sample_rate)
+    tts = make_synth(cfg.tts, cfg.audio.tts_sample_rate)   # TTS_ENGINE: kokoro|piper|xtts|chatterbox
     host = os.getenv("VOICE_WS_HOST", "0.0.0.0")
     port = int(os.getenv("VOICE_WS_PORT", "8765"))
 
