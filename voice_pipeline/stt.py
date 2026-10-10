@@ -135,7 +135,7 @@ class Stabilizer:
         """Fecha o turno: tudo que estava provisório vira firme; devolve o texto final limpo."""
         for (w, _, _) in self.prev:
             self.committed.append(w)
-        final = " ".join(_dedupe(self.committed)).strip()
+        final = collapse_repeats(" ".join(_dedupe(self.committed))).strip()   # tira alucinação repetida
         self.reset()
         return final
 
@@ -154,3 +154,26 @@ def _dedupe(words: list[str]) -> list[str]:
             continue
         out.append(w)
     return out
+
+
+def collapse_repeats(text: str) -> str:
+    """Colapsa blocos de 1–3 palavras repetidos 3+ vezes seguidas — alucinação do Whisper em ruído
+    de fundo ('E aí E aí E aí', 'Eai Eai Eai'). Mantém 1 cópia; conservador (exige 3 repetições)."""
+    w = text.split()
+    n = len(w)
+    out: list[str] = []
+    i = 0
+    while i < n:
+        collapsed = False
+        for size in (3, 2, 1):
+            if i + size * 3 <= n:                       # precisa de ≥3 repetições do bloco
+                block = w[i:i + size]
+                j = i + size
+                reps = 1
+                while j + size <= n and [x.lower() for x in w[j:j + size]] == [x.lower() for x in block]:
+                    reps += 1; j += size
+                if reps >= 3:
+                    out.extend(block); i = j; collapsed = True; break
+        if not collapsed:
+            out.append(w[i]); i += 1
+    return " ".join(out)

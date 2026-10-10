@@ -48,7 +48,7 @@ class AudioCfg:
 
 @dataclass
 class VADCfg:
-    rms_threshold: float = 0.015      # abaixo disso = silêncio (ajuste ao seu mic/ambiente)
+    rms_threshold: float = 0.02       # abaixo disso = silêncio; ↑ se o ruído de fundo for transcrito
     onset_window_s: float = 0.3       # janela de RMS p/ detectar início de fala
     end_silence_s: float = 1.2        # silêncio que fecha o turno
     cont_mult: float = 2.5            # espera mais se a frase terminou em palavra de continuação
@@ -64,7 +64,7 @@ class VADCfg:
     @classmethod
     def load(cls):
         return cls(
-            rms_threshold=_float_env("VAD_RMS_THRESHOLD", 0.015),
+            rms_threshold=_float_env("VAD_RMS_THRESHOLD", 0.02),
             end_silence_s=_float_env("VAD_END_SILENCE_S", 1.2),
         )
 

@@ -14,7 +14,7 @@ import asyncio
 import numpy as np
 
 from .vad import SilenceEndpointer, rms
-from .stt import Stabilizer
+from .stt import Stabilizer, collapse_repeats
 from .tts import clean_for_speech, SentenceChunker
 
 
@@ -120,7 +120,7 @@ class VoicePipeline:
         committed, partial, agreed_end = self.stab.step(hyp)
         if agreed_end > 0.4:                 # já firmamos até aqui: descarta áudio antigo (deriva menos)
             self.buf.drop_front(int((agreed_end - 0.3) * self.sr))
-        self.tx.user_partial((committed + " " + partial).strip())
+        self.tx.user_partial(collapse_repeats((committed + " " + partial).strip()))
         return False
 
     # ---------- barge-in (disparado pelo CLIENT) ----------

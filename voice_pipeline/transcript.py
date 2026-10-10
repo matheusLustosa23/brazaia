@@ -26,7 +26,11 @@ class Transcript:
 
     # --- usuário ---
     def user_partial(self, text: str):
-        self._w(f"{CLEAR_LINE}{CYAN}🫵 você:{RST} {text or '…'}")
+        import shutil
+        cols = shutil.get_terminal_size((100, 24)).columns
+        avail = max(10, cols - 12)                       # cabe em 1 linha (prefixo "🫵 você: ")
+        shown = text if len(text) <= avail else "…" + text[-(avail - 1):]   # mostra o FIM (ao vivo)
+        self._w(f"{CLEAR_LINE}{CYAN}🫵 você:{RST} {shown or '…'}")
         self._open = "user"
 
     def user_final(self, text: str):
