@@ -19,12 +19,50 @@ import numpy as np
 
 
 # ───────── texto ─────────
+_SUP = {"²": " ao quadrado ", "³": " ao cubo ", "⁰": " elevado a zero ",
+        "⁴": " elevado a quatro ", "⁵": " elevado a cinco ", "ⁿ": " elevado a n ", "¹": ""}
+
+
+def mathspeak(t: str) -> str:
+    """Converte notação matemática → fala em português (pro TTS não soletrar 'p a b').
+    Ex.: 'P(A|B) = P(A ∩ B) / P(B)' → 'P de A dado B igual a P de A interseção B dividido por P de B'."""
+    # potências
+    t = re.sub(r"\^\s*2\b", " ao quadrado ", t)
+    t = re.sub(r"\^\s*3\b", " ao cubo ", t)
+    t = re.sub(r"\^\s*([0-9A-Za-z]+)", r" elevado a \1 ", t)
+    for k, v in _SUP.items():
+        t = t.replace(k, v)
+    # fatorial: letra/número isolado + !  ou  )!   (NÃO mexe em exclamação tipo 'Vamos!')
+    t = t.replace(")!", ") fatorial ")
+    t = re.sub(r"\b([A-Za-z0-9])!", r"\1 fatorial ", t)
+    # notação de função/probabilidade: 'P(' → 'P de '  (letra colada no parêntese)
+    t = re.sub(r"\b([A-Za-z])\s*\(", r"\1 de ", t)
+    # símbolos matemáticos
+    t = t.replace("e/ou", "e ou")
+    for k, v in {
+        "|": " dado ", "∩": " interseção ", "∪": " união ", "∈": " pertence a ",
+        "≥": " maior ou igual a ", "≤": " menor ou igual a ", "≠": " diferente de ",
+        "≈": " aproximadamente ", "∑": " somatório de ", "Σ": " somatório de ",
+        "∞": " infinito ", "√": " raiz quadrada de ", "±": " mais ou menos ",
+        "×": " vezes ", "⋅": " vezes ", "·": " vezes ", "÷": " dividido por ", "/": " dividido por ",
+    }.items():
+        t = t.replace(k, v)
+    t = re.sub(r"\s\*\s", " vezes ", t); t = t.replace("*", " vezes ")
+    t = re.sub(r"\s=\s", " igual a ", t); t = t.replace("=", " igual a ")
+    t = re.sub(r"\s\+\s", " mais ", t)
+    t = re.sub(r"\s-\s", " menos ", t)                 # só hífen cercado de espaço (não quebra palavra)
+    t = re.sub(r"[()\[\]{}]", " ", t)                   # tira parênteses restantes (grupos) → fala corrida
+    return re.sub(r"\s+", " ", t).strip()
+
+
 def clean_for_speech(t: str) -> str:
     t = re.sub(r"```.*?```", " ", t, flags=re.S)
     t = re.sub(r"`([^`]*)`", r"\1", t)
-    t = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", t)
-    t = re.sub(r"[*_#>|]+", " ", t)
+    t = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", t)      # links
+    t = re.sub(r"\*\*([^*]+)\*\*", r"\1", t)            # **negrito** (preserva o * solto p/ multiplicação)
+    t = re.sub(r"[#>_]+", " ", t)
     t = re.sub(r"[\U0001F000-\U0001FAFF\U00002600-\U000027BF]+", "", t)
+    t = mathspeak(t)                                    # math → fala PT (antes do TTS)
     return re.sub(r"\s+", " ", t).strip()
 
 
