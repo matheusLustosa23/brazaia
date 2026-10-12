@@ -38,3 +38,4 @@ htmlcov/
 *.sqlite3
 *.db
 data
+docs
