@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     
     # voz — STT
     voice_stt_engine: str = "whisper"        # whisper | parakeet
-    voice_stt_model: str = "small"           # benchmark: RTF ~0.11; "large-v3-turbo" p/ +qualidade
+    voice_stt_model: str = "auto"            # auto: large-v3-turbo na GPU / small na CPU; ou fixa (small/medium/...)
     voice_stt_device: str = "auto"           # auto | cuda | cpu (rebaixa p/ base+int8 na CPU)
     voice_stt_compute: str = ""              # ""=auto (float16 na GPU, int8 na CPU)
     voice_language: str = "pt"

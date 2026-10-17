@@ -117,27 +117,44 @@ class Stabilizer:
         return bool(self.committed or self.provisorias)
 
 
+def _detect_device(preferencia: str) -> str:
+    """Resolve o device do STT. 'auto'/'cuda' tentam a GPU (via ctranslate2); senão cpu."""
+    if preferencia not in ("auto", "cuda"):
+        return preferencia                           # "cpu" ou explícito
+    try:
+        import ctranslate2
+        return "cuda" if ctranslate2.get_cuda_device_count() > 0 else "cpu"
+    except Exception:
+        return "cpu"
+
+
+def _resolve_stt(settings) -> tuple[str, str, str]:
+    """Resolve (modelo, device, compute) pelo hardware — função pura, sem carregar nada.
+
+    voice_stt_model='auto' escolhe pela máquina: large-v3-turbo na GPU, small na CPU.
+    É isso que faz "notebook leve × server no talo" sem config por máquina.
+    """
+    device = _detect_device(settings.voice_stt_device)
+    modelo = settings.voice_stt_model
+    compute = settings.voice_stt_compute
+    if modelo == "auto":
+        modelo = "large-v3-turbo" if device == "cuda" else "small"
+    if device == "cpu":                              # rebaixa p/ caber na CPU
+        if modelo.startswith("large"):
+            modelo = "base"                          # large explícito na CPU é inviável p/ realtime
+        if compute in ("", "float16"):
+            compute = "int8"
+    if not compute:
+        compute = "float16"
+    return modelo, device, compute
+
+
 class WhisperASR:
     """faster-whisper (ctranslate2). Motor padrão do projeto. Implementa VoiceASR."""
     def __init__(self, settings):
         from faster_whisper import WhisperModel
-        device = settings.voice_stt_device
-        compute = settings.voice_stt_compute
-        modelo = settings.voice_stt_model
-        if device in ("auto", "cuda"):
-            try:
-                import ctranslate2
-                device = "cuda" if ctranslate2.get_cuda_device_count() > 0 else "cpu"
-            except Exception:
-                device = "cpu"
-        if device == "cpu":                          # rebaixa p/ caber na CPU (voz vira opcional)
-            if modelo.startswith("large"):
-                modelo = "base"                      # large na CPU é inviável p/ realtime
-            if compute in ("", "float16"):
-                compute = "int8"
-        if not compute:
-            compute = "float16"
         import os
+        modelo, device, compute = _resolve_stt(settings)
         threads = max(1, (os.cpu_count() or 8) // 2)
         print(f"[stt] whisper {modelo} @ {device} ({compute})", flush=True)
         self.modelo = WhisperModel(modelo, device=device, compute_type=compute,
