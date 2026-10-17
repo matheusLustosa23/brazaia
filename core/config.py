@@ -46,12 +46,32 @@ class Settings(BaseSettings):
     device_db_path: str = "data/devices.db"
     device_ws_timeout: float = 30.0
     
-    voice_stt_model: str = "small"       # benchmark: RTF ~0.11; "large-v3-turbo" p/ +qualidade
-    voice_beam_size: int = 1
+    # voz — STT
+    voice_stt_engine: str = "whisper"        # whisper | parakeet
+    voice_stt_model: str = "small"           # benchmark: RTF ~0.11; "large-v3-turbo" p/ +qualidade
+    voice_stt_device: str = "auto"           # auto | cuda | cpu (rebaixa p/ base+int8 na CPU)
+    voice_stt_compute: str = ""              # ""=auto (float16 na GPU, int8 na CPU)
     voice_language: str = "pt"
+    voice_beam_size: int = 1
     voice_sample_rate: int = 16_000
-    voice_tts_voice: str = "pm_santa"
-    
+    voice_parakeet_model: str = "nvidia/parakeet-tdt-0.6b-v3"
+    voice_parakeet_stride: float = 0.08
+    # voz — VAD / endpoint
+    voice_vad: str = "auto"                  # auto | silero | rms | off
+    voice_vad_prob: float = 0.5              # limiar de prob. de fala (silero)
+    voice_rms_threshold: float = 0.015       # limiar de energia (fallback rms)
+    voice_end_silence_s: float = 1.2         # silêncio p/ fechar turno
+    voice_min_speech_s: float = 0.3
+    voice_preroll_s: float = 0.6
+    voice_hop_s: float = 0.5                 # passo do loop de escuta
+    # voz — TTS
+    voice_tts_engine: str = "piper"          # piper | kokoro | xtts | chatterbox
+    voice_piper_model: str = ""              # resolvido no lifespan (models/)
+    voice_tts_voice: str = "pm_santa"        # voz do kokoro (fallback)
+    voice_tts_speed: float = 0.95
+    voice_tts_device: str = "auto"
+    voice_tts_sr: int = 24_000
+
     vision_default_source: str = "webcam" 
 
 
