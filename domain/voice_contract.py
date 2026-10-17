@@ -1,7 +1,12 @@
-from typing import Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable, NamedTuple
 import numpy as np
 
-Word = tuple[str, float, float]   # (palavra, início_s, fim_s)
+
+class Word(NamedTuple):
+    """Uma palavra transcrita com seus tempos (em segundos). Desempacota como (texto, início, fim)."""
+    texto: str
+    inicio: float
+    fim: float
 
 @runtime_checkable
 class VoiceASR(Protocol):
