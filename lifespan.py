@@ -29,8 +29,9 @@ from application.tools.lembrar import LembrarTool
 from application.services.tool_router import ToolRouter
 from application.services.juiz import Juiz
 from domain.tools.base import ToolRegistry
-from infrastructure.voice.asr import ASR
-from infrastructure.voice.tts import TTS
+from infrastructure.voice.asr import make_asr
+from infrastructure.voice.vad import make_vad
+from infrastructure.voice.tts import make_tts
 from infrastructure.vision.sources import VisionRegistry, WebCam
 from infrastructure.vision.image_index import ImageIndex
 
@@ -132,14 +133,22 @@ async def lifespan(app: FastAPI):
         device=device_container,
         orchestrator=orchestrator,
     )
-    # --- VOICE ---
-    asr = await asyncio.to_thread(
-        ASR, settings.voice_stt_model, "cpu", settings.voice_beam_size
-    )
-    tts = await asyncio.to_thread(TTS, settings.voice_tts_voice)
-    
-   
+    # --- VOICE (opcional: se a dep de um engine faltar, desabilita sem derrubar a API) ---
+    if not settings.voice_piper_model:
+        for p in ("models/pt_BR-faber-medium.onnx", "pt_BR-faber-medium.onnx"):
+            if os.path.exists(p):
+                settings.voice_piper_model = p
+                break
+    try:
+        asr = await asyncio.to_thread(make_asr, settings)
+        vad = await asyncio.to_thread(make_vad, settings)
+        tts = await asyncio.to_thread(make_tts, settings, settings.voice_tts_sr)
+    except Exception as e:
+        asr = vad = tts = None
+        logger.warning("voz desabilitada: %s", e)
+
     app.state.asr = asr
+    app.state.vad = vad
     app.state.tts = tts
     app.state.image_index = image_index
     app.state.vision = vision
