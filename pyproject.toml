@@ -25,6 +25,8 @@ dependencies = [
     "plyer>=2.1.0",
     "pillow>=12.3.0",
     "win11toast>=0.36.3 ; sys_platform == 'win32'",
+    "silero-vad>=6.2.3",
+    "piper-tts>=1.8.0",
 ]
 
 [dependency-groups]
