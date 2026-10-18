@@ -226,8 +226,12 @@ class VoiceSession:
                         await self.emit({"type": "state", "estado": "detectando"})
         except asyncio.CancelledError:
             raise
-        except Exception:
-            logger.exception("[voz] run() crashou — loop encerrado")
+        except Exception as e:
+            logger.exception("[voz] run() crashou: %s: %s", type(e).__name__, e)
+            try:
+                await self.emit({"type": "error", "text": f"[run crashou] {type(e).__name__}: {e}"})
+            except Exception:
+                pass
 
     async def shutdown(self) -> None:
         self.quit = True
