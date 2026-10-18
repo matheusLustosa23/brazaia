@@ -27,6 +27,7 @@ class Settings(BaseSettings):
 
     # modelo + orçamento de contexto (defaults travados pela arquitetura)
     model_name: str = "cyankiwi/Qwen3-VL-8B-Instruct-AWQ-4bit"
+    tokenizer_path: str = ""   # repo HF p/ contar tokens; vazio = usa model_name (alias do vLLM não carrega)
     # model_name: str = "QuantTrio/Qwen3-VL-30B-A3B-Instruct-AWQ"
     max_context_tokens: int = 45056
     reserved_output_tokens: int =  8192

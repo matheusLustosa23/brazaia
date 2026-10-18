@@ -47,7 +47,7 @@ async def lifespan(app: FastAPI):
     context = ContextManager(
         budget=settings.max_context_tokens,
         reserved_output=settings.reserved_output_tokens,
-        count_tokens=lambda msgs: tokenizer.count_tokens(msgs, settings.model_name),
+        count_tokens=lambda msgs: tokenizer.count_tokens(msgs),   # usa tokenizer_path (alias do vLLM não carrega)
         llm=llm,
     )
     
