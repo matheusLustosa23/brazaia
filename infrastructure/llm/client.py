@@ -34,6 +34,21 @@ def _apply_no_think(kwargs: dict[str, Any]) -> None:
     ctk["enable_thinking"] = False
     extra["chat_template_kwargs"] = ctk
     kwargs["extra_body"] = extra
+
+
+def _system_no_inicio(messages: list[dict]) -> list[dict]:
+    """vLLM/Qwen exige 'system' só no começo. Um system injetado no MEIO do fluxo
+    (skeleton/aviso/guard do orchestrator) vira 'user' pra não quebrar com
+    '400 - System message must be at the beginning'."""
+    out: list[dict] = []
+    viu_outro_role = False
+    for m in messages:
+        if m.get("role") == "system":
+            out.append({**m, "role": "user"} if viu_outro_role else m)
+        else:
+            viu_outro_role = True
+            out.append(m)
+    return out
 from domain.exceptions.llm_exceptions import LLMUnavailable,LLMTimeout
 from collections.abc import AsyncIterator
 
@@ -87,7 +102,7 @@ class OpenAILLMClient:
         **opts: Any
     ) -> Completion:
         """Chamada não-stream. Function calling NATIVO via `tools`/`tool_choice`."""
-        kwargs: dict[str, Any] = dict(model=self._model,messages=messages,**opts)
+        kwargs: dict[str, Any] = dict(model=self._model,messages=_system_no_inicio(messages),**opts)
         kwargs.setdefault("max_tokens", self._max_out)
         if tools:
             kwargs["tools"] = tools
@@ -176,7 +191,7 @@ class OpenAILLMClient:
         O vLLM emite tool-calls em fragmentos (índice, nome parcial, arguments parciais).
         O acúmulo/parse final dos arguments fica a cargo do consumidor (feat-agent-loop).
         """
-        kwargs: dict[str, Any] = dict(model=self._model, messages=messages, stream=True, **opts)
+        kwargs: dict[str, Any] = dict(model=self._model, messages=_system_no_inicio(messages), stream=True, **opts)
         kwargs.setdefault("max_tokens", self._max_out)
         if tools:
             kwargs["tools"] = tools
