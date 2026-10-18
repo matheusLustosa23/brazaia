@@ -39,3 +39,4 @@ htmlcov/
 *.db
 data
 docsmodels/
+docs
