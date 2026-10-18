@@ -37,9 +37,10 @@ def _apply_no_think(kwargs: dict[str, Any]) -> None:
 
 
 def _system_no_inicio(messages: list[dict]) -> list[dict]:
-    """vLLM/Qwen exige 'system' só no começo. Um system injetado no MEIO do fluxo
-    (skeleton/aviso/guard do orchestrator) vira 'user' pra não quebrar com
-    '400 - System message must be at the beginning'."""
+    """Ajusta as mensagens aos 2 requisitos do template Qwen3/vLLM:
+    (1) 'system' só no começo — system injetado no meio (skeleton/aviso/guard) vira 'user';
+    (2) tem que existir um 'user' — chamadas só-system (ex.: juiz) têm o último system virado user.
+    Evita os 400 'System message must be at the beginning' e 'No user query found in messages'."""
     out: list[dict] = []
     viu_outro_role = False
     for m in messages:
@@ -48,6 +49,11 @@ def _system_no_inicio(messages: list[dict]) -> list[dict]:
         else:
             viu_outro_role = True
             out.append(m)
+    if out and not any(m.get("role") == "user" for m in out):   # req (2): garante ao menos 1 user
+        for i in range(len(out) - 1, -1, -1):
+            if out[i].get("role") == "system":
+                out[i] = {**out[i], "role": "user"}
+                break
     return out
 from domain.exceptions.llm_exceptions import LLMUnavailable,LLMTimeout
 from collections.abc import AsyncIterator
