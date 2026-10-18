@@ -176,48 +176,58 @@ class VoiceSession:
         state = "LISTEN"
         self.ep.reset()
         await self.emit({"type": "state", "estado": "detectando"})
-        while not self.quit:
-            if state == "LISTEN":
-                await asyncio.sleep(self.s.voice_hop_s)
-                audio = self.buf.copy()
-                if len(audio) < self.sr * self.s.voice_min_speech_s:
-                    continue
-                if not self._is_speech(audio):                     # silêncio → endpoint
-                    self.ep.add_silence(self.s.voice_hop_s)
-                    if self.stab.has_text() and self.ep.ended(self.stab.tail_word()):
-                        final = self.stab.flush()
-                        self.buf = np.zeros(0, np.float32)
+        try:
+            while not self.quit:
+                if state == "LISTEN":
+                    await asyncio.sleep(self.s.voice_hop_s)
+                    audio = self.buf.copy()
+                    if len(audio) < self.sr * self.s.voice_min_speech_s:
+                        continue
+                    speech = self._is_speech(audio)
+                    logger.info("[voz] LISTEN buf=%.1fs speech=%s sil=%.1f committed=%d",
+                                len(audio) / self.sr, speech, self.ep.silencio, len(self.stab.committed))
+                    if not speech:                                 # silêncio → endpoint
+                        self.ep.add_silence(self.s.voice_hop_s)
+                        if self.stab.has_text() and self.ep.ended(self.stab.tail_word()):
+                            final = self.stab.flush()
+                            self.buf = np.zeros(0, np.float32)
+                            self.ep.reset()
+                            logger.info("[voz] FINAL %r (haluc=%s)", final, is_hallucination(final))
+                            if final and not is_hallucination(final):
+                                await self.emit({"type": "final", "text": final})
+                                self._last_stt_ms = self._stt_ms  # STT deste turno
+                                self._stt_ms = 0.0
+                                self._cancel.clear()
+                                self._barged = False
+                                self._task = asyncio.create_task(self._respond(final))
+                                state = "RESPOND"
+                        elif not self.stab.has_text():
+                            self.buf = self.buf[-int(self.sr * self.s.voice_preroll_s):]   # só pré-roll
+                        continue
+                    self.ep.reset()                                # tem fala → transcreve
+                    prompt = " ".join(self.stab.committed[-40:])
+                    _t = time.perf_counter()
+                    hyp = await asyncio.to_thread(self.asr.transcribe_words, audio, prompt)
+                    self._stt_ms += (time.perf_counter() - _t) * 1000
+                    firme, provisorio, fim = self.stab.step(hyp)
+                    if fim > 0.4:
+                        self.buf = self.buf[int((fim - 0.3) * self.sr):]   # drop_front do já-firmado
+                    parcial = collapse_repeats((firme + " " + provisorio).strip())
+                    logger.info("[voz] partial %r", parcial)
+                    await self.emit({"type": "partial", "text": parcial})
+                else:  # RESPOND
+                    await asyncio.sleep(0.15)
+                    if self._task and self._task.done():
+                        self.buf = self.buf[-int(self.sr * 3.0):] if self._barged else np.zeros(0, np.float32)
+                        self.stab.reset()
                         self.ep.reset()
-                        if final and not is_hallucination(final):
-                            await self.emit({"type": "final", "text": final})
-                            self._last_stt_ms = self._stt_ms      # STT deste turno
-                            self._stt_ms = 0.0
-                            self._cancel.clear()
-                            self._barged = False
-                            self._task = asyncio.create_task(self._respond(final))
-                            state = "RESPOND"
-                    elif not self.stab.has_text():
-                        self.buf = self.buf[-int(self.sr * self.s.voice_preroll_s):]   # só pré-roll
-                    continue
-                self.ep.reset()                                    # tem fala → transcreve
-                prompt = " ".join(self.stab.committed[-40:])
-                _t = time.perf_counter()
-                hyp = await asyncio.to_thread(self.asr.transcribe_words, audio, prompt)
-                self._stt_ms += (time.perf_counter() - _t) * 1000
-                firme, provisorio, fim = self.stab.step(hyp)
-                if fim > 0.4:
-                    self.buf = self.buf[int((fim - 0.3) * self.sr):]   # drop_front do já-firmado
-                await self.emit({"type": "partial",
-                                 "text": collapse_repeats((firme + " " + provisorio).strip())})
-            else:  # RESPOND
-                await asyncio.sleep(0.15)
-                if self._task and self._task.done():
-                    self.buf = self.buf[-int(self.sr * 3.0):] if self._barged else np.zeros(0, np.float32)
-                    self.stab.reset()
-                    self.ep.reset()
-                    self._barged = False
-                    state = "LISTEN"
-                    await self.emit({"type": "state", "estado": "detectando"})
+                        self._barged = False
+                        state = "LISTEN"
+                        await self.emit({"type": "state", "estado": "detectando"})
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("[voz] run() crashou — loop encerrado")
 
     async def shutdown(self) -> None:
         self.quit = True
