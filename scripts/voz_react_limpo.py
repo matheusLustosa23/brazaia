@@ -52,6 +52,12 @@ TOOL_GUIDE = (
     "('registra', 'me avisa', 'gera/mostra/abre um html'). Em 'me explica/me diz', responda só em PALAVRAS, "
     "sem tool. O argumento de render_html NÃO é falado — na voz, diga só que abriu/mostrou."
 )
+BREVITY = (
+    "\n\n[BREVIDADE — regra forte da VOZ] Responda o ESSENCIAL em 1-2 frases, direto ao ponto, como numa "
+    "conversa falada. NÃO dê aula nem enciclopédia. Se o assunto é grande, entregue o NÚCLEO e OFEREÇA "
+    "continuar ('quer que eu detalhe?'). Corte enfeite e contexto extra — mas NUNCA o que é de fato "
+    "relevante pra responder. Pergunta simples = resposta de uma frase."
+)
 
 
 class MicBuffer:
@@ -97,7 +103,7 @@ def responder(client, msgs, tts, player):
         chunk = SentenceChunker()
         stream = client.chat.completions.create(
             model=MODEL, messages=msgs, tools=TOOLS, tool_choice="auto",
-            temperature=0.6, max_tokens=500, stream=True, extra_body=extra)
+            temperature=0.6, max_tokens=220, stream=True, extra_body=extra)
         texto = ""
         calls: dict[int, dict] = {}
         print("🤖 ", end="", flush=True)
@@ -149,10 +155,15 @@ def responder(client, msgs, tts, player):
 
 def main():
     s = get_settings()
+    if not s.voice_piper_model:                      # resolve o modelo do Piper (como o lifespan faz)
+        for p in ("models/pt_BR-faber-medium.onnx", "pt_BR-faber-medium.onnx"):
+            if os.path.exists(p):
+                s.voice_piper_model = p
+                break
     print("carregando STT/VAD/TTS...", flush=True)
     asr, vad, tts = make_asr(s), make_vad(s), make_tts(s, s.voice_tts_sr)
     client = OpenAI(base_url=BASE, api_key=KEY)
-    msgs = [{"role": "system", "content": build_system("voz") + TOOL_GUIDE}]
+    msgs = [{"role": "system", "content": build_system("voz") + TOOL_GUIDE + BREVITY}]
 
     mic = MicBuffer()
     player = sd.OutputStream(samplerate=s.voice_tts_sr, channels=1, dtype="int16")
