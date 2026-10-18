@@ -9,10 +9,12 @@ os scripts de medição (scripts/medir_*.py) importam dele.
 """
 import asyncio
 import logging
+import time
 
 import numpy as np
 
 from application.services.orchestrator import Orchestrator
+from infrastructure.llm.client import no_think_var
 from infrastructure.voice.asr import Stabilizer, is_hallucination, collapse_repeats
 from infrastructure.voice.vad import Endpointer, rms
 from infrastructure.voice.tts import SentenceChunker, para_fala
@@ -85,6 +87,8 @@ class VoiceSession:
         self._task: asyncio.Task | None = None
         self._barged = False
         self.quit = False
+        self._stt_ms = 0.0          # acumula o tempo de STT do turno em andamento
+        self._last_stt_ms = 0.0     # STT do turno que está sendo respondido
 
     # ── entrada do mic (router → a cada PCM16) ──
     def feed(self, pcm: bytes) -> None:
@@ -107,18 +111,26 @@ class VoiceSession:
             except (asyncio.CancelledError, Exception):   # CancelledError é BaseException no 3.8+
                 pass
 
-    async def _speak(self, text: str) -> None:
+    async def _speak(self, text: str) -> float:
+        """Sintetiza e envia uma frase. Retorna o tempo de síntese em ms (0 se nada falado)."""
         fala = para_fala(text)
         if not fala:
-            return
+            return 0.0
+        _t = time.perf_counter()
         pcm = await asyncio.to_thread(self.tts.synth, fala)
+        dt = (time.perf_counter() - _t) * 1000
         if pcm and not self._cancel.is_set():
             await self.send_audio(pcm)
+        return dt
 
     async def _respond(self, text: str) -> None:
         await self.emit({"type": "reply_start"})
         chunk = SentenceChunker()
         reply = ""
+        t0 = time.perf_counter()
+        ttft_ms = ttfa_ms = None        # time-to-first-token / time-to-first-audio
+        tts_ms = 0.0
+        token = no_think_var.set(True)  # desliga o thinking do Qwen3 só neste turno de voz
         try:
             async for ev in self.orch.run(session_id=self.sid, user_message=text,
                                           extra_system=VOICE_STYLE):
@@ -126,18 +138,38 @@ class VoiceSession:
                     break
                 if not isinstance(ev, str):      # orchestrator pode emitir eventos (dict)
                     continue
+                if ttft_ms is None:
+                    ttft_ms = (time.perf_counter() - t0) * 1000
                 reply += ev
                 await self.emit({"type": "reply_delta", "text": ev})
                 for frase in chunk.push(ev):
                     if self._cancel.is_set():
                         break
-                    await self._speak(frase)
+                    tts_ms += await self._speak(frase)
+                    if ttfa_ms is None:
+                        ttfa_ms = (time.perf_counter() - t0) * 1000
             if not self._cancel.is_set():
-                await self._speak(chunk.flush())
+                dt = await self._speak(chunk.flush())
+                tts_ms += dt
+                if ttfa_ms is None and dt:
+                    ttfa_ms = (time.perf_counter() - t0) * 1000
         except asyncio.CancelledError:
             pass
         except Exception as e:
+            logger.exception("erro gerando resposta de voz")   # traceback no server
             await self.emit({"type": "error", "text": f"{type(e).__name__}: {e}"})
+        finally:
+            no_think_var.reset(token)
+        tempos = {
+            "stt_ms": round(self._last_stt_ms),
+            "ttft_ms": round(ttft_ms or 0),      # STT→1º token do LLM ("pensar")
+            "ttfa_ms": round(ttfa_ms or 0),      # STT→1º áudio (o que o usuário SENTE)
+            "tts_ms": round(tts_ms),             # tempo total de síntese
+            "resp_ms": round((time.perf_counter() - t0) * 1000),
+            "chars": len(reply),
+        }
+        logger.info("[voz] tempos %s", tempos)
+        await self.emit({"type": "timing", **tempos})
         await self.emit({"type": "reply_end"})
 
     async def run(self) -> None:
@@ -158,6 +190,8 @@ class VoiceSession:
                         self.ep.reset()
                         if final and not is_hallucination(final):
                             await self.emit({"type": "final", "text": final})
+                            self._last_stt_ms = self._stt_ms      # STT deste turno
+                            self._stt_ms = 0.0
                             self._cancel.clear()
                             self._barged = False
                             self._task = asyncio.create_task(self._respond(final))
@@ -167,7 +201,9 @@ class VoiceSession:
                     continue
                 self.ep.reset()                                    # tem fala → transcreve
                 prompt = " ".join(self.stab.committed[-40:])
+                _t = time.perf_counter()
                 hyp = await asyncio.to_thread(self.asr.transcribe_words, audio, prompt)
+                self._stt_ms += (time.perf_counter() - _t) * 1000
                 firme, provisorio, fim = self.stab.step(hyp)
                 if fim > 0.4:
                     self.buf = self.buf[int((fim - 0.3) * self.sr):]   # drop_front do já-firmado
