@@ -9,7 +9,7 @@ from domain.contracts import LLMClient
 from domain.tools.base import ToolRegistry
 from domain.tools.guard import ToolCtx, GuardResult
 from domain.contracts import SessionStore
-from domain.entities.message import Completion
+from domain.entities.message import Completion, ToolCall
 from application.services.context_service import ContextManager
 from application.services.memory_service import MemoryService
 from application.services.helpers import _strip, persist_image
@@ -356,6 +356,66 @@ class Orchestrator:
             nudges_diverg  = 0
             
         yield "[aviso] limite de passos atingido; respondo com o que apurei até aqui."
+        
+    async def run_react(self, session_id, user_message, *, image=None, device_id=None, extra_system=None):
+        history = await self._session_store.get(session_id)
+        memory_block = await self._memory.render_compact(user_message)
+        system = self._system_prompt() + (f"\n\n{extra_system}" if extra_system else "")
+        active = self._tools.for_device(await self._device_gateway.capabilities(device_id))
+        user_turn = _user_turn(user_message, image)
+        seen: set[tuple[str, bytes]] = set()
+        ids_reais: set[str] = set()
+        saw_image = False
+        for _step in range(MAX_STEPS):
+            if saw_image and VISION_STYLE not in system:
+                system = f"{system}\n\n{VISION_STYLE}"
+            messages = self._context.build(system, memory_block, history, user_turn or {})
+            texto = ""
+            frag: dict[int, dict] = {}                          # index -> {"id","name","args"}
+            async for kind, val in self._llm.stream(
+                messages, tools=active.as_openai_tools(), tool_choice="auto"
+            ):
+                if kind == "text":
+                    texto += val
+                    yield val                                   # streama token-a-token
+                else:                                           # ("tool_call_delta", tcd cru)
+                    f = frag.setdefault(val.index, {"id": "", "name": "", "args": ""})
+                    if val.id:
+                        f["id"] = val.id
+                    if val.function and val.function.name:
+                        f["name"] += val.function.name
+                    if val.function and val.function.arguments:
+                        f["args"] += val.function.arguments
+            if frag:                                            # tool(s) → executa, resultado REAL volta
+                tool_calls = [
+                    ToolCall(id=f["id"] or f"call_{i}", name=f["name"], arguments=orjson.loads(f["args"] or "{}"))
+                    for i, f in sorted(frag.items())
+                ]
+                resp = Completion(content=texto or None, tool_calls=tool_calls, finish_reason="tool_calls")
+                history, saw_image, _ok, _passos = await self._handle_tool_calls(
+                    session_id, history, user_turn, resp, active, device_id, seen, user_message, ids_reais)
+                user_turn = None
+                continue
+            # sem tool → texto já streamado. guard G2 + save (mesmo final do _finalizar_turno).
+            guard = check_output(texto, ids_reais)
+            if not guard.ok:
+                texto = ""
+                async for kind, val in self._llm.stream(messages + [{"role": "system", "content": guard.reason}]):
+                    if kind == "text":
+                        texto += val
+                        yield val
+                if not check_output(texto, ids_reais).ok:
+                    texto = "Não consegui fazer isso agora."
+            if user_turn:
+                history = history + [user_turn]
+            history = history + [{"role": "assistant", "content": texto}]
+            await self._session_store.set(session_id, _strip(history))
+            self._flush_trace(session_id)
+            return
+        yield "[aviso] limite de passos atingido; respondo com o que apurei até aqui."
+
+
+
     
     def _system_prompt(self) -> str:
         return(

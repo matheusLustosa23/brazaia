@@ -132,8 +132,8 @@ class VoiceSession:
         tts_ms = 0.0
         token = no_think_var.set(True)  # desliga o thinking do Qwen3 só neste turno de voz
         try:
-            async for ev in self.orch.run(session_id=self.sid, user_message=text,
-                                          extra_system=VOICE_STYLE):
+            async for ev in self.orch.run_react(session_id=self.sid, user_message=text,
+                                                extra_system=VOICE_STYLE):
                 if self._cancel.is_set():
                     break
                 if not isinstance(ev, str):      # orchestrator pode emitir eventos (dict)
@@ -184,8 +184,8 @@ class VoiceSession:
                     if len(audio) < self.sr * self.s.voice_min_speech_s:
                         continue
                     speech = self._is_speech(audio)
-                    logger.info("[voz] LISTEN buf=%.1fs speech=%s sil=%.1f committed=%d",
-                                len(audio) / self.sr, speech, self.ep.silencio, len(self.stab.committed))
+                    logger.debug("[voz] LISTEN buf=%.1fs speech=%s sil=%.1f committed=%d",
+                                 len(audio) / self.sr, speech, self.ep.silencio, len(self.stab.committed))
                     if not speech:                                 # silêncio → endpoint
                         self.ep.add_silence(self.s.voice_hop_s)
                         if self.stab.has_text() and self.ep.ended(self.stab.tail_word()):
@@ -212,9 +212,11 @@ class VoiceSession:
                     firme, provisorio, fim = self.stab.step(hyp)
                     if fim > 0.4:
                         self.buf = self.buf[int((fim - 0.3) * self.sr):]   # drop_front do já-firmado
-                    parcial = collapse_repeats((firme + " " + provisorio).strip())
-                    logger.info("[voz] partial %r", parcial)
-                    await self.emit({"type": "partial", "text": parcial})
+                    firme_c = collapse_repeats(firme.strip())
+                    prov_c = collapse_repeats(provisorio.strip())
+                    logger.debug("[voz] partial %r ⟨%r⟩", firme_c, prov_c)
+                    await self.emit({"type": "partial", "text": (firme_c + " " + prov_c).strip(),
+                                     "firme": firme_c, "prov": prov_c})
                 else:  # RESPOND
                     await asyncio.sleep(0.15)
                     if self._task and self._task.done():
