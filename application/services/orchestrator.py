@@ -360,7 +360,8 @@ class Orchestrator:
     async def run_react(self, session_id, user_message, *, image=None, device_id=None, extra_system=None):
         history = await self._session_store.get(session_id)
         memory_block = await self._memory.render_compact(user_message)
-        system = self._system_prompt() + (f"\n\n{extra_system}" if extra_system else "")
+        # extra_system (ex.: build_system("voz")) é o system COMPLETO quando vem; senão usa o genérico.
+        system = extra_system if extra_system else self._system_prompt()
         active = self._tools.for_device(await self._device_gateway.capabilities(device_id))
         user_turn = _user_turn(user_message, image)
         seen: set[tuple[str, bytes]] = set()

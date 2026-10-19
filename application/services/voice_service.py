@@ -14,6 +14,7 @@ import time
 import numpy as np
 
 from application.services.orchestrator import Orchestrator
+from application.prompts import build_system
 from infrastructure.llm.client import no_think_var
 from infrastructure.voice.asr import Stabilizer, is_hallucination, collapse_repeats
 from infrastructure.voice.vad import Endpointer, rms
@@ -133,7 +134,7 @@ class VoiceSession:
         token = no_think_var.set(True)  # desliga o thinking do Qwen3 só neste turno de voz
         try:
             async for ev in self.orch.run_react(session_id=self.sid, user_message=text,
-                                                extra_system=VOICE_STYLE):
+                                                extra_system=build_system("voz")):
                 if self._cancel.is_set():
                     break
                 if not isinstance(ev, str):      # orchestrator pode emitir eventos (dict)
