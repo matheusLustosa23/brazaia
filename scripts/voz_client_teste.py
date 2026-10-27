@@ -24,6 +24,7 @@ URL = _BASE if _BASE.endswith("/ws/voice") else _BASE + "/ws/voice"   # aceita b
 SR_IN = 16000      # mic → server
 SR_OUT = 24000     # server → alto-falante
 BLOCK = 1600       # 0.1s @ 16k
+MIC_DEV = os.getenv("MIC_DEVICE", "pulse")   # segue o mic padrão do sistema (pulse/pipewire); ou "HyperX"/índice p/ forçar
 
 
 async def main():
@@ -39,7 +40,7 @@ async def main():
             loop.call_soon_threadsafe(mic_q.put_nowait, pcm)
 
         mic = sd.InputStream(samplerate=SR_IN, channels=1, dtype="float32",
-                             blocksize=BLOCK, callback=on_mic)
+                             blocksize=BLOCK, callback=on_mic, device=MIC_DEV)
         player = sd.OutputStream(samplerate=SR_OUT, channels=1, dtype="int16")
         mic.start()
         player.start()
