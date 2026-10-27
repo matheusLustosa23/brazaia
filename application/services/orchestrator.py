@@ -2,20 +2,17 @@ from __future__ import annotations
 
 import orjson, re
 
-from collections.abc import AsyncIterator
 from typing import Awaitable, Callable,BinaryIO
 
 from domain.contracts import LLMClient
 from domain.tools.base import ToolRegistry
-from domain.tools.guard import ToolCtx, GuardResult
+from domain.tools.guard import ToolCtx
 from domain.contracts import SessionStore
 from domain.entities.message import Completion, ToolCall
 from application.services.context_service import ContextManager
 from application.services.memory_service import MemoryService
 from application.services.helpers import _strip, persist_image
 from application.guards.output import check_output
-from application.services.tool_router import ToolRouter
-from application.services.juiz import Juiz
 from application.services._trace import trace
 from infrastructure.devices.device_gateway import DeviceGateway
 from infrastructure.vision.image_index import ImageIndex
@@ -116,9 +113,6 @@ STUDY_MODE = (
 )
 
 
-async def _always_true(name: str, payload: dict) -> bool:
-    return True
-
 async def deny_by_default(name: str, payload: dict) -> bool:
     """Default seguro: nega destrutiva sem aceite explícito do transporte."""
     return False
@@ -139,9 +133,7 @@ class Orchestrator:
         image_index: ImageIndex, 
         *,
         confirm: ConfirmFn | None = None,
-        audit_log: BinaryIO | None = None,
-        router: ToolRouter | None = None,
-        juiz: Juiz
+        audit_log: BinaryIO | None = None
     ) -> None:
         self._llm = llm
         self._context = context
@@ -153,210 +145,8 @@ class Orchestrator:
         self._session_store = session_store
         self._traces: dict[str, list[dict]] = {}
         self._image_index = image_index
-        self._router = router
-        self._juiz = juiz
-    
-    async def run(
-        self,
-        session_id: str,
-        user_message: str,
-        *,
-        image: str | None = None,
-        device_id: str | None = None,
-        extra_system: str | None = None
-    ) -> AsyncIterator[str]:
-        history = await self._session_store.get(session_id)
-        memory_block = await self._memory.render_compact(user_message)
-        system = self._system_prompt()
-        if extra_system:
-            system = f"{system}\n\n{extra_system}"
-        capabilities = await self._device_gateway.capabilities(device_id)
-        active = self._tools.for_device(capabilities)
-        user_turn: dict | None = _user_turn(user_message, image)
-        seen: set[tuple[str, bytes]] = set()
-        ids_reais: set[str] = set() 
-        nudges_omissao = 0
-        nudges_diverg  = 0
-        sem_progresso  = 0
-        trajetoria: list[str] = []
-        trace(f"===== REQUEST: {user_message}")
-        plano = await self._router.plan(user_message, active) if self._router else []
-        for i, slot in enumerate(plano):
-            slot["id"] = str(i)
-        proximo_id = len(plano)
-        tools_restantes = list(plano)
-      
-        for _step in range(MAX_STEPS):
-            trace(f"==================== {_step + 1} ITERAÇÃO DO LOOP ====================")
-            messages = self._context.build(system, memory_block, history, user_turn or {})
-            skeleton = self._skeleton(user_message, plano, tools_restantes)
-            if skeleton:
-                messages = messages + [skeleton]
-            trace(f"[ctx] passo {_step + 1}: {self._context.count(messages)} tokens · "
-                  f"{len(messages)} msgs · budget {self._context.input_budget}")
-            msg = None
-            #sem tools pra chamar , retorna a mensagem para o user
-            if not tools_restantes:
-                trace(f"===== SEM TOOLS PARA CHAMR")
-                #trace(f"==== ENVIADO PARA O LLM: {messages}")
-                texto = await self._finalizar_turno(
-                    messages=messages,
-                    user_turn=user_turn,
-                    history=history,
-                    ids_reais=ids_reais,
-                    session_id=session_id,
-                    mensagem_llm=None
-                )
-                if trajetoria:
-                    cumpriu, motivo = await self._juiz.aprova_turno(
-                         pedido=user_message, 
-                         trajetoria="\n".join(trajetoria), 
-                         resposta=texto, 
-                         tools=active.describe_for_router()
-                    )
-                    if not cumpriu:
-                        aviso = {"role": "system", "content": (
-                            f"[Revisão do turno] Uma verificação apontou: {motivo}. "
-                            f"Responda ao dono de forma HONESTA sobre o que REALMENTE aconteceu "
-                            f"(veja os resultados das ferramentas) — não afirme o que não foi feito."
-                        )}
-                        texto = await self._finalizar_turno(
-                            messages=messages + [aviso],
-                            user_turn=user_turn,
-                            history=history,
-                            ids_reais=ids_reais,
-                            session_id=session_id,
-                            mensagem_llm=None,
-                        )               
-                yield texto
-                return
-            #trace(f"==== ENVIADO PARA O LLM: {messages}")
-            resposta_llm = await self._llm.complete(
-                messages, tools=active.as_openai_tools(), tool_choice="auto",
-            )
-            
-            tool_requisitada = resposta_llm.tool_calls[0].name if resposta_llm.tool_calls else None
-            mensagem_llm = resposta_llm.content or ""
-            trace(f"[auto]  tools={[{t.name: t.arguments} for t in resposta_llm.tool_calls]} finish={resposta_llm.finish_reason} content={mensagem_llm}")
-            
-            #não chamou tool
-            if tool_requisitada is None:
-                #Motivo plausivio , retornamos ao usuario
-                trace(f"===== LLM NÃO CHAMOU TOOL")
-                if await self._juiz.classifica_omissao(user_message, mensagem_llm, active.describe_for_router()) == "RESPONDER":
-                    trace(f"===== MOTIVO DE OMISSAO PLAUSIVEL")
-                    texto = await self._finalizar_turno(
-                        messages=messages,
-                        user_turn=user_turn,
-                        history=history,
-                        ids_reais=ids_reais,
-                        session_id=session_id,
-                        mensagem_llm=mensagem_llm
-                    )
-                    yield texto
-                    return
-                
-                if nudges_omissao >= 1: 
-                    texto = await self._finalizar_turno(messages, ids_reais, user_turn, history, session_id, None)
-                    yield texto
-                    return
-                
-                nudges_omissao += 1
-                prox_tool, motivo = await self._juiz.corrige_omissao(
-                    pedido=user_message, texto=mensagem_llm,
-                    restante=tools_restantes, trajetoria="\n".join(trajetoria),
-                    tools=active.describe_for_router())
-                prox_tool = prox_tool or tools_restantes[0]["tool"]   # fallback seguro
-                system_extra = {
-                    "role":"system","content":(
-                        f"[Revisão] Uma verificação apontou: {motivo}. A ferramenta adequada agora é "
-                        f"'{prox_tool}'. Chame ela com os argumentos certos, ou relate a falha ao dono.")
-                }
-                if user_turn is not None:
-                    history = history + [user_turn]
-                    user_turn = None
-                history = history + [system_extra]
-                continue
-            # Chamou uma tool fora do plano
-            else:
-                idx_plano = self._slot_pendente(tools_restantes, tool_requisitada)
-                
-                if idx_plano is not None:
-                    msg = resposta_llm
-                    id_exec = tools_restantes[idx_plano]["id"]
-                else:
-                    #se faz sentido , aceitamos , abordamos o plano
-                    trace(f"===== LLM CHAMOU UMA TOOL FORA DO PLANO")
-                    autorizado, ids_substiuidos, prox_tool, motivo = await self._juiz.aceita_divergencia(
-                        pedido=user_message, 
-                        tool_chamada=tool_requisitada, 
-                        args=resposta_llm.tool_calls[0].arguments, 
-                        tools=active.describe_for_router(),
-                        restante=tools_restantes,
-                        porque_llm=resposta_llm.content or "",
-                        trajetoria="\n".join(trajetoria),
-                    )
-                    if autorizado:
-                        trace(f"===== CHAMADA AUTORIZADA - TOOLS {ids_substiuidos} FORAM SUBSTITUIDAS POR {tool_requisitada}")
-                        msg = resposta_llm
-                        tools_restantes = [slot for slot in tools_restantes if slot["id"] not in ids_substiuidos]
-                        slot = {"id": str(proximo_id), "tool": tool_requisitada, "porque": resposta_llm.content}
-                        proximo_id += 1
-                        plano.append(slot)
-                        tools_restantes.append(slot)
-                        id_exec = slot["id"] 
-                    # caso seja divergencia sem sentido -> nudge
-                    else:
-                        trace("===== DIVERGENCIA REJEITADA - nudge corretivo")
-                        if nudges_diverg >= 1:
-                            texto = await self._finalizar_turno(messages, ids_reais, user_turn, history, session_id, None)
-                            yield texto
-                            return
-                        if user_turn is not None:
-                            history = history + [user_turn]
-                            user_turn = None
-                        history = history + [{
-                            "role":"system","content":(
-                                f"[Revisão] Uma verificação da última ação apontou: {motivo}. "
-                                f"A ferramenta adequada agora é '{prox_tool}'. Prossiga com ela e siga o restante do pedido."
-                            )
-                        }]
-                        nudges_diverg += 1
-                        continue
-            
-            
-            history, saw_image, exec_ok, passos = await self._handle_tool_calls(
-                session_id, history, user_turn, msg, active, device_id, seen, user_message, ids_reais
-            )
-            trajetoria += [f"{name} -> {result}" for name, result in passos]
-            trace(f"[trajetoria] {trajetoria}")
-            if exec_ok:
-                tools_restantes = [slot for slot in tools_restantes if slot["id"] != id_exec]
-                sem_progresso = 0
-            else:
-                sem_progresso += 1
-                if sem_progresso >= 2:       # bloqueio/repetição que não anda -> quebra
-                    trace(f"[loop-break] {sem_progresso} passos sem progresso — finalizo honesto")
-                    texto = await self._finalizar_turno(
-                        messages=messages + [{"role": "system", "content": (
-                            "Você travou repetindo ações que NÃO avançam (bloqueadas ou duplicadas). "
-                            "PARE de repetir. Responda ao dono de forma HONESTA: o que você CONSEGUIU "
-                            "fazer (veja os resultados reais) e o que NÃO deu — sem reafirmar o que falhou.")}],
-                        user_turn=user_turn, history=history, ids_reais=ids_reais,
-                        session_id=session_id, mensagem_llm=None,
-                    )
-                    yield texto
-                    return
 
-            if saw_image and VISION_STYLE not in system:
-                system = f"{system}\n\n{VISION_STYLE}"
-                
-            user_turn = None
-            nudges_omissao = 0
-            nudges_diverg  = 0
-            
-        yield "[aviso] limite de passos atingido; respondo com o que apurei até aqui."
-        
+    
     async def run_react(self, session_id, user_message, *, image=None, device_id=None, extra_system=None):
         history = await self._session_store.get(session_id)
         memory_block = await self._memory.render_compact(user_message)
@@ -405,7 +195,7 @@ class Orchestrator:
                 )
                 user_turn = None
                 continue
-            # sem tool → texto já streamado. guard G2 + save (mesmo final do _finalizar_turno).
+   
             guard = check_output(texto, ids_reais)
             if not guard.ok:
                 texto = ""
@@ -422,9 +212,6 @@ class Orchestrator:
             self._flush_trace(session_id)
             return
         yield "[aviso] limite de passos atingido; respondo com o que apurei até aqui."
-
-
-
     
     def _system_prompt(self) -> str:
         return(
@@ -584,76 +371,7 @@ class Orchestrator:
     
     async def create_session(self) -> str:
         return await self._session_store.create()
-    
-    async def _finalizar_turno(
-        self, 
-        messages: list[dict], 
-        ids_reais: set[str],
-        user_turn: dict | None,
-        history: list[dict],
-        session_id: str,
-        mensagem_llm: str | None
-    ) -> str:
-        """Resposta final: streama (1 geração), roda o output guard (G2) e auto-corrige 1×."""
-        if mensagem_llm is None:
-            buf: list[str] = []
-            async for kind, tok in self._llm.stream(messages):
-                if kind == "text":
-                    buf.append(tok)
-            mensagem_llm = "".join(buf)
-            guard = check_output(mensagem_llm, ids_reais)
-            if not guard.ok:
-                aviso = {"role": "system", "content": guard.reason}
-                buf2: list[str] = []
-                async for kind, tok in self._llm.stream(messages + [aviso]):
-                    if kind == "text":
-                        buf2.append(tok)
-                mensagem_llm = "".join(buf2)
-                if not check_output(mensagem_llm, ids_reais).ok:
-                    mensagem_llm  = "Não consegui fazer isso agora."
-
-        if not (mensagem_llm or "").strip():        # stream veio vazio -> nunca devolver ""
-            mensagem_llm = "Fiz o que deu; não consegui concluir o resto agora."
-
-        if user_turn:
-            history = history + [user_turn]
-        history = history + [{"role": "assistant", "content": mensagem_llm}]
-        await self._session_store.set(session_id, _strip(history))
-        self._flush_trace(session_id)
-                
-        return mensagem_llm
-    
-    def _skeleton(self, pedido: str, plano: list[dict[str, str]], restantes: list[dict[str, str]]) -> dict:
-        trace("[SKELETON]")
-        if not plano:
-            return {}
-        ids_rest = {s["id"] for s in restantes}
-        def checklist(slot: dict) -> str:
-            if slot["id"] not in ids_rest: return "✔"
-            if restantes and slot["id"] == restantes[0]["id"]: return "▸"
-            return "☐"
-        passos = "\n".join(
-            f"{checklist(slot)} {i+1}. {slot["porque"]}"
-            for i,slot in enumerate(plano)
-        )
-        feito = [slot["porque"] for slot in plano if slot not in restantes]
-        trace(f"Passos:\n{passos}")
-        trace(f"restante:\n{restantes}")
-        return {
-            "role": "system",
-            "content": (
-                f"O usuário pediu: '{pedido}'.\n"
-                f"Faça NESTA ordem, conferindo o RESULTADO REAL de cada passo antes do próximo:\n{passos}\n"
-                f"Estado → feito: {feito or '[]'} · falta: {[s['porque'] for s in restantes]  or '[]'}.\n"
-                "Se um passo falhar ou pedir permissão, PARE e relate — não pule, não invente id."
-            )
-        }
-    
-    @staticmethod
-    def _slot_pendente(restantes: list[dict], name: str) -> int | None:
-        return next((i for i,tool in enumerate(restantes) if tool["tool"] == name), None)
-    
-    
+            
 def _user_turn(text: str, image: str  | None) -> dict:
     if not image:
         return {"role":"user","content": text}
