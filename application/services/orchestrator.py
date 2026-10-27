@@ -394,7 +394,15 @@ class Orchestrator:
                 ]
                 resp = Completion(content=texto or None, tool_calls=tool_calls, finish_reason="tool_calls")
                 history, saw_image, _ok, _passos = await self._handle_tool_calls(
-                    session_id, history, user_turn, resp, active, device_id, seen, user_message, ids_reais)
+                    session_id, history, 
+                    user_turn, 
+                    resp, 
+                    active, 
+                    device_id, 
+                    seen, 
+                    user_message, 
+                    ids_reais
+                )
                 user_turn = None
                 continue
             # sem tool → texto já streamado. guard G2 + save (mesmo final do _finalizar_turno).
