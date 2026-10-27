@@ -28,7 +28,7 @@ BLOCK = 1600       # 0.1s @ 16k
 
 async def main():
     print(f"conectando em {URL} ...")
-    async with websockets.connect(URL, max_size=None, ping_interval=20) as ws:
+    async with websockets.connect(URL, max_size=None, ping_interval=None) as ws:   # ping off: evita colisão pong×áudio
         print("conectado ✓  — pode falar! (Ctrl+C pra sair)\n")
         loop = asyncio.get_running_loop()
         mic_q: asyncio.Queue[bytes] = asyncio.Queue()
@@ -58,9 +58,12 @@ async def main():
                 ev = json.loads(msg)
                 t = ev.get("type")
                 if t == "partial":
-                    print(f"  … {ev.get('text', '')}", end="\r", flush=True)
+                    firme = ev.get("firme", ev.get("text", ""))
+                    prov = ev.get("prov", "")
+                    # \r\033[K limpa a linha (não empilha); firme normal, provisório em cinza
+                    print(f"\r\033[K  {firme} \033[90m{prov}\033[0m", end="", flush=True)
                 elif t == "final":
-                    print(f"\n🫵  {ev.get('text', '')}")
+                    print(f"\r\033[K🫵  {ev.get('text', '')}")
                 elif t == "reply_start":
                     bot_falando.set()
                     print("🤖 ", end="", flush=True)
