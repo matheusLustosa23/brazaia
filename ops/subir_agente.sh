@@ -6,5 +6,6 @@ export CUDA_DEVICE_ORDER=PCI_BUS_ID      # 0=3090, 1=2060 (determinístico)
 export CUDA_VISIBLE_DEVICES=1            # o agente só enxerga a 2060 → STT/Piper vão pra ela
 cd /c/workspace/brazaia
 source .venv/Scripts/activate
-exec uv run --no-sync uvicorn main:app --host 100.79.27.100 --port 8080
+# loga tudo em agente.log (gitignored) — o braza sobe escondido, entao e aqui que vc le o traceback.
+exec uv run --no-sync uvicorn main:app --host 100.79.27.100 --port 8080 >> /c/workspace/brazaia/agente.log 2>&1
 
