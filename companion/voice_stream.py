@@ -58,7 +58,7 @@ async def conversar_termux(cfg, *, once=False):
     async with websockets.connect(url, max_size=None, ping_interval=None) as ws:
         print(f"🔌 conectado em {url}", flush=True)
         while True:
-            print("🎙  gravando — fale agora…", flush=True)
+            print("🎙  preparando mic…", flush=True)      # o "fale agora" vem do capturar_turno (mic já quente)
             aac = await capturar_turno()                 # bytes AAC (Termux) — SEM converter
             print(f"📤 enviando áudio ({len(aac)} bytes)…", flush=True)
             await ws.send(dumps({"type": "audio_turn", "fmt": "aac"}))   # avisa: o próximo binário é AAC

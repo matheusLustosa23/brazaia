@@ -42,7 +42,10 @@ async def capturar_turno() -> bytes:
     if _IS_TERMUX:
         os.makedirs(_DIR, exist_ok=True)
         aac,  dur = f"{_DIR}/turno.aac",  8
-        await _run_sync(["termux-microphone-record", "-f", aac, "-l", str(dur), "-e", "aac"])
+        await _run_sync(["termux-microphone-record", "-f", aac, "-l", str(dur + 1),
+                         "-e", "aac", "-b", "128000", "-r", "16000", "-c", "1"])  # 16k mono, bitrate alto (STT)
+        await asyncio.sleep(0.8)                               # warmup do mic — absorve a latência de início
+        print("🎙  fale agora…", flush=True)                  # sinal ALINHADO: o mic já está capturando
         await asyncio.sleep(dur)
         await _run_sync(["termux-microphone-record", "-q"])   # para → finaliza o container AAC (header/moov)
         await asyncio.sleep(0.3)
