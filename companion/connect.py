@@ -6,6 +6,8 @@ aparelho (notificar, tirar foto, etc.).
 
 Roda SILENCIOSO em background, logando em ~/ts/connect.log:
   python -m companion.connect            # inicia em BG (silencioso) e volta o prompt
+  python -m companion.connect status     # estado: conectado / reconectando / parado
+  python -m companion.connect stop       # desconecta (mata o connect; p/ testar)
   python -m companion.connect --watch    # acompanha os logs (tail -f)
   python -m companion.connect --fg       # primeiro plano (debug; o supervisor usa este)
 
@@ -96,8 +98,38 @@ def _start_bg() -> None:
     print("⚠ sem resposta em 8s — acompanhe: python -m companion.connect --watch")
 
 
+def _status() -> None:
+    """Mostra o estado da conexao: conectado / reconectando / parado."""
+    import subprocess
+    rodando = subprocess.run(["pgrep", "-f", "companion.connect --fg"],
+                             capture_output=True).returncode == 0
+    ultima = ""
+    if os.path.exists(LOG):
+        linhas = [l for l in open(LOG).read().splitlines() if l.strip()]
+        ultima = linhas[-1] if linhas else ""
+    if not rodando:
+        print("⚫ parado (connect nao esta rodando)")
+    elif "conectado:" in ultima:
+        print(f"🟢 conectado — {ultima}")
+    elif "caiu" in ultima or "💥" in ultima:
+        print(f"🟡 reconectando — {ultima}")
+    else:
+        print(f"⚪ rodando — {ultima or '(sem log ainda)'}")
+
+
+def _stop() -> None:
+    """Desconecta: mata o connect (--fg). Se o supervisor estiver rodando, ele reergue em ~30s."""
+    import subprocess
+    r = subprocess.run(["pkill", "-f", "companion.connect --fg"])
+    print("⏹ connect desconectado" if r.returncode == 0 else "⚫ connect ja estava parado")
+
+
 if __name__ == "__main__":
-    if "--watch" in sys.argv:
+    if "status" in sys.argv:
+        _status()
+    elif "stop" in sys.argv:
+        _stop()
+    elif "--watch" in sys.argv:
         _watch()
     elif "--fg" in sys.argv:
         try:
