@@ -43,9 +43,14 @@ async def capturar_turno() -> bytes:
         os.makedirs(_DIR, exist_ok=True)
         aac,  dur = f"{_DIR}/turno.aac",  8
         await _run_sync(["termux-microphone-record", "-f", aac, "-l", str(dur), "-e", "aac"])
-        await asyncio.sleep(dur + 0.4)
+        await asyncio.sleep(dur)
+        await _run_sync(["termux-microphone-record", "-q"])   # para → finaliza o container AAC (header/moov)
+        await asyncio.sleep(0.3)
         with open(aac, "rb") as f:
-            return f.read()
+            data = f.read()
+        if len(data) < 2000:                                  # quase nada gravado → mic/permissão
+            raise RuntimeError(f"gravação vazia ({len(data)} bytes) — checa mic/permissão do Termux:API")
+        return data
         
     
     from companion.vad import SilenceEndpointer, FRAME_MS

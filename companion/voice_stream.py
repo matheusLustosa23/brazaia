@@ -62,15 +62,19 @@ async def conversar_termux(cfg, *, once=False):
             await ws.send(aac)                           # manda o AAC cru → o server decodifica
 
             audio = bytearray(); texto = ""
-            async for msg in ws:                        # recebe a resposta deste turno
-                if isinstance(msg, (bytes, bytearray)):
-                    audio += msg
-                    continue
-                ev = loads(msg); t = ev.get("type")
-                if   t == "final":       texto = ev["text"]; print("🫵", texto)
-                elif t == "reply_delta": print(ev["text"], end="", flush=True)
-                elif t == "reply_end":   print(); break
-                elif t == "error":       print("⚠", ev["text"]); break
+            try:
+                while True:                             # recebe a resposta deste turno (c/ timeout p/ não travar)
+                    msg = await asyncio.wait_for(ws.recv(), timeout=30)
+                    if isinstance(msg, (bytes, bytearray)):
+                        audio += msg
+                        continue
+                    ev = loads(msg); t = ev.get("type")
+                    if   t == "final":       texto = ev["text"]; print("🫵", texto)
+                    elif t == "reply_delta": print(ev["text"], end="", flush=True)
+                    elif t == "reply_end":   print(); break
+                    elif t == "error":       print("⚠", ev["text"]); break
+            except asyncio.TimeoutError:
+                print("\n⌛ sem resposta do server em 30s (áudio não detectado?)")
 
             if audio:
                 await tocar(bytes(audio), TTS_SAMPLE_RATE)   # toca por arquivo (termux-media-player)
