@@ -1,7 +1,7 @@
 import asyncio, sys
 from companion.config import load_config
 from companion.voice_turn import turno_unico, enviar_arquivo
-
+from companion.plataform import _IS_TERMUX
 
 
 if __name__ == "__main__":
@@ -13,8 +13,14 @@ if __name__ == "__main__":
         from companion.conversation import ConversationSession
         asyncio.run(ConversationSession(cfg).loop())
     elif modo == "once":
-        from companion.voice_stream import conversar
-        asyncio.run(conversar(cfg, once=True))     
+        if _IS_TERMUX:
+            from companion.voice_stream import conversar_termux; asyncio.run(conversar_termux(cfg, once=True))
+        else:
+            from companion.voice_stream import conversar
+            asyncio.run(conversar(cfg, once=True))     
     else:
-        from companion.voice_stream import conversar
-        asyncio.run(conversar(cfg))
+        if _IS_TERMUX:
+            from companion.voice_stream import conversar_termux; asyncio.run(conversar_termux(cfg))
+        else:
+            from companion.voice_stream import conversar
+            asyncio.run(conversar(cfg))
