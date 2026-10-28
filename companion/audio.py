@@ -8,6 +8,9 @@ TTS_SAMPLE_RATE = 24_000   # Kokoro (saída do TTS)
 CHANNELS = 1
 DTYPE = "int16"
 _DIR = os.path.expanduser("~/brazaia")
+MIC_DEVICE = os.getenv("MIC_DEVICE", "pulse")       # segue o mic padrão do sistema; ou "HyperX"/índice
+_MIC_DEV = int(MIC_DEVICE) if MIC_DEVICE.isdigit() else MIC_DEVICE
+
 
 async def capture_chunks(stop_event: asyncio.Event, chunks_ms: int = 30) -> AsyncGenerator[bytes , None]:
     import sounddevice as sd
@@ -24,7 +27,8 @@ async def capture_chunks(stop_event: asyncio.Event, chunks_ms: int = 30) -> Asyn
         channels=CHANNELS,
         dtype=DTYPE,
         callback=callback,
-        blocksize=frames_per_chunks
+        blocksize=frames_per_chunks,
+        device=_MIC_DEV,
     ):
         while not stop_event.is_set():
             chunk = await q.get()
@@ -82,5 +86,24 @@ async def tocar(pcm: bytes, rate: int) -> None:
         await _run_sync(["termux-media-player", "play", wav])
         return
     await play(pcm, rate)
-    
+
+class GaplessPlayer:
+    """Saída contínua p/ streaming de TTS — sem gap entre frases. PCM int16 @ rate."""
+    def __init__(self, rate: int = TTS_SAMPLE_RATE):
+        import sounddevice as sd
+        self._stream = sd.OutputStream(samplerate=rate, channels=1, dtype="int16")
+        self._stream.start()
+
+    async def write(self, pcm: bytes) -> None:
+        import numpy as np
+        # write() é blocante (dá backpressure natural) → fora do event loop:
+        await asyncio.to_thread(self._stream.write, np.frombuffer(pcm, dtype=np.int16))
+
+    def clear(self) -> None:           # usado no 2.3 (barge-in): corta o que está tocando
+        self._stream.abort()           # descarta o buffer pendente na hora
+        self._stream.start()           # reabre pro próximo áudio
+
+    def close(self) -> None:
+        self._stream.stop(); self._stream.close()
+
     
