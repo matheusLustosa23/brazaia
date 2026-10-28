@@ -81,10 +81,18 @@ async def voice_ws(ws: WebSocket) -> None:
                 break
             if msg.get("bytes") is not None:
                 if pending_aac:                      # turno do celular: decodifica AAC → feed + silêncio
-                    pcm = await _decode_aac(msg["bytes"])
+                    pending_aac = False
+                    try:
+                        pcm = await _decode_aac(msg["bytes"])
+                    except FileNotFoundError:
+                        await emit({"type": "error", "text": "ffmpeg não está no PATH do server"})
+                        continue
+                    logger.info("[voz] turno AAC: %d bytes → %d bytes PCM", len(msg["bytes"]), len(pcm))
+                    if not pcm:
+                        await emit({"type": "error", "text": "ffmpeg não decodificou o AAC (0 bytes)"})
+                        continue
                     sess.feed(pcm)
                     sess.feed(b"\x00" * 48000)       # ~1,5s de silêncio → VAD do server fecha o turno
-                    pending_aac = False
                 else:
                     sess.feed(msg["bytes"])          # streaming normal (note): PCM16 contínuo
             elif msg.get("text"):
