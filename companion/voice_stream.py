@@ -1,10 +1,13 @@
-import asyncio, websockets, time
+import asyncio, os, websockets, time
 from companion._json import dumps, loads
 from companion.audio import capture_chunks, GaplessPlayer
 
+# proxy lido na hora da conexao (depois do load_config carregar o ~/.brazaia.env):
+# Termux = socks5://localhost:1055 (tailscaled userspace); desktop = None (direto).
+
 async def conversar(cfg, *, idle_s: float | None = None, once=False):
     url = f"{cfg.server_ws_url}/ws/voice"
-    async with websockets.connect(url, max_size=None, ping_interval=None) as ws:
+    async with websockets.connect(url, max_size=None, ping_interval=None, proxy=os.getenv("SOCKS_PROXY") or None) as ws:
         stop = asyncio.Event()
         bot_falando = asyncio.Event()        
         player = GaplessPlayer() 
@@ -55,7 +58,7 @@ async def conversar_termux(cfg, *, once=False):
     SEM ffmpeg no celular. Suporta once (1 turno) e multi-turno (loop até end-phrase). Wake no celular é separado (botão)."""
     from companion.audio import capturar_turno, tocar, TTS_SAMPLE_RATE
     url = f"{cfg.server_ws_url}/ws/voice"
-    async with websockets.connect(url, max_size=None, ping_interval=None) as ws:
+    async with websockets.connect(url, max_size=None, ping_interval=None, proxy=os.getenv("SOCKS_PROXY") or None) as ws:
         print(f"🔌 conectado em {url}", flush=True)
         while True:
             print("🎙  preparando mic…", flush=True)      # o "fale agora" vem do capturar_turno (mic já quente)

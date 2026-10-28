@@ -31,7 +31,7 @@ def log(*a) -> None:
 async def _sessao(cfg) -> None:
     """Uma conexao: handshake -> escuta tool-calls -> responde. Retorna quando a conexao cai."""
     uri = f"{cfg.server_ws_url}/ws/device/{cfg.device_id}"
-    async with websockets.connect(uri) as ws:
+    async with websockets.connect(uri, proxy=os.getenv("SOCKS_PROXY") or None) as ws:
         hs = {"name": cfg.device_name, "handlers": runtime.list_tools()}
         if CAMERAS:
             hs["cameras"] = CAMERAS

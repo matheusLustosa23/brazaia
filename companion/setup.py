@@ -62,7 +62,9 @@ def setup_tailscale_termux() -> None:
     if "TS_AUTHKEY" not in txt:
         with open(envf, "a") as f: f.write('\nexport TS_AUTHKEY="tskey-auth-COLE_A_SUA_AQUI"\n')
         print(f"⚠ ponha a sua auth-key em {envf} (TS_AUTHKEY)")
-    print("CS1 ok — supervisor + Termux:Boot instalados. (precisa do app Termux:Boot)")
+    if "SOCKS_PROXY" not in txt:                           # CS2b: companion sai pelo tailscaled nativo
+        with open(envf, "a") as f: f.write('export SOCKS_PROXY="socks5://localhost:1055"\n')
+    print("CS1/CS2b ok — supervisor + Termux:Boot + SOCKS_PROXY. (precisa do app Termux:Boot)")
 
 
 if __name__ == "__main__":
