@@ -33,5 +33,41 @@ def setup_termux() -> None:
         print(f"criado {envf} — confira o IP do server (SERVER_WS_URL)")
     print("setup ok — agora arraste o widget 'Fala Comigo' na tela inicial")
 
+
+def setup_tailscale_termux() -> None:
+    """CS1 — instala o supervisor do Tailscale nativo no Termux: move os binarios
+    (do spike ~/ts/tailscale_*/) -> ~/ts/bin, instala supervisor.sh e o entry do
+    Termux:Boot (do repo), e garante o TS_AUTHKEY no ~/.brazaia.env."""
+    import glob
+    home = os.path.expanduser("~")
+    bindir = f"{home}/ts/bin"; os.makedirs(bindir, exist_ok=True)
+
+    for nome in ("tailscale", "tailscaled"):              # 1) binarios -> ~/ts/bin
+        destino = f"{bindir}/{nome}"
+        if not os.path.exists(destino):
+            achados = glob.glob(f"{home}/ts/tailscale_*/{nome}")
+            if achados: shutil.copy(achados[0], destino); _mais_x(destino)
+            else: print(f"⚠ '{nome}' nao achado em ~/ts/tailscale_*/ — rode o download do spike antes")
+
+    os.makedirs(f"{home}/brazaia", exist_ok=True)         # 2) supervisor -> ~/brazaia/
+    shutil.copy("companion/boot/supervisor.sh", f"{home}/brazaia/supervisor.sh")
+    _mais_x(f"{home}/brazaia/supervisor.sh")
+
+    os.makedirs(f"{home}/.termux/boot", exist_ok=True)    # 3) entry do Termux:Boot
+    shutil.copy("companion/boot/termux-boot.sh", f"{home}/.termux/boot/00-brazaia.sh")
+    _mais_x(f"{home}/.termux/boot/00-brazaia.sh")
+
+    envf = f"{home}/.brazaia.env"                         # 4) TS_AUTHKEY no env
+    txt = open(envf).read() if os.path.exists(envf) else ""
+    if "TS_AUTHKEY" not in txt:
+        with open(envf, "a") as f: f.write('\nexport TS_AUTHKEY="tskey-auth-COLE_A_SUA_AQUI"\n')
+        print(f"⚠ ponha a sua auth-key em {envf} (TS_AUTHKEY)")
+    print("CS1 ok — supervisor + Termux:Boot instalados. (precisa do app Termux:Boot)")
+
+
 if __name__ == "__main__":
-    setup_termux() if _IS_TERMUX else print("setup é só do Termux; no desktop não precisa")
+    if _IS_TERMUX:
+        setup_termux()
+        setup_tailscale_termux()
+    else:
+        print("setup é só do Termux; no desktop não precisa")
