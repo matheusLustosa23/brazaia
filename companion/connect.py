@@ -81,6 +81,9 @@ def _watch() -> None:
 def _start_bg() -> None:
     """Inicia o connect DESTACADO em background e confirma: 'conectado' ou 'falhou a conectar'."""
     import subprocess
+    if subprocess.run(["pgrep", "-f", "companion.connect --fg"], capture_output=True).returncode == 0:
+        print("🟢 connect ja esta rodando (use: status / --watch / stop)")
+        return
     os.makedirs(os.path.dirname(LOG), exist_ok=True)
     pos = os.path.getsize(LOG) if os.path.exists(LOG) else 0      # le so o que ESTE start produzir
     logf = open(LOG, "a")
