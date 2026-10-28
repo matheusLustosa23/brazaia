@@ -50,29 +50,16 @@ async def conversar(cfg, *, idle_s: float | None = None, once=False):
             except Exception: pass
 
 
-async def _aac_pra_pcm16(aac_path: str) -> bytes:
-    """ffmpeg: AAC → PCM16 16k mono (raw). Requer `pkg install ffmpeg` no Termux."""
-    p = await asyncio.create_subprocess_exec(
-        "ffmpeg", "-loglevel", "quiet", "-i", aac_path, "-ar", "16000", "-ac", "1", "-f", "s16le", "pipe:1",
-        stdout=asyncio.subprocess.PIPE)
-    pcm, _ = await p.communicate()
-    return pcm
-
-
 async def conversar_termux(cfg, *, once=False):
-    """Voz por TURNO no Termux (celular): grava (AAC) → PCM16 → feed no /ws/voice → toca a resposta.
-    Suporta once (1 turno) e multi-turno (loop até end-phrase). O wake no celular é separado (botão)."""
-    import os
+    """Voz por TURNO no Termux (celular): grava AAC → manda o AAC CRU pro server (que decodifica) → toca a resposta.
+    SEM ffmpeg no celular. Suporta once (1 turno) e multi-turno (loop até end-phrase). Wake no celular é separado (botão)."""
     from companion.audio import capturar_turno, tocar, TTS_SAMPLE_RATE
     url = f"{cfg.server_ws_url}/ws/voice"
-    aac = os.path.expanduser("~/brazaia/turno.aac")
     async with websockets.connect(url, max_size=None, ping_interval=None) as ws:
         while True:
-            await capturar_turno()                       # grava o turno (deixa o .aac no disco)
-            pcm = await _aac_pra_pcm16(aac)              # AAC → PCM16 16k
-            for i in range(0, len(pcm), 3200):          # feed em pedaços
-                await ws.send(pcm[i:i + 3200])
-            await ws.send(b"\x00" * 48000)              # ~1,5s de silêncio → VAD do server fecha o turno
+            aac = await capturar_turno()                 # bytes AAC (Termux) — SEM converter
+            await ws.send(dumps({"type": "audio_turn", "fmt": "aac"}))   # avisa: o próximo binário é AAC
+            await ws.send(aac)                           # manda o AAC cru → o server decodifica
 
             audio = bytearray(); texto = ""
             async for msg in ws:                        # recebe a resposta deste turno
