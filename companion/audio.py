@@ -43,16 +43,18 @@ async def capturar_turno() -> bytes:
         import uuid
         from datetime import datetime
         os.makedirs(_DIR, exist_ok=True)
-        dur = 8
+        teto = int(os.getenv("TURNO_SEG", "0"))               # 0 = só Enter (sem teto); >0 = para no tempo OU no Enter
         aac = f"{_DIR}/turno-{datetime.now():%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:6]}.aac"   # nome ÚNICO (data+id) → nunca lê arquivo velho
         await _run_sync(["termux-microphone-record", "-q"])   # mata gravação PRESA de antes (Termux só grava 1 por vez)
         await asyncio.sleep(0.2)
-        res = await _run_sync(["termux-microphone-record", "-f", aac, "-l", str(dur + 2), "-e", "aac"])
+        limite = str(teto) if teto > 0 else "300"             # -l do termux: o teto, ou 5min de segurança
+        res = await _run_sync(["termux-microphone-record", "-f", aac, "-l", limite, "-e", "aac"])
         if res != "ok":                                       # ex.: "already recording", arg inválido, sem permissão
             raise RuntimeError(f"termux-microphone-record não iniciou: {res}")
         await asyncio.sleep(0.8)                               # warmup do mic — absorve a latência de início
-        print(f"🎙  fale agora… (→ {aac})", flush=True)       # sinal ALINHADO + path p/ ouvir o turno depois
-        await asyncio.sleep(dur)                              # janela de fala
+        await _beep()                                         # sonzinho: "estou ouvindo"
+        print("🎙  ouvindo — Enter pra enviar" + (f" (máx {teto}s)" if teto else "") + f"  (→ {aac})", flush=True)
+        await _esperar_enter(teto)                            # para no Enter OU no teto (o que vier primeiro)
         await _run_sync(["termux-microphone-record", "-q"])   # para → finaliza o container AAC (header/moov)
         await asyncio.sleep(0.3)
         with open(aac, "rb") as f:
@@ -100,6 +102,44 @@ async def tocar(pcm: bytes, rate: int) -> None:
         await _run_sync(["termux-media-player", "play", wav])
         return
     await play(pcm, rate)
+
+
+async def _beep() -> None:
+    """Sonzinho curto (~0,14s) pra sinalizar 'estou ouvindo'. Sem numpy — roda no Termux."""
+    try:
+        import math, array
+        rate, dur, freq = 16000, 0.14, 660
+        n = int(rate * dur)
+        pcm = array.array("h", (int(math.sin(2 * math.pi * freq * i / rate) * 0.25 * 32767) for i in range(n)))
+        await tocar(pcm.tobytes(), rate)
+    except Exception:
+        print("\a", end="", flush=True)                       # fallback: bell do terminal
+
+
+async def _esperar_enter(teto: int) -> None:
+    """Segura o turno até o usuário apertar Enter; se teto>0, no máximo 'teto' segundos
+    (o que vier primeiro). Usa add_reader pra NÃO deixar thread presa no stdin quando o teto estoura."""
+    import sys
+    loop = asyncio.get_running_loop()
+    ev = asyncio.Event()
+    def _ler():
+        try: sys.stdin.readline()
+        except Exception: pass
+        ev.set()
+    try:
+        loop.add_reader(sys.stdin.fileno(), _ler)
+    except (ValueError, OSError):                             # stdin sem fileno/selecionável → cai só no teto
+        if teto > 0: await asyncio.sleep(teto)
+        return
+    try:
+        if teto > 0:
+            try: await asyncio.wait_for(ev.wait(), timeout=teto)
+            except asyncio.TimeoutError: pass
+        else:
+            await ev.wait()
+    finally:
+        try: loop.remove_reader(sys.stdin.fileno())
+        except Exception: pass
 
 class GaplessPlayer:
     """Saída contínua p/ streaming de TTS — sem gap entre frases. PCM int16 @ rate."""
