@@ -25,7 +25,7 @@ async def chat(
     if not req.stream:
         reply = "".join(
             [
-                tok async for tok in orch.run(
+                tok async for tok in orch.run_react(
                     session_id=session_id,
                     device_id=req.device_id,
                     user_message=req.message,
@@ -37,7 +37,7 @@ async def chat(
         parts: list[str] = []
         try:
             yield sse_event({"session_id": session_id}, event="start")
-            async for token in orch.run(
+            async for token in orch.run_react(
                 session_id=session_id,
                 user_message=req.message,
                 device_id=req.device_id

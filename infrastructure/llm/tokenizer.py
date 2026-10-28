@@ -25,10 +25,16 @@ def _flatten(messages: list[dict]) -> list[dict]:
 
 
 def count_tokens(messages: list[dict], model: str | None = None) -> int:
-    model = model or get_settings().model_name
+    s = get_settings()
+    model = model or s.tokenizer_path or s.model_name
     t = _tok(model)
     conversation = _flatten(messages)
-    ids = t.apply_chat_template(conversation, add_generation_prompt=True, return_dict=False)
+    try:
+        ids = t.apply_chat_template(conversation, add_generation_prompt=True, return_dict=False)
+    except Exception:
+        # template estrito (ex.: Qwen3.6 exige user query) → conta o texto cru (aprox. p/ sublistas)
+        texto = "\n".join(str(m.get("content", "")) for m in conversation)
+        ids = t.encode(texto, add_special_tokens=False)
     return len(ids)
 
 

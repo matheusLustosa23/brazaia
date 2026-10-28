@@ -25,6 +25,27 @@ dependencies = [
     "plyer>=2.1.0",
     "pillow>=12.3.0",
     "win11toast>=0.36.3 ; sys_platform == 'win32'",
+    "silero-vad>=6.2.3",
+    "piper-tts>=1.8.0",
+    "torch>=2.6.0",
+]
+
+# torch por plataforma: cu124 (GPU) no Windows/server, cpu no Linux/notebook.
+# Mantém o cu124 estável — o uv sync/run não reverte mais pra CPU.
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu124", marker = "sys_platform == 'win32'" },
+    { index = "pytorch-cpu", marker = "sys_platform == 'linux'" },
 ]
 
 [dependency-groups]

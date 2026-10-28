@@ -1,15 +1,24 @@
-from typing import Protocol, runtime_checkable
-from collections.abc import AsyncIterator
+from typing import Protocol, runtime_checkable, NamedTuple
+import numpy as np
 
+
+class Word(NamedTuple):
+    """Uma palavra transcrita com seus tempos (em segundos). Desempacota como (texto, início, fim)."""
+    texto: str
+    inicio: float
+    fim: float
 
 @runtime_checkable
 class VoiceASR(Protocol):
-    """Speech-to-Text. Stateless: recebe PCM int16 16kHz, devolve texto.
-    O modelo é carregado uma vez (no lifespan) e compartilhado entre conexões."""
+    """STT. `transcribe_words` é o streaming (re-transcreve a janela, devolve palavras c/ tempo)."""
+    def transcribe_words(self, audio: np.ndarray, prompt: str = "") -> list[Word]: ...
 
-    async def transcribe(self, audio: bytes, language: str | None = "pt", fmt: str = "pcm") -> str | None: ...
+@runtime_checkable
+class VoiceVAD(Protocol):
+    """Probabilidade de fala (0..1) nos últimos ~0.5s. Separa fala de ruído."""
+    def speech_prob(self, audio: np.ndarray) -> float: ...
 
 @runtime_checkable
 class VoiceTTS(Protocol):
-    """Text-to-Speech. Recebe tokens (async) do LLM, devolve PCM int16 24kHz por sentença."""
-    def stream(self, tokens: AsyncIterator[str]) -> AsyncIterator[bytes]: ...
+    """TTS por frase: texto → PCM int16 @ 24k."""
+    def synth(self, texto: str) -> bytes: ...

@@ -1,4 +1,5 @@
 from typing import Any
+import contextvars
 import re
 import logging
 import orjson
@@ -18,6 +19,42 @@ from tenacity import (
 )
 from core.config import Settings
 from domain.entities.message import Completion, ToolCall, Usage
+
+# desliga o "thinking" do Qwen3 por contexto async (a voz liga; o chat não mexe).
+# ContextVar = seguro entre sessões concorrentes; propaga pro orch.run consumido no mesmo task.
+no_think_var: contextvars.ContextVar[bool] = contextvars.ContextVar("no_think", default=False)
+
+
+def _apply_no_think(kwargs: dict[str, Any]) -> None:
+    """Injeta chat_template_kwargs.enable_thinking=False se a flag de contexto estiver ligada."""
+    if not no_think_var.get():
+        return
+    extra = dict(kwargs.get("extra_body") or {})
+    ctk = dict(extra.get("chat_template_kwargs") or {})
+    ctk["enable_thinking"] = False
+    extra["chat_template_kwargs"] = ctk
+    kwargs["extra_body"] = extra
+
+
+def _system_no_inicio(messages: list[dict]) -> list[dict]:
+    """Ajusta as mensagens aos 2 requisitos do template Qwen3/vLLM:
+    (1) 'system' só no começo — system injetado no meio (skeleton/aviso/guard) vira 'user';
+    (2) tem que existir um 'user' — chamadas só-system (ex.: juiz) têm o último system virado user.
+    Evita os 400 'System message must be at the beginning' e 'No user query found in messages'."""
+    out: list[dict] = []
+    viu_outro_role = False
+    for m in messages:
+        if m.get("role") == "system":
+            out.append({**m, "role": "user"} if viu_outro_role else m)
+        else:
+            viu_outro_role = True
+            out.append(m)
+    if out and not any(m.get("role") == "user" for m in out):   # req (2): garante ao menos 1 user
+        for i in range(len(out) - 1, -1, -1):
+            if out[i].get("role") == "system":
+                out[i] = {**out[i], "role": "user"}
+                break
+    return out
 from domain.exceptions.llm_exceptions import LLMUnavailable,LLMTimeout
 from collections.abc import AsyncIterator
 
@@ -71,12 +108,13 @@ class OpenAILLMClient:
         **opts: Any
     ) -> Completion:
         """Chamada não-stream. Function calling NATIVO via `tools`/`tool_choice`."""
-        kwargs: dict[str, Any] = dict(model=self._model,messages=messages,**opts)
+        kwargs: dict[str, Any] = dict(model=self._model,messages=_system_no_inicio(messages),**opts)
         kwargs.setdefault("max_tokens", self._max_out)
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice
-            kwargs.setdefault("parallel_tool_calls", False) 
+            kwargs.setdefault("parallel_tool_calls", False)
+        _apply_no_think(kwargs)
         try:
             r = await self._call(**kwargs)
         except RetryError as e:
@@ -159,12 +197,13 @@ class OpenAILLMClient:
         O vLLM emite tool-calls em fragmentos (índice, nome parcial, arguments parciais).
         O acúmulo/parse final dos arguments fica a cargo do consumidor (feat-agent-loop).
         """
-        kwargs: dict[str, Any] = dict(model=self._model, messages=messages, stream=True, **opts)
+        kwargs: dict[str, Any] = dict(model=self._model, messages=_system_no_inicio(messages), stream=True, **opts)
         kwargs.setdefault("max_tokens", self._max_out)
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice
-            kwargs.setdefault("parallel_tool_calls", False) 
+            kwargs.setdefault("parallel_tool_calls", False)
+        _apply_no_think(kwargs)
         try:
             s: AsyncIterator[ChatCompletionChunk] = await self._c.chat.completions.create(**kwargs)
             async for chunk in s:
