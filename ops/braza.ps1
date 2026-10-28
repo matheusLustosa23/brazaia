@@ -38,6 +38,8 @@ switch ($cmd) {
       break
     }
     Write-Host "vLLM no ar. Subindo agente (2060)..."
+    $old = (Get-NetTCPConnection -LocalPort 8080 -ErrorAction SilentlyContinue).OwningProcess
+    if ($old) { Stop-Process -Id $old -Force -ErrorAction SilentlyContinue; Start-Sleep 1 }   # libera a 8080 (evita Errno 10048)
     $p = Start-Process $GitBash -ArgumentList '-lc', $AgentScript -WindowStyle Hidden -PassThru
     $p.Id | Out-File $PidFile
     if (Esperar $AgentUrl 60) { Write-Host "Tudo no ar. Agente PID $($p.Id)." -ForegroundColor Green }
@@ -51,6 +53,8 @@ switch ($cmd) {
       Remove-Item $PidFile -ErrorAction SilentlyContinue
       Write-Host "Agente parado."
     } else { Write-Host "Sem PID do agente (ja parado?)." }
+    $old = (Get-NetTCPConnection -LocalPort 8080 -ErrorAction SilentlyContinue).OwningProcess
+    if ($old) { Stop-Process -Id $old -Force -ErrorAction SilentlyContinue }   # mata agente orfao ainda na 8080
     wsl -u root systemctl stop vllm
     Write-Host "vLLM parado. 3090 liberada. (WSL/iobraza seguem vivos)" -ForegroundColor Green
   }
