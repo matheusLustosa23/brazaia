@@ -7,6 +7,7 @@ set -u
 [ -f "$HOME/.brazaia.env" ] && source "$HOME/.brazaia.env"   # TS_AUTHKEY, DEVICE_ID, SERVER_WS_URL
 TS="$HOME/ts/bin"
 STATE="$HOME/ts/state"
+REPO="$HOME/brazaia"                        # onde o repo esta checado no celular
 mkdir -p "$STATE" "$HOME/ts"
 
 log() { echo "$(date '+%H:%M:%S') $*" >> "$HOME/ts/supervisor.log"; }
@@ -23,9 +24,14 @@ sobe_tailscaled() {
   log "tailscale up ip=$("$TS/tailscale" --socket="$STATE/tailscaled.sock" ip -4 2>/dev/null)"
 }
 
+sobe_connect() {
+  pgrep -f "companion.connect --fg" >/dev/null 2>&1 && return
+  log "subindo connect (device no server)..."
+  ( cd "$REPO" && python -m companion.connect --fg >> "$HOME/ts/connect.log" 2>&1 ) &
+}
+
 while true; do
-  sobe_tailscaled
-  # TODO (CS2): garantir o 'connect' (presenca do device no server) vivo aqui tambem,
-  #            saindo pelo SOCKS5 (ALL_PROXY=socks5://localhost:1055).
+  sobe_tailscaled           # garante a tailnet
+  sobe_connect              # garante a presenca do device no server (CS2b: via SOCKS5)
   sleep 30
 done
