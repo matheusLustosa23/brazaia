@@ -40,13 +40,19 @@ async def capturar_turno() -> bytes:
     """Grava UM turno do mic até o silêncio. Devolve PCM 16k mono. (desktop)"""
     
     if _IS_TERMUX:
+        import uuid
+        from datetime import datetime
         os.makedirs(_DIR, exist_ok=True)
-        aac,  dur = f"{_DIR}/turno.aac",  8
-        await _run_sync(["termux-microphone-record", "-f", aac, "-l", str(dur + 1),
-                         "-e", "aac", "-b", "128000", "-r", "16000", "-c", "1"])  # 16k mono, bitrate alto (STT)
+        dur = 8
+        aac = f"{_DIR}/turno-{datetime.now():%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:6]}.aac"   # nome ÚNICO (data+id) → nunca lê arquivo velho
+        await _run_sync(["termux-microphone-record", "-q"])   # mata gravação PRESA de antes (Termux só grava 1 por vez)
+        await asyncio.sleep(0.2)
+        res = await _run_sync(["termux-microphone-record", "-f", aac, "-l", str(dur + 2), "-e", "aac"])
+        if res != "ok":                                       # ex.: "already recording", arg inválido, sem permissão
+            raise RuntimeError(f"termux-microphone-record não iniciou: {res}")
         await asyncio.sleep(0.8)                               # warmup do mic — absorve a latência de início
-        print("🎙  fale agora…", flush=True)                  # sinal ALINHADO: o mic já está capturando
-        await asyncio.sleep(dur)
+        print(f"🎙  fale agora… (→ {aac})", flush=True)       # sinal ALINHADO + path p/ ouvir o turno depois
+        await asyncio.sleep(dur)                              # janela de fala
         await _run_sync(["termux-microphone-record", "-q"])   # para → finaliza o container AAC (header/moov)
         await asyncio.sleep(0.3)
         with open(aac, "rb") as f:
