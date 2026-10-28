@@ -60,7 +60,7 @@ async def conversar_termux(cfg, *, once=False):
         while True:
             print("🎙  preparando mic…", flush=True)      # o "fale agora" vem do capturar_turno (mic já quente)
             aac = await capturar_turno()                 # bytes AAC (Termux) — SEM converter
-            print(f"📤 enviando áudio ({len(aac)} bytes)…", flush=True)
+            print(f"\n📤 enviando áudio ({len(aac)} bytes)…", flush=True)
             await ws.send(dumps({"type": "audio_turn", "fmt": "aac"}))   # avisa: o próximo binário é AAC
             await ws.send(aac)                           # manda o AAC cru → o server decodifica
             print("⏳ processando no server…", flush=True)
@@ -73,10 +73,11 @@ async def conversar_termux(cfg, *, once=False):
                         audio += msg
                         continue
                     ev = loads(msg); t = ev.get("type")
-                    if   t == "final":       texto = ev["text"]; print("🫵", texto)
+                    if   t == "final":       texto = ev["text"]; print(f"\n🫵 {texto}\n")
+                    elif t == "reply_start": print("🤖 ", end="", flush=True)
                     elif t == "reply_delta": print(ev["text"], end="", flush=True)
-                    elif t == "reply_end":   print(); break
-                    elif t == "error":       print("⚠", ev["text"]); break
+                    elif t == "reply_end":   print("\n"); break
+                    elif t == "error":       print(f"\n⚠ {ev['text']}\n"); break
             except asyncio.TimeoutError:
                 print("\n⌛ sem resposta do server em 30s (áudio não detectado?)")
 
