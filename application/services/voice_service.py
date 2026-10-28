@@ -96,6 +96,24 @@ class VoiceSession:
         a = np.frombuffer(pcm, np.int16).astype(np.float32) / 32768.0
         self.buf = np.concatenate([self.buf, a])
 
+    # ── turno COMPLETO (celular: áudio já fechado, pré-gravado) ──
+    async def handle_turn(self, pcm: bytes) -> None:
+        """Transcreve o áudio inteiro de uma vez e responde. NÃO usa o loop de streaming/VAD
+        (o turno já vem fechado pelo celular; o endpointer incremental é só pro note)."""
+        audio = np.frombuffer(pcm, np.int16).astype(np.float32) / 32768.0
+        _t = time.perf_counter()
+        words = await asyncio.to_thread(self.asr.transcribe_words, audio, "")
+        self._last_stt_ms = (time.perf_counter() - _t) * 1000
+        texto = collapse_repeats(" ".join(w.texto for w in words).strip())
+        logger.info("[voz] turno transcrito %r (haluc=%s)", texto, is_hallucination(texto))
+        await self.emit({"type": "final", "text": texto})
+        if not texto or is_hallucination(texto):
+            await self.emit({"type": "reply_end"})          # fecha o turno mesmo sem fala válida
+            return
+        self._cancel.clear()
+        self._barged = False
+        await self._respond(texto)
+
     def _is_speech(self, audio: np.ndarray) -> bool:
         if self.vad is not None:
             return self.vad.speech_prob(audio) >= self.s.voice_vad_prob

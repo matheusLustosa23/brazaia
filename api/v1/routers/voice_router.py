@@ -91,8 +91,7 @@ async def voice_ws(ws: WebSocket) -> None:
                     if not pcm:
                         await emit({"type": "error", "text": "ffmpeg não decodificou o AAC (0 bytes)"})
                         continue
-                    sess.feed(pcm)
-                    sess.feed(b"\x00" * 48000)       # ~1,5s de silêncio → VAD do server fecha o turno
+                    await sess.handle_turn(pcm)      # áudio fechado → transcreve inteiro e responde (sem VAD streaming)
                 else:
                     sess.feed(msg["bytes"])          # streaming normal (note): PCM16 contínuo
             elif msg.get("text"):
