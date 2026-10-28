@@ -100,6 +100,9 @@ async def tocar(pcm: bytes, rate: int) -> None:
             w.setframerate(rate)
             w.writeframes(pcm)
         await _run_sync(["termux-media-player", "play", wav])
+        # termux-media-player 'play' VOLTA NA HORA (toca em background) → espera a duração real,
+        # senão o próximo turno grava por cima da fala ainda tocando.
+        await asyncio.sleep(len(pcm) / 2 / rate + 0.3)   # int16 mono: bytes/2 = amostras; /rate = segundos
         return
     await play(pcm, rate)
 
