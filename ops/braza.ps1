@@ -12,6 +12,7 @@ $PauseFlag   = Join-Path $env:USERPROFILE '.braza_paused'      # existe = pausad
 $WatchLog    = Join-Path $env:USERPROFILE '.braza_watchdog.log'
 $VllmUrl     = 'http://iobraza:8002/v1/models'
 $AgentUrl    = 'http://100.79.27.100:8080/api/v1/health'
+$TsIp        = '100.79.27.100'   # IP Tailscale do Windows onde o agente BINDA (--host). Sem ele, o agente nao sobe.
 $Gpu0Limite  = 2000   # MiB em uso na 3090 acima disso (SEM vLLM) = tem jogo/app -> nao sobe
 
 function Gpu0Used { [int]((nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -i 0) | Select-Object -First 1) }
@@ -32,7 +33,17 @@ function WslAlive {
   }
 }
 function EnsureVllm { WslAlive; if (-not (VllmActive)) { wsl -u root systemctl start vllm; Esperar $VllmUrl 180 | Out-Null } }
+# o agente binda no IP tailscale; se ele nao existe, o uvicorn morre no startup (Cannot assign requested address)
+function TsIpPresente { return ($null -ne (Get-NetIPAddress -IPAddress $TsIp -ErrorAction SilentlyContinue)) }
+function EnsureTailscale {
+  if (TsIpPresente) { return $true }
+  try { Start-Service Tailscale -ErrorAction SilentlyContinue } catch {}   # sobe o servico do Windows se parado
+  if (Get-Command tailscale -ErrorAction SilentlyContinue) { try { & tailscale up 2>$null | Out-Null } catch {} }
+  for ($i=0; $i -lt 30; $i++) { if (TsIpPresente) { return $true }; Start-Sleep 2 }  # espera o IP ser atribuido (ate 60s)
+  return (TsIpPresente)
+}
 function StartAgent {
+  if (-not (EnsureTailscale)) { return $false }   # sem IP tailscale o agente nao consegue bindar (--host $TsIp) -> nem tenta
   # libera a 8080 (mata agente travado/orfao) e sobe de novo; espera a API responder de verdade
   $old = (Get-NetTCPConnection -LocalPort 8080 -ErrorAction SilentlyContinue).OwningProcess
   if ($old) { Stop-Process -Id $old -Force -ErrorAction SilentlyContinue; Start-Sleep 1 }
@@ -53,6 +64,7 @@ switch ($cmd) {
     if (-not (VllmActive)) { Write-Host "vLLM nao subiu. Ver: wsl -u root journalctl -u vllm -n 50" -ForegroundColor Red; break }
     Write-Host "vLLM no ar. Subindo agente (2060)..."
     if (StartAgent) { Write-Host "Tudo no ar." -ForegroundColor Green }
+    elseif (-not (TsIpPresente)) { Write-Host "Tailscale sem o IP $TsIp -> o agente nao tem onde bindar. Confira o Tailscale." -ForegroundColor Red }
     else { Write-Host "Agente nao respondeu em 60s (ver C:\workspace\brazaia\agente.log)." -ForegroundColor Red }
   }
 
@@ -61,6 +73,7 @@ switch ($cmd) {
     EnsureVllm
     Write-Host "Reiniciando SO o agente (vLLM intacto)..."
     if (StartAgent) { Write-Host "Agente no ar." -ForegroundColor Green }
+    elseif (-not (TsIpPresente)) { Write-Host "Tailscale sem o IP $TsIp -> o agente nao tem onde bindar. Confira o Tailscale." -ForegroundColor Red }
     else { Write-Host "Agente nao respondeu (ver C:\workspace\brazaia\agente.log)." -ForegroundColor Red }
   }
 
@@ -82,6 +95,8 @@ switch ($cmd) {
     nvidia-smi --query-gpu=index,name,memory.used,memory.total --format=csv,noheader
     $vs = "inativo"; if (VllmActive) { $vs = "active" }
     Write-Host "vLLM:   $vs"
+    if (TsIpPresente) { Write-Host "Tailscale: $TsIp OK" -ForegroundColor Green }
+    else { Write-Host "Tailscale: SEM o IP $TsIp -> o agente nao sobe" -ForegroundColor Red }
     if (Test-Path $PauseFlag)   { Write-Host "Agente: PAUSADO p/ jogo -> braza start" -ForegroundColor Yellow }
     elseif (AgentHealthy)       { Write-Host "Agente: ONLINE (API responde)" -ForegroundColor Green }
     elseif (PidAlive)           { Write-Host "Agente: TRAVADO (processo vivo, API MORTA) -> braza restart" -ForegroundColor Red }
@@ -98,9 +113,10 @@ switch ($cmd) {
         if (Test-Path $PauseFlag) { Start-Sleep 30; continue }   # pausado p/ jogo -> nao mexe
         EnsureVllm
         if (-not (AgentHealthy)) {
-          ("{0}  agente DOWN -> reerguendo" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss")) | Out-File -Append $WatchLog
-          StartAgent | Out-Null
-          $st = "FALHOU"; if (AgentHealthy) { $st = "ONLINE" }
+          $causa = if (-not (TsIpPresente)) { "DOWN (tailscale sem IP)" } else { "DOWN" }
+          ("{0}  agente {1} -> reerguendo" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $causa) | Out-File -Append $WatchLog
+          $subiu = StartAgent
+          $st = if ($subiu) { "ONLINE" } elseif (-not (TsIpPresente)) { "FALHOU (tailscale nao subiu)" } else { "FALHOU" }
           ("{0}  agente -> {1}" -f (Get-Date -Format "HH:mm:ss"), $st) | Out-File -Append $WatchLog
         }
       } catch { ("{0}  watchdog erro: {1}" -f (Get-Date -Format "HH:mm:ss"), ($_ | Out-String)) | Out-File -Append $WatchLog }
