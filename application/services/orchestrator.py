@@ -154,13 +154,12 @@ class Orchestrator:
         system = extra_system if extra_system else self._system_prompt()
         if not think:                                      # chave SOFT do Qwen3 (mais confiável que só o enable_thinking
             system = f"{system}\n\n/no_think"              # do template — alguns modelos abliterados ignoram o template)
-        else:                                              # thinking LIGADO: força o raciocínio DENTRO de <think>…</think>
+        else:                                              # thinking LIGADO: marcador de TEXTO PURO (abliterado segue melhor que XML)
             system = (f"{system}\n\n# Formato OBRIGATÓRIO da saída\n"
-                      "Comece SEMPRE a resposta com a tag literal <think>, escreva TODO o seu raciocínio, "
-                      "feche com </think> e só DEPOIS escreva a resposta final ao dono. Exemplo EXATO:\n"
-                      "<think>o dono pediu X; vou responder Y porque Z</think>\n"
-                      "Resposta final aqui.\n"
-                      "NUNCA pule as tags <think></think>.")
+                      "Responda em DUAS partes, nesta ordem e com estas palavras-chave EXATAS (uma vez cada):\n"
+                      "RACIOCÍNIO:\n<aqui todo o seu raciocínio, em pt-BR>\n"
+                      "RESPOSTA:\n<aqui a resposta final ao dono>\n"
+                      "Sempre escreva 'RACIOCÍNIO:' antes e 'RESPOSTA:' antes da resposta final. Nunca pule nenhuma das duas.")
         active = self._tools.for_device(await self._device_gateway.capabilities(device_id))
         user_turn = _user_turn(user_message, image)
         seen: set[tuple[str, bytes]] = set()
