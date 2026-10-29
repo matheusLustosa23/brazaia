@@ -155,9 +155,12 @@ class Orchestrator:
         if not think:                                      # chave SOFT do Qwen3 (mais confiável que só o enable_thinking
             system = f"{system}\n\n/no_think"              # do template — alguns modelos abliterados ignoram o template)
         else:                                              # thinking LIGADO: força o raciocínio DENTRO de <think>…</think>
-            system = (f"{system}\n\nAntes de responder, escreva TODO o seu raciocínio DENTRO de um bloco "
-                      "<think>\n...\n</think> e só DEPOIS, FORA do bloco, escreva a resposta final ao usuário. "
-                      "Sempre feche o </think> antes da resposta.")
+            system = (f"{system}\n\n# Formato OBRIGATÓRIO da saída\n"
+                      "Comece SEMPRE a resposta com a tag literal <think>, escreva TODO o seu raciocínio, "
+                      "feche com </think> e só DEPOIS escreva a resposta final ao dono. Exemplo EXATO:\n"
+                      "<think>o dono pediu X; vou responder Y porque Z</think>\n"
+                      "Resposta final aqui.\n"
+                      "NUNCA pule as tags <think></think>.")
         active = self._tools.for_device(await self._device_gateway.capabilities(device_id))
         user_turn = _user_turn(user_message, image)
         seen: set[tuple[str, bytes]] = set()

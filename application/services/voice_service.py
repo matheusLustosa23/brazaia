@@ -152,7 +152,7 @@ class VoiceSession:
         token = no_think_var.set(True)  # desliga o thinking do Qwen3 só neste turno de voz
         try:
             async for ev in self.orch.run_react(session_id=self.sid, user_message=text,
-                                                extra_system=build_system("voz")):
+                                                extra_system=build_system("voz"), think=False):
                 if self._cancel.is_set():
                     break
                 if not isinstance(ev, str):      # orchestrator pode emitir eventos (dict)
