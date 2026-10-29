@@ -25,9 +25,10 @@ from domain.entities.message import Completion, ToolCall, Usage
 no_think_var: contextvars.ContextVar[bool] = contextvars.ContextVar("no_think", default=False)
 
 
-def _apply_no_think(kwargs: dict[str, Any]) -> None:
-    """Injeta chat_template_kwargs.enable_thinking=False se a flag de contexto estiver ligada."""
-    if not no_think_var.get():
+def _apply_no_think(kwargs: dict[str, Any], force: bool = False) -> None:
+    """Injeta chat_template_kwargs.enable_thinking=False — por force explícito OU flag de contexto.
+    (O explícito é confiável no chat; o contextvar pode não propagar por async generator / StreamingResponse.)"""
+    if not (force or no_think_var.get()):
         return
     extra = dict(kwargs.get("extra_body") or {})
     ctk = dict(extra.get("chat_template_kwargs") or {})
@@ -190,6 +191,7 @@ class OpenAILLMClient:
         messages: list[dict],
         tools: list[dict] | None = None,
         tool_choice: str | dict = "auto",
+        no_think: bool = False,
         **opts: Any
     ) -> AsyncIterator[tuple[str, Any]]:
         """Itera deltas. Cada item: ('text', str) ou ('tool_call_delta', obj).
@@ -203,7 +205,7 @@ class OpenAILLMClient:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice
             kwargs.setdefault("parallel_tool_calls", False)
-        _apply_no_think(kwargs)
+        _apply_no_think(kwargs, no_think)
         try:
             s: AsyncIterator[ChatCompletionChunk] = await self._c.chat.completions.create(**kwargs)
             async for chunk in s:

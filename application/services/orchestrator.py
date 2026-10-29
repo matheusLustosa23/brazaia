@@ -147,11 +147,17 @@ class Orchestrator:
         self._image_index = image_index
 
     
-    async def run_react(self, session_id, user_message, *, image=None, device_id=None, extra_system=None):
+    async def run_react(self, session_id, user_message, *, image=None, device_id=None, extra_system=None, think=True):
         history = await self._session_store.get(session_id)
         memory_block = await self._memory.render_compact(user_message)
         # extra_system (ex.: build_system("voz")) é o system COMPLETO quando vem; senão usa o genérico.
         system = extra_system if extra_system else self._system_prompt()
+        if not think:                                      # chave SOFT do Qwen3 (mais confiável que só o enable_thinking
+            system = f"{system}\n\n/no_think"              # do template — alguns modelos abliterados ignoram o template)
+        else:                                              # thinking LIGADO: força o raciocínio DENTRO de <think>…</think>
+            system = (f"{system}\n\nAntes de responder, escreva TODO o seu raciocínio DENTRO de um bloco "
+                      "<think>\n...\n</think> e só DEPOIS, FORA do bloco, escreva a resposta final ao usuário. "
+                      "Sempre feche o </think> antes da resposta.")
         active = self._tools.for_device(await self._device_gateway.capabilities(device_id))
         user_turn = _user_turn(user_message, image)
         seen: set[tuple[str, bytes]] = set()
@@ -164,7 +170,7 @@ class Orchestrator:
             texto = ""
             frag: dict[int, dict] = {}                          # index -> {"id","name","args"}
             async for kind, val in self._llm.stream(
-                messages, tools=active.as_openai_tools(), tool_choice="auto"
+                messages, tools=active.as_openai_tools(), tool_choice="auto", no_think=not think
             ):
                 if kind == "text":
                     texto += val
@@ -199,7 +205,7 @@ class Orchestrator:
             guard = check_output(texto, ids_reais)
             if not guard.ok:
                 texto = ""
-                async for kind, val in self._llm.stream(messages + [{"role": "system", "content": guard.reason}]):
+                async for kind, val in self._llm.stream(messages + [{"role": "system", "content": guard.reason}], no_think=not think):
                     if kind == "text":
                         texto += val
                         yield val
