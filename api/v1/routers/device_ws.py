@@ -1,15 +1,18 @@
+import logging
+
 import orjson
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from infrastructure.vision.sources import DeviceCamera
 
 from core.container import Container
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/ws", tags=["devices"])
 
 
 @router.websocket("/device/{device_id}")
 async def device_ws(
-    ws: WebSocket, 
+    ws: WebSocket,
     device_id: str
 ) -> None:
     container: Container = ws.app.state.container
@@ -24,19 +27,25 @@ async def device_ws(
             name = device_id if cam is None else f"{device_id}_{CAM_LABEL.get(cam, cam)}"
             ws.app.state.vision.register(DeviceCamera(container.device.gateway, device_id, name=name, camera=cam))
             cam_sources.append(name)
-       
+
         while True:
             msg = await ws.receive_text()
             data = orjson.loads(msg)
-            
+
             await container.device.service.update_heartbeat(device_id)
-            
+
             if "request_id" in data:
                 container.device.gateway.rpc.resolve_response(data["request_id"], data)
-           
+
     except WebSocketDisconnect:
+        pass                                            # queda normal do cliente
+    except OSError as e:
+        logger.info("device_ws %s: conexao caiu (%s) — limpando", device_id, e)  # WinError 121 etc. (Windows/Tailscale)
+    except Exception:
+        logger.exception("device_ws %s: erro inesperado — fechando so esta conexao", device_id)
+    finally:
+        # SEMPRE limpa (qualquer saida): sem isso, WinError 121 deixava device/cameras registrados
+        # como fantasmas e, acumulando, travava o agente (API indisponivel com o processo vivo).
         container.device.gateway.connections.unregister(device_id)
         for name in cam_sources:
             ws.app.state.vision.unregister(name)
-   
-   

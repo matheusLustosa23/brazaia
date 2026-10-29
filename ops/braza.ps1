@@ -15,8 +15,9 @@ $AgentUrl    = 'http://100.79.27.100:8080/api/v1/health'
 $Gpu0Limite  = 2000   # MiB em uso na 3090 acima disso (SEM vLLM) = tem jogo/app -> nao sobe
 
 function Gpu0Used { [int]((nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -i 0) | Select-Object -First 1) }
-function Esperar($url,$seg){ for($i=0;$i -lt $seg;$i++){ try{ Invoke-RestMethod $url -TimeoutSec 2 | Out-Null; return $true }catch{ Start-Sleep 1 } }; return $false }
-function AgentHealthy { try { Invoke-RestMethod $AgentUrl -TimeoutSec 3 | Out-Null; return $true } catch { return $false } }
+function Esperar($url,$seg){ for($i=0;$i -lt $seg;$i++){ try{ Invoke-RestMethod $url -TimeoutSec 5 | Out-Null; return $true }catch{ Start-Sleep 1 } }; return $false }
+# TimeoutSec folgado: o /health consulta o vLLM e pode levar ~2s (mais ainda no load) -> evita o watchdog reiniciar um agente SAUDAVEL
+function AgentHealthy { try { Invoke-RestMethod $AgentUrl -TimeoutSec 8 | Out-Null; return $true } catch { return $false } }
 function VllmActive { return ((((wsl -u root systemctl is-active vllm) | Out-String).Trim()) -eq "active") }
 function PidAlive {
   if (-not (Test-Path $PidFile)) { return $false }
