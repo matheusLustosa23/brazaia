@@ -28,6 +28,7 @@ cfg: CompanionConfig = None  # type: ignore[assignment]  # setado no main (load_
 session_id = None     # capturado do 1º evento do backend
 gravando = False      # True enquanto /voz está gravando (LIVRE, até Enter)
 voz_prep = False      # True no "preparando microfone…" (antes de começar a gravar)
+transcrevendo = False # True entre o Enter e a transcrição chegar (loader "transcrevendo…")
 _grav = None          # GravacaoLivre ativa (start/stop manual, controlado pelo Enter)
 pending_image = None  # data URL da imagem anexada (vai na próxima mensagem)
 pending_name = None   # nome do arquivo anexado (só p/ exibir no card)
@@ -146,6 +147,9 @@ def _prompt_msg() -> StyleAndTextTuples:
         linhas.append(("bold #e5c07b", "   ⚙ preparando microfone…\n"))
     elif gravando:                                             # /voz: gravando livre até o Enter
         linhas.append(("bold #39d353", "   🎤 gravando… (Enter pra parar e jogar no input)\n"))
+    elif transcrevendo:                                        # Enter→transcrição: loader entre parar o mic e o texto chegar
+        sp = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"[frame % 10]
+        linhas.append(("bold #e5c07b", f"   {sp} transcrevendo áudio…\n"))
     if pensando:                                               # colap: raciocinando (não mostra o texto, só o tempo)
         sp = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"[frame % 10]
         secs = (time.monotonic() - think_t0) if think_t0 else 0.0
@@ -355,7 +359,7 @@ async def _ticker():
         frame += 1
         # redesenha com animação viva OU quando o status do device muda (ex.: conectou no boot → vira online
         # sozinho, sem precisar o usuário digitar). Ocioso e estável = sem redraw (a seleção do terminal não some).
-        if respondendo or stream_tail or gravando or voz_prep or estado.device_status != _ult_status:
+        if respondendo or stream_tail or gravando or voz_prep or transcrevendo or estado.device_status != _ult_status:
             _ult_status = estado.device_status
             try: get_app().invalidate()
             except Exception: pass
@@ -397,16 +401,17 @@ async def _iniciar_voz(app) -> None:                   # /voz — começa a grav
     voz_prep = False; gravando = True; app.invalidate()  # rodapé: "gravando… (Enter pra parar)"
 
 async def _parar_voz(app) -> None:                     # Enter durante /voz — para, transcreve e JOGA no input (não envia)
-    global gravando, _grav
+    global gravando, transcrevendo, _grav
     if not gravando or _grav is None:
         return
-    gravando = False; app.invalidate()
+    gravando = False; transcrevendo = True; app.invalidate()   # rodapé: "transcrevendo áudio…" (sem buraco sem sinal)
     try:
         audio = await _grav.parar()
         texto = (await _transcrever(audio)).strip()
     except Exception as e:
-        _grav = None; _p(f"{DIM_A}   ⚠ voz: {e}{R}\n"); app.invalidate(); return
-    _grav = None
+        _grav = None; transcrevendo = False
+        _p(f"{DIM_A}   ⚠ voz: {e}{R}\n"); app.invalidate(); return
+    _grav = None; transcrevendo = False
     if texto:
         app.current_buffer.insert_text(texto.replace("\n", " "))   # → INPUT (sem \n: um \n faria o prompt ENVIAR); você edita/manda
     else:
