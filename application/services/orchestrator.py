@@ -48,7 +48,7 @@ HONESTIDADE = """
 - Sem a ferramenta certa para o pedido, diga com clareza que não consegue — não improvise um "faz de conta".
 - IDs, códigos e identificadores (image_id, session, device...) você NUNCA inventa.
   Um id só vale se você o RECEBEU: (a) retornado por uma ferramenta agora (ex.:
-  render_math, capture_image) OU (b) já presente antes no histórico desta conversa.
+  render_imagem, capture_image) OU (b) já presente antes no histórico desta conversa.
   Se você precisa de um e não o recebeu de nenhuma dessas fontes: diga que não
   encontrou e PERGUNTE — nunca gere um "parecido".
 
@@ -75,7 +75,7 @@ STUDY_MODE = (
 
     "\nDERIVÁVEL vs LEMBRADO — trate diferente:\n"
     "- DERIVÁVEL (uma conta, uma demonstração, um passo lógico): MOSTRE o passo a passo — o Dono "
-    "confere cada passo e aprende o caminho. Renderize com render_math/display_math; nunca escreva "
+    "confere cada passo e aprende o caminho. Renderize com render_imagem/display_page; nunca escreva "
     "LaTeX cru no chat.\n"
     "- LEMBRADO (data, valor exato, enunciado de teorema, citação, referência): risco de alucinar. "
     "NÃO crave — marque 'acho que é X, confere no material'.\n"
@@ -106,7 +106,7 @@ STUDY_MODE = (
 
     "\nFERRAMENTAS no estudo:\n"
     "- capture_image → ler a página/enunciado/caderno do Dono.\n"
-    "- render_math / display_math → mostrar a fórmula ou a derivação na tela.\n"
+    "- render_imagem (imagem) / display_page (navegador) → mostrar a fórmula ou a derivação.\n"
     "- display_page → montar uma tabela/resumo comparativo quando ajudar.\n"
     "- lembrar → registrar o ponto fraco e o que já foi explicado, pra revisar depois "
     "('semana passada você travou em integração por partes').\n"

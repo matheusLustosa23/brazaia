@@ -13,9 +13,8 @@ from infrastructure.llm.client import OpenAILLMClient
 from infrastructure.llm import tokenizer
 from infrastructure.tools.capture_image import CaptureImageTool
 from infrastructure.tools.load_imagem import LoadImageTool
-from infrastructure.tools.display_math import DisplayMathTool
 from infrastructure.tools.display_page import DisplayPageTool
-from infrastructure.tools.render_math import RenderMathTool
+from infrastructure.tools.render_imagem import RenderImagemTool
 from infrastructure.tools.notify import NotifyTool
 from infrastructure.tools.open_image import OpenImageTool
 from infrastructure.tools.calcular import CalcularTool
@@ -85,9 +84,8 @@ async def lifespan(app: FastAPI):
     registry.register(LembrarTool(memory))
     registry.register(CaptureImageTool(vision))
     registry.register(LoadImageTool(store))
-    registry.register(DisplayMathTool(device_gateway))
-    registry.register(DisplayPageTool(device_gateway))
-    registry.register(RenderMathTool(store))
+    registry.register(DisplayPageTool(device_gateway, store))
+    registry.register(RenderImagemTool(store))
     registry.register(NotifyTool(device_gateway, store))
     registry.register(OpenImageTool(device_gateway, store))
     registry.register(CalcularTool())
@@ -149,8 +147,8 @@ async def lifespan(app: FastAPI):
     setup_logging(settings.log_level)
     
     try:
-        from infrastructure.render.page import render_page
-        await asyncio.to_thread(render_page, r"$x^2$")
+        from infrastructure.render.render import render
+        await asyncio.to_thread(render, "<p>$$x^2$$</p>")
         logger.info("katex assets warmed")
     except Exception as e:
         logger.warning("warm do render falhou (segue sem): %s", e) 

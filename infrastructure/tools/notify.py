@@ -24,7 +24,7 @@ class NotifyInput(BaseModel):
         default=None,
         description=(
             "OPCIONAL — o PADRÃO é NÃO anexar. Só use se o dono pediu pra enviar/mostrar uma imagem.\n"
-            "Quando anexar, o id tem que JÁ ter aparecido nesta conversa — de 'render_math' (image_id=XXXX) "
+            "Quando anexar, o id tem que JÁ ter aparecido nesta conversa — de 'render_imagem' (image_id=XXXX) "
             "ou de uma captura ([imagem capturada · image_id=...]). NÃO invente o id.\n"
             "Se NENHUM image_id apareceu ainda: não gere nem capture por conta própria — diga que "
             "não encontrou imagem e PERGUNTE se quer que gere ou capture.\n"

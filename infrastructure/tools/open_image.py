@@ -13,7 +13,7 @@ class OpenImageInput(BaseModel):
         )
     )
     image_id: str = Field(description=(
-        "image_id de uma imagem que JÁ apareceu nesta conversa. DUAS origens valem: 'render_math' "
+        "image_id de uma imagem que JÁ apareceu nesta conversa. DUAS origens valem: 'render_imagem' "
         "(image_id=XXXX) ou uma captura ([imagem capturada · image_id=...]). NÃO invente o id.\n"
         "Se NENHUM image_id apareceu ainda: não gere nem capture por conta própria — diga que não "
         "encontrou imagem e PERGUNTE se quer que gere ou capture.\n"
@@ -43,7 +43,7 @@ class OpenImageTool(Tool[OpenImageInput]):
         data_uri = resolve_data_uri(self._index, payload.image_id)
         if data_uri is None:
             return (f"[erro] image_id '{payload.image_id}' não existe. Não invente ids. "
-                    f"Se alguma imagem apareceu antes nesta conversa — de 'render_math' "
+                    f"Se alguma imagem apareceu antes nesta conversa — de 'render_imagem' "
                     f"(image_id=...) ou de uma captura ([imagem capturada · image_id=...]) — use o id "
                     f"DELA. Se não apareceu nenhuma, AVISE o usuário e PERGUNTE se ele quer que "
                     f"você gere ou capture uma. Não faça por conta própria.")

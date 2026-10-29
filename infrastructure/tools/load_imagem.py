@@ -12,7 +12,7 @@ class LoadImageInput(BaseModel):
         pattern=r"^[0-9a-f]{12}$",              # SÓ 12 hex → "../etc" é rejeitado pelo Pydantic antes de rodar
          description=(
             "image_id de uma imagem que JÁ apareceu nesta conversa — de uma captura "
-            "([imagem capturada · image_id=XXXX]) OU do que 'render_math' devolveu (image_id=XXXX)."
+            "([imagem capturada · image_id=XXXX]) OU do que 'render_imagem' devolveu (image_id=XXXX)."
         )
     
     )
@@ -25,7 +25,7 @@ class LoadImageTool(Tool[LoadImageInput]):
     description = (
         "Traz os PIXELS de uma imagem que JÁ apareceu nesta conversa de volta pro contexto, pra VOCÊ "
         "olhar de novo. O image_id vem de DUAS origens: uma captura ([imagem capturada · image_id=XXXX]) "
-        "OU o que 'render_math' devolveu (image_id=XXXX). Use pra reexaminar um detalhe ('olha de novo "
+        "OU o que 'render_imagem' devolveu (image_id=XXXX). Use pra reexaminar um detalhe ('olha de novo "
         "aquela foto', 'dá um zoom', 'confere se a fórmula renderizou'). Para uma cena NOVA/ao vivo, use "
         "'capture_image'.\n"
         "NUNCA invente um id. Se nenhum image_id apareceu antes e o usuário não informou um válido, NÃO "
