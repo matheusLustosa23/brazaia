@@ -141,7 +141,7 @@ def _prompt_msg() -> StyleAndTextTuples:
     if voz_prep:                                               # /voz: preparando o mic
         linhas.append(("bold #e5c07b", "   ⚙ preparando microfone…\n"))
     elif gravando:                                             # /voz: gravando livre até o Enter
-        linhas.append(("bold #e05a5a", "   🎤 gravando… (Enter pra parar e jogar no input)\n"))
+        linhas.append(("bold #39d353", "   🎤 gravando… (Enter pra parar e jogar no input)\n"))
     if stream_tail:                                            # RABO digitando (bg escuro, estilo Ollama)
         cauda = stream_tail[-400:]                              # cap por CHARS: bloco gigante não trava o render
         lim = _larg() - 2
@@ -214,11 +214,13 @@ class _SepThink:
         return segs
 
 def _commit_pensamento(texto: str, W: int) -> None:
-    """Fixa o raciocínio no scrollback com ESTÉTICA distinta (âmbar/dim + 💭), separado da resposta."""
-    _p(_corpo(" \033[38;2;229;192;123m💭 raciocínio", cell_len(" 💭 raciocínio"), W, None) + "\n")
+    """Fixa o raciocínio como BLOCO distinto: barra + FUNDO âmbar-escuro + 💭 (≠ da resposta, que é verde/grafite)."""
+    ambar = "\033[38;2;229;192;123m"
+    bg = "30;26;18"                                            # fundo quente escuro (destaca o bloco do thinking)
+    _p(_corpo(f" {ambar}💭 raciocínio", cell_len(" 💭 raciocínio"), W, ambar, bg=bg) + "\n")
     for ln in texto.strip().split("\n"):
         if ln.strip():
-            _p(_corpo(f"   {DIM_A}{ln}", cell_len(f"   {ln}"), W, None) + "\n")
+            _p(_corpo(f" {DIM_A}{ln}", cell_len(f" {ln}"), W, ambar, bg=bg) + "\n")
 
 async def _responder(msg: str):
     """Consome o stream do backend (chat_stream): session_id + deltas de texto + erro.
@@ -333,14 +335,10 @@ async def _parar_voz(app) -> None:                     # Enter durante /voz — 
         _grav = None; _p(f"{DIM_A}   ⚠ voz: {e}{R}\n"); app.invalidate(); return
     _grav = None
     if texto:
-        app.current_buffer.insert_text(texto)          # transcrição vai pro INPUT — você edita/envia/apaga
+        app.current_buffer.insert_text(texto.replace("\n", " "))   # → INPUT (sem \n: um \n faria o prompt ENVIAR); você edita/manda
     else:
         _p(f"{DIM_A}   (não entendi o áudio){R}\n")
     app.invalidate()
-    if texto.strip():
-        await _responder(texto)                        # a transcrição vira a mensagem → resposta em TEXTO no chat
-    else:
-        _p(f"{DIM_A}   (não entendi o áudio){R}\n")
 
 async def _anexar():                                  # /anexo — escolhe imagem (zenity) → base64
     global pending_image, pending_name
@@ -504,8 +502,10 @@ async def main() -> None:
     def _(e): asyncio.create_task(_colar(e.app))
     @kb.add("enter")
     def _(e):                                                   # Enter = MANDA a mensagem (não fecha o prompt)
-        if gravando:                                           # Enter durante /voz = PARA a gravação (não envia)
-            asyncio.create_task(_parar_voz(e.app)); return
+        if gravando or voz_prep:                               # Enter durante /voz = PARA a gravação (NUNCA envia)
+            if gravando:
+                asyncio.create_task(_parar_voz(e.app))
+            return
         global pending_image, pending_name
         msg = e.app.current_buffer.text.strip()
         e.app.current_buffer.text = ""
