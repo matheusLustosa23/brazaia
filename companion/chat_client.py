@@ -12,7 +12,8 @@ async def chat_stream(msg: str, sid: str | None, cfg, image: str | None = None, 
     if image:
         payload["image"] = image                 # data URL (data:image/...;base64,...) — anexo multimodal
     url = f"{_http_base(cfg.server_ws_url)}/chat"
-    async with httpx.AsyncClient(timeout=None) as http:
+    # Termux: sai pelo SOCKS5 do tailscaled (mesmo caminho do connect/voz). Desktop: proxy=None (rota direta).
+    async with httpx.AsyncClient(timeout=None, proxy=os.getenv("SOCKS_PROXY") or None) as http:
         async with http.stream(
             "POST",
             url,

@@ -15,6 +15,7 @@
 websockets
 python-socks          # SOCKS5 do tailscaled nativo (companion.connect sai por ele)
 httpx                 # cliente HTTP do chat (companion.chat_client → /chat SSE)
+socksio               # SOCKS5 pro httpx (chat sai pelo tailscaled no Termux, igual o connect/voz)
 rich                  # render do chat no terminal (companion.render / cli)
 prompt_toolkit        # a caixa de input + scrollback do CLI
 pylatexenc            # LaTeX→Unicode da matemática no terminal (companion.render)

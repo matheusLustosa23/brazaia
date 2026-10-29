@@ -7,7 +7,7 @@ cabeçalho da caixa. As respostas são impressas ACIMA via patch_stdout → scro
 
 Uso:  uv run python -m companion.cli     (^C / ^D sai)
 """
-import asyncio, base64, mimetypes, os, re, shutil, sys
+import asyncio, base64, mimetypes, os, re, shutil, sys, time
 from prompt_toolkit import PromptSession, print_formatted_text as pf
 from prompt_toolkit.patch_stdout import patch_stdout
 from prompt_toolkit.formatted_text import ANSI, StyleAndTextTuples
@@ -34,7 +34,11 @@ pending_name = None   # nome do arquivo anexado (só p/ exibir no card)
 ultima_resposta = ""  # último reply do LLM (limpo, sem barras) — pra /copiar
 stream_tail = ""      # "rabo" do bloco sendo DIGITADO (typewriter na região viva do prompt)
 tail_think = False    # True quando o rabo é RACIOCÍNIO (<think>), p/ estilo diferente da resposta
-thinking_on = False   # modo thinking (toggle /think). OFF por padrão = respostas limpas; manda think p/ o backend
+aguardando = False    # True entre mandar e o 1º token chegar (TTFT) → mostra "processando…"
+think_mode = "off"    # thinking: "off" | "full" (caixa) | "colap" (só resumo). Toggle /think
+pensando = False      # colap: True enquanto recebe o <think> (mostra "pensando…" em vez do texto)
+think_t0 = 0.0        # início do raciocínio (p/ o tempo no modo colapsado)
+turno_t0 = 0.0        # início do turno (p/ o tempo total no rodapé/loader)
 tok_count = 0         # contador de tokens da resposta atual (ao vivo, estilo Claude)
 ctx_usado = 0; ctx_total = 0; ctx_model = ""; ctx_reservado = 0   # contexto + teto de saída → footer
 DIM_A = "\033[38;2;92;99;112m"
@@ -142,6 +146,14 @@ def _prompt_msg() -> StyleAndTextTuples:
         linhas.append(("bold #e5c07b", "   ⚙ preparando microfone…\n"))
     elif gravando:                                             # /voz: gravando livre até o Enter
         linhas.append(("bold #39d353", "   🎤 gravando… (Enter pra parar e jogar no input)\n"))
+    if pensando:                                               # colap: raciocinando (não mostra o texto, só o tempo)
+        sp = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"[frame % 10]
+        secs = (time.monotonic() - think_t0) if think_t0 else 0.0
+        linhas.append(("bold #e5c07b", f"   {sp} 💭 pensando… {secs:.0f}s\n"))
+    elif aguardando:                                           # mandou e espera o 1º token (TTFT) → não fica card vazio
+        sp = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"[frame % 10]
+        secs = (time.monotonic() - turno_t0) if turno_t0 else 0.0
+        linhas.append(("bold #4a9eff", f"   {sp} processando… {secs:.0f}s\n"))
     if stream_tail:                                            # RABO digitando (bg escuro, estilo Ollama)
         cauda = stream_tail[-400:]                              # cap por CHARS: bloco gigante não trava o render
         lim = _larg() - 2
@@ -160,10 +172,10 @@ def _toolbar() -> StyleAndTextTuples:
     dot = {"online": "#2da84f", "reconectando": "#e5c07b", "offline": "#e05a5a"}.get(status, "#e05a5a")
     pct = int(100 * ctx_usado / ctx_total) if ctx_total else 0
     ctx = f" · ctx {ctx_usado}/{ctx_total} ({pct}%)" if ctx_total else ""   # Fase 1: escondido até o backend mandar 'contexto'
-    out = f" · ↑{tok_count}/{ctx_reservado}" if (respondendo and ctx_reservado) else (f" · ↑{tok_count}" if respondendo else "")
+    out = f" · ↑{tok_count} · {(time.monotonic() - turno_t0):.0f}s" if (respondendo and turno_t0) else ""
     modelo = (ctx_model or "—").split("/")[-1][:24]
     sid = (session_id or "nova")[:8]
-    th = "💭on" if thinking_on else "💭off"
+    th = {"off": "💭off", "full": "💭full", "colap": "💭colap"}.get(think_mode, "💭off")
     txt = f" {status} · sessão {sid}{ctx}{out} · {th} · {modelo} "
     fill = max(1, w - len(txt) - 6)
     return [(BORDA, "╰─"), (dot, "●"), (DIM, txt), (BORDA, "─" * fill + "╯")]
@@ -213,21 +225,48 @@ class _SepThink:
                 s = s[j + 8:]; self.modo = "reply"
         return segs
 
+_AMBAR = "\033[38;2;229;192;123m"
+
+def _wrap(t: str, w: int) -> list[str]:
+    """Quebra por palavra em linhas de até w (p/ a caixa do raciocínio)."""
+    out: list[str] = []
+    for para in t.strip().split("\n"):
+        ln = ""
+        for word in para.split():
+            if len(ln) + len(word) + 1 > w: out.append(ln); ln = word
+            else: ln = (ln + " " + word).strip()
+        out.append(ln)
+    return out
+
 def _commit_pensamento(texto: str, W: int) -> None:
-    """Fixa o raciocínio como BLOCO distinto: barra + FUNDO âmbar-escuro + 💭 (≠ da resposta, que é verde/grafite)."""
-    ambar = "\033[38;2;229;192;123m"
-    bg = "30;26;18"                                            # fundo quente escuro (destaca o bloco do thinking)
-    _p(_corpo(f" {ambar}💭 raciocínio", cell_len(" 💭 raciocínio"), W, ambar, bg=bg) + "\n")
-    for ln in texto.strip().split("\n"):
-        if ln.strip():
-            _p(_corpo(f" {DIM_A}{ln}", cell_len(f" {ln}"), W, ambar, bg=bg) + "\n")
+    """Raciocínio FULL (opção escolhida): caixa com borda âmbar + texto dim — distinta da resposta (verde)."""
+    inner = W - 6
+    _p(f"{_AMBAR}  ┌─ 💭 raciocínio " + "─" * max(0, W - 20) + "┐" + R + "\n")
+    for ln in _wrap(texto, inner):
+        _p(f"{_AMBAR}  │{R} {DIM_A}{ln}{R}" + " " * max(0, inner - len(ln)) + f" {_AMBAR}│{R}" + "\n")
+    _p(f"{_AMBAR}  └" + "─" * max(0, W - 4) + "┘" + R + "\n")
+
+def _commit_colap(texto: str, toks: int, secs: float, W: int) -> None:
+    """Raciocínio COLAPSADO: só o resumo (linhas · tokens · tempo) — esconde o texto."""
+    nlin = len([l for l in texto.strip().split("\n") if l.strip()])
+    _p(f"  {_AMBAR}💭 raciocínio{R} {DIM_A}· {nlin} linhas · {toks} tokens · {secs:.1f}s ▸{R}\n")
+
+def _fecha_raciocinio(texto: str, toks: int, t0: float, W: int) -> None:
+    """Fixa o raciocínio no scrollback conforme o modo: full=caixa, colap=resumo."""
+    secs = (time.monotonic() - t0) if t0 else 0.0
+    if think_mode == "colap":
+        _commit_colap(texto, toks, secs, W)
+    else:
+        _commit_pensamento(texto, W)
 
 async def _responder(msg: str):
     """Consome o stream do backend (chat_stream): session_id + deltas de texto + erro.
     (Fase 1: checklist/eventos entram na Fase 2.)"""
-    global respondendo, session_id, pending_image, pending_name, stream_tail, tail_think, tok_count, ultima_resposta
-    respondendo = True
-    tok_count = 0; full = []; erro = None                            # contador + reply + erro
+    global respondendo, session_id, pending_image, pending_name, stream_tail, tail_think, tok_count, ultima_resposta, aguardando, pensando, think_t0, turno_t0
+    respondendo = True; aguardando = True                            # aguardando = TTFT (mostra "processando…")
+    tok_count = 0; full = []; erro = None                            # contador total + reply + erro
+    think_toks = 0; think_t0 = 0.0; think_secs = 0.0; pensando = False
+    turno_t0 = time.monotonic()
     img = pending_image; pending_image = None                        # consome o anexo (1 vez)
     nome = pending_name; pending_name = None
     W = _larg()
@@ -238,17 +277,24 @@ async def _responder(msg: str):
     buf = ""; topo_feito = False
     sep = _SepThink(); pensamento = ""; pensou = False               # separa <think> (raciocínio) da resposta
     try:
-        async for ev in chat_stream(msg, session_id, cfg, image=img, think=thinking_on):
+        async for ev in chat_stream(msg, session_id, cfg, image=img, think=(think_mode != "off")):
             if "session_id" in ev:
                 session_id = ev["session_id"]                        # lembra a sessão
             elif "delta" in ev:
-                tok_count += 1
+                tok_count += 1; aguardando = False                   # 1º token chegou → tira o "processando…"
                 for modo, txt in sep.feed(ev["delta"]):              # 'think' = raciocínio · 'reply' = resposta
                     if modo == "think":
-                        pensamento += txt; stream_tail = pensamento; tail_think = True
+                        pensamento += txt; think_toks += 1
+                        if not think_t0: think_t0 = time.monotonic()
+                        if think_mode == "full":
+                            stream_tail = pensamento; tail_think = True   # raciocínio digitando (âmbar)
+                        else:
+                            pensando = True                          # colap: só "pensando…"
                     else:
-                        if pensamento and not pensou:                # fecha o raciocínio uma vez, em bloco distinto
-                            _commit_pensamento(pensamento, W); pensou = True
+                        if pensamento and not pensou:                # fecha o raciocínio 1x (full=caixa · colap=resumo)
+                            think_secs = (time.monotonic() - think_t0) if think_t0 else 0.0
+                            _fecha_raciocinio(pensamento, think_toks, think_t0, W)
+                            pensou = True; pensando = False; stream_tail = ""; tail_think = False
                         if not topo_feito:
                             _p(_pad_top(W) + "\n"); topo_feito = True
                         buf += txt; full.append(txt)                 # resposta "real"
@@ -264,20 +310,24 @@ async def _responder(msg: str):
                 m = f" ⚠ erro do servidor: {erro}"
                 _p(_corpo(f" \033[1;38;2;255;90;90m{m[1:]}", cell_len(m), W, None) + "\n")
         if pensamento and not pensou:                                # raciocínio sem resposta depois → fixa mesmo assim
-            _commit_pensamento(pensamento, W)
-        stream_tail = ""; tail_think = False                         # some o rabo…
+            think_secs = (time.monotonic() - think_t0) if think_t0 else 0.0
+            _fecha_raciocinio(pensamento, think_toks, think_t0, W)
+        pensando = False; stream_tail = ""; tail_think = False        # some o rabo…
         if buf.strip():
             _p(_corpo_md(buf, W, BAR_TEAL) + "\n")                    # …e vira o Markdown final
+        total = time.monotonic() - turno_t0
+        resp_toks = tok_count - think_toks
         rzn = "ERRO" if erro else "stop"
-        info = f" · fim do turno · {tok_count} tokens · motivo: {rzn}"
+        th = f" · 💭 {think_toks}tok/{think_secs:.1f}s" if think_toks else ""
+        info = f" · fim · {resp_toks} tok · {total:.1f}s{th} · {rzn}"
         _p(_corpo(f" {DIM_A}{info[1:]}", cell_len(info), W, None) + "\n")
     except Exception as e:
-        stream_tail = ""; tail_think = False
+        pensando = False; stream_tail = ""; tail_think = False
         _p(_corpo(f" \033[38;2;255;90;90m⚠ falha no stream: {e}",
                   cell_len(f" ⚠ falha no stream: {e}"), W, None) + "\n")
     ultima_resposta = "".join(full)                                  # guarda p/ /copiar
     _p("\n")
-    respondendo = False
+    respondendo = False; aguardando = False; pensando = False
 
 async def _ticker():
     global frame
@@ -470,7 +520,7 @@ class _Comp(Completer):
                 yield Completion(c, start_position=-len(partes[0]))
 
 def _dispatch(msg: str, app) -> None:
-    global session_id, thinking_on
+    global session_id, think_mode
     partes = msg.split()
     cmd = partes[0]
     if cmd in ("/sair", "sair"):
@@ -483,13 +533,18 @@ def _dispatch(msg: str, app) -> None:
     elif cmd == "/voz":
         asyncio.create_task(_iniciar_voz(app))
     elif cmd == "/think":
-        thinking_on = not thinking_on
-        _p(f"{VERDE_A}   💭 thinking {'ligado' if thinking_on else 'desligado'}{R}\n")
+        modos = ["off", "full", "colap"]
+        if len(partes) > 1 and partes[1] in modos:
+            think_mode = partes[1]
+        else:
+            think_mode = modos[(modos.index(think_mode) + 1) % 3]    # cicla off → full → colap
+        desc = {"off": "desligado", "full": "completo (caixa)", "colap": "colapsado (só resumo)"}[think_mode]
+        _p(f"{VERDE_A}   💭 thinking: {think_mode} — {desc}{R}\n")
     elif cmd in ("/sessoes", "/sessao"):               # Fase 3: backend de sessões (/chat/sessions) ainda não existe
         _p(f"{DIM_A}   sessões chegam na próxima fase (o backend ainda não tem /chat/sessions){R}\n")
     elif cmd in ("/ajuda", "/help"):
         extra = "" if _IS_TERMUX else " · /anexo · Ctrl+V cola imagem"
-        _p(f"{DIM_A}   comandos: /voz (mensagem de voz → texto) · /think (liga/desliga raciocínio){extra} · /sair{R}\n")
+        _p(f"{DIM_A}   comandos: /voz (voz→texto) · /think [off|full|colap] (cicla se sem arg){extra} · /sair{R}\n")
     else:
         _p(f"{DIM_A}   comando desconhecido: {cmd} (tente /ajuda){R}\n")
 
