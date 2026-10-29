@@ -17,7 +17,7 @@ from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.styles import Style
 from rich.cells import cell_len
 
-from companion.render import SPIN, md_ansi
+from companion.render import md_ansi
 from companion.config import load_config, CompanionConfig
 from companion.chat_client import chat_stream
 from companion.connect import conectar                 # loop de device REAL (handshake + RPC + reconexão)
@@ -26,13 +26,15 @@ from companion.plataform import _IS_TERMUX             # adapta o CLI ao Termux 
 
 cfg: CompanionConfig = None  # type: ignore[assignment]  # setado no main (load_config)
 session_id = None     # capturado do 1º evento do backend
-em_voz = False        # True enquanto /voz (mensagem de voz) está gravando/transcrevendo
+gravando = False      # True enquanto /voz está gravando (LIVRE, até Enter)
+voz_prep = False      # True no "preparando microfone…" (antes de começar a gravar)
+_grav = None          # GravacaoLivre ativa (start/stop manual, controlado pelo Enter)
 pending_image = None  # data URL da imagem anexada (vai na próxima mensagem)
 pending_name = None   # nome do arquivo anexado (só p/ exibir no card)
 ultima_resposta = ""  # último reply do LLM (limpo, sem barras) — pra /copiar
 stream_tail = ""      # "rabo" do bloco sendo DIGITADO (typewriter na região viva do prompt)
 tail_think = False    # True quando o rabo é RACIOCÍNIO (<think>), p/ estilo diferente da resposta
-thinking_on = True    # modo thinking ligado? (toggle /think; manda think p/ o backend)
+thinking_on = False   # modo thinking (toggle /think). OFF por padrão = respostas limpas; manda think p/ o backend
 tok_count = 0         # contador de tokens da resposta atual (ao vivo, estilo Claude)
 ctx_usado = 0; ctx_total = 0; ctx_model = ""; ctx_reservado = 0   # contexto + teto de saída → footer
 DIM_A = "\033[38;2;92;99;112m"
@@ -136,6 +138,10 @@ def _prompt_msg() -> StyleAndTextTuples:
     Tudo vive no rodapé, não vai pro histórico."""
     w = _larg()
     linhas: StyleAndTextTuples = []
+    if voz_prep:                                               # /voz: preparando o mic
+        linhas.append(("bold #e5c07b", "   ⚙ preparando microfone…\n"))
+    elif gravando:                                             # /voz: gravando livre até o Enter
+        linhas.append(("bold #e05a5a", "   🎤 gravando… (Enter pra parar e jogar no input)\n"))
     if stream_tail:                                            # RABO digitando (bg escuro, estilo Ollama)
         cauda = stream_tail[-400:]                              # cap por CHARS: bloco gigante não trava o render
         lim = _larg() - 2
@@ -275,21 +281,10 @@ async def _ticker():
     global frame
     while True:
         frame += 1
-        if respondendo or stream_tail:                               # redesenha SÓ com animação viva
+        if respondendo or stream_tail or gravando or voz_prep:       # redesenha SÓ com animação viva
             try: get_app().invalidate()                              # ocioso = sem redraw → seleção do terminal não some
             except Exception: pass
         await asyncio.sleep(0.08)
-
-async def _spinner(label: str, coro):
-    """Roda `coro` e ANIMA um spinner + label no terminal (sem barra de volume). Limpa a linha no fim."""
-    task = asyncio.ensure_future(coro)
-    i = 0
-    while not task.done():
-        sys.stdout.write(f"\r  \033[38;2;0;200;83m{SPIN[i % len(SPIN)]}\033[0m {label}     ")
-        sys.stdout.flush(); i += 1
-        await asyncio.sleep(0.08)
-    sys.stdout.write("\r" + " " * (len(label) + 12) + "\r"); sys.stdout.flush()
-    return await task
 
 async def _transcrever(audio: bytes) -> str:
     """Manda o turno de áudio pro /ws/transcribe (STT-only) e devolve só o texto.
@@ -312,20 +307,36 @@ async def _transcrever(audio: bytes) -> str:
                 _p(f"{DIM_A}   ⚠ {ev.get('text','')}{R}\n"); return ""
     return ""
 
-async def _voz_para_texto():                           # /voz — mensagem de voz: grava → transcreve → entra no chat (resposta em TEXTO)
-    global em_voz
-    em_voz = True
-    texto = ""
+async def _iniciar_voz(app) -> None:                   # /voz — começa a gravar LIVRE (sem suspender o TUI); Enter pára
+    global gravando, voz_prep, _grav
+    if gravando or voz_prep or respondendo:
+        return
+    from companion.audio import GravacaoLivre
+    voz_prep = True; app.invalidate()                  # rodapé: "preparando microfone…"
+    _grav = GravacaoLivre()
     try:
-        from prompt_toolkit.application import in_terminal
-        from companion.audio import capturar_turno
-        async with in_terminal():                      # SUSPENDE o TUI enquanto grava/transcreve
-            audio = await _spinner("🎤 ouvindo… (fale; o silêncio encerra)", capturar_turno())
-            texto = await _spinner("⚙ transcrevendo…", _transcrever(audio))
+        await _grav.iniciar()
     except Exception as e:
-        _p(f"{DIM_A}   ⚠ voz: {e}{R}\n")
-    finally:
-        em_voz = False
+        voz_prep = False; _grav = None
+        _p(f"{DIM_A}   ⚠ voz: {e}{R}\n"); app.invalidate(); return
+    voz_prep = False; gravando = True; app.invalidate()  # rodapé: "gravando… (Enter pra parar)"
+
+async def _parar_voz(app) -> None:                     # Enter durante /voz — para, transcreve e JOGA no input (não envia)
+    global gravando, _grav
+    if not gravando or _grav is None:
+        return
+    gravando = False; app.invalidate()
+    try:
+        audio = await _grav.parar()
+        texto = (await _transcrever(audio)).strip()
+    except Exception as e:
+        _grav = None; _p(f"{DIM_A}   ⚠ voz: {e}{R}\n"); app.invalidate(); return
+    _grav = None
+    if texto:
+        app.current_buffer.insert_text(texto)          # transcrição vai pro INPUT — você edita/envia/apaga
+    else:
+        _p(f"{DIM_A}   (não entendi o áudio){R}\n")
+    app.invalidate()
     if texto.strip():
         await _responder(texto)                        # a transcrição vira a mensagem → resposta em TEXTO no chat
     else:
@@ -430,7 +441,7 @@ async def _clip_texto() -> str:
 
 async def _colar(app):                                # Ctrl+V — imagem do clipboard → anexo; senão cola texto
     global pending_image, pending_name
-    if respondendo or em_voz:
+    if respondendo or gravando:
         return
     got = await _clip_imagem()
     if not got:                                                  # (3) o texto do clipboard é um caminho de imagem?
@@ -472,7 +483,7 @@ def _dispatch(msg: str, app) -> None:
         else:
             asyncio.create_task(_anexar())
     elif cmd == "/voz":
-        asyncio.create_task(_voz_para_texto())
+        asyncio.create_task(_iniciar_voz(app))
     elif cmd == "/think":
         thinking_on = not thinking_on
         _p(f"{VERDE_A}   💭 thinking {'ligado' if thinking_on else 'desligado'}{R}\n")
@@ -493,10 +504,12 @@ async def main() -> None:
     def _(e): asyncio.create_task(_colar(e.app))
     @kb.add("enter")
     def _(e):                                                   # Enter = MANDA a mensagem (não fecha o prompt)
+        if gravando:                                           # Enter durante /voz = PARA a gravação (não envia)
+            asyncio.create_task(_parar_voz(e.app)); return
         global pending_image, pending_name
         msg = e.app.current_buffer.text.strip()
         e.app.current_buffer.text = ""
-        if not msg or respondendo or em_voz:                   # ignora vazio / enquanto responde ou em voz
+        if not msg or respondendo:                             # ignora vazio / enquanto responde
             return
         got, resto = _extrai_img_do_texto(msg)                 # caminho de imagem (colado como texto) → anexa
         if got:                                                # ANTES do check de comando: paths começam com '/'
