@@ -2,7 +2,7 @@ import os, glob, base64
 from domain.tools.base import Tool
 from domain.tools.guard import ToolCtx
 from pydantic import BaseModel, Field
-from infrastructure.vision.image_index import ImageIndex
+from infrastructure.storage.file_store import FileStore
 from infrastructure.render.store import resolve_data_uri, _MIME_POR_EXT
 
 BASE = os.path.realpath(os.path.expanduser("~/brazaia"))
@@ -36,7 +36,7 @@ class LoadImageTool(Tool[LoadImageInput]):
     )
     router_hint = "carregar/rever/olhar de novo uma imagem que já apareceu antes nesta conversa"
     
-    def __init__(self, index: ImageIndex):
+    def __init__(self, index: FileStore):
         self._index = index
     
     async def run(self, payload: LoadImageInput, ctx: ToolCtx) -> str:

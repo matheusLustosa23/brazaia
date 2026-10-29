@@ -3,7 +3,7 @@ from domain.tools.base import Tool
 from domain.tools.guard import GuardResult, ToolCtx
 from infrastructure.devices.device_gateway import DeviceGateway
 from infrastructure.render.store import resolve_data_uri, _id_valido
-from infrastructure.vision.image_index import ImageIndex
+from infrastructure.storage.file_store import FileStore
 
 class OpenImageInput(BaseModel):
     device: str = Field(
@@ -35,7 +35,7 @@ class OpenImageTool(Tool[OpenImageInput]):
     action_class = "reversible"
     router_hint = "abrir uma imagem em tela cheia no device (zoom, ler com calma)"
 
-    def __init__(self, gateway: DeviceGateway, index: ImageIndex) -> None:
+    def __init__(self, gateway: DeviceGateway, index: FileStore) -> None:
         self._gateway = gateway
         self._index = index
         

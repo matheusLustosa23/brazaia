@@ -7,6 +7,7 @@ import os
 import uuid
 
 from infrastructure.vision.image_index import ImageIndex
+from infrastructure.storage.file_store import FileStore
 from domain.tools.guard import ToolCtx
 
 _CACHE = os.path.expanduser("~/brazaia/cache")
@@ -24,7 +25,7 @@ def stash(index: ImageIndex, data: bytes, ext: str = ".png") -> str:
     index.put(img_id, caminho)
     return img_id
 
-def resolve_data_uri(index: ImageIndex, img_id: str) -> str | None:
+def resolve_data_uri(index: FileStore, img_id: str) -> str | None:
     """id -> data URI (lê o arquivo, infere o mime pela extensão). None se sumiu."""
     caminho = index.get(img_id)
     if not caminho or not os.path.exists(caminho):

@@ -32,7 +32,7 @@ from infrastructure.voice.asr import make_asr
 from infrastructure.voice.vad import make_vad
 from infrastructure.voice.tts import make_tts
 from infrastructure.vision.sources import VisionRegistry, WebCam
-from infrastructure.vision.image_index import ImageIndex
+from infrastructure.storage.file_store import FileStore
 
 logger = logging.getLogger(__name__)
 
@@ -61,8 +61,8 @@ async def lifespan(app: FastAPI):
     _session_store = SqlLiteSessionStore(settings.session_db_path)
     await _session_store.init()
     
-     # -- VISION --
-    image_index = ImageIndex()
+     # -- VISION / STORAGE --
+    store = FileStore()                       # armazém unificado de artefatos (imagem/html) — substitui o ImageIndex
     vision = VisionRegistry()
     vision.register(WebCam())
     
@@ -84,12 +84,12 @@ async def lifespan(app: FastAPI):
     
     registry.register(LembrarTool(memory))
     registry.register(CaptureImageTool(vision))
-    registry.register(LoadImageTool(image_index))
+    registry.register(LoadImageTool(store))
     registry.register(DisplayMathTool(device_gateway))
     registry.register(DisplayPageTool(device_gateway))
-    registry.register(RenderMathTool(image_index))
-    registry.register(NotifyTool(device_gateway, image_index))
-    registry.register(OpenImageTool(device_gateway, image_index))
+    registry.register(RenderMathTool(store))
+    registry.register(NotifyTool(device_gateway, store))
+    registry.register(OpenImageTool(device_gateway, store))
     registry.register(CalcularTool())
 
     # ── Orchestrator ──
@@ -100,7 +100,7 @@ async def lifespan(app: FastAPI):
         memory=memory,
         device_gateway=device_gateway,
         session_store=_session_store,
-        image_index=image_index
+        image_index=store
     )
 
     # ── Sub-Containers ──
@@ -142,7 +142,7 @@ async def lifespan(app: FastAPI):
     app.state.asr = asr
     app.state.vad = vad
     app.state.tts = tts
-    app.state.image_index = image_index
+    app.state.image_index = store
     app.state.vision = vision
     app.state.container = container
 

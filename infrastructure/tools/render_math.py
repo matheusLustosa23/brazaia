@@ -2,8 +2,7 @@ from pydantic import BaseModel, Field
 from domain.tools.base import Tool
 from infrastructure.render.page import SINTAXE, render_page
 from infrastructure.render.shot import html_para_png
-from infrastructure.render.store import stash
-from infrastructure.vision.image_index import ImageIndex
+from infrastructure.storage.file_store import FileStore
 
 
 class RenderMathInput(BaseModel):
@@ -28,16 +27,16 @@ class RenderMathTool(Tool[RenderMathInput]):
     timeout_s = 40.0               # o chrome sobe a cada chamada (~1,4 s)
     router_hint = "gera uma IMAGEM (arquivo) de matemática pra depois ENVIAR (notify) ou ABRIR a imagem (open_image). NÃO mostra na tela sozinha."
 
-    def __init__(self, index: ImageIndex) -> None:
-        self._index = index
-    
+    def __init__(self, store: FileStore) -> None:
+        self._store = store
+
     async def run(self, payload: RenderMathInput, ctx) -> str:
         try:
             html = render_page(payload.content, payload.title)
             png = await html_para_png(html)
         except Exception as e:
             return f"[erro] render falhou: {e}"
-        image_id = stash(self._index, png)
+        image_id = self._store.put(png, device=ctx.device_id, session=ctx.session_id, kind="img", ext=".png")
         titulo = payload.title or "matemática"
         return (
             f"[imagem GERADA (render_math) · '{titulo}' · image_id={image_id}] "

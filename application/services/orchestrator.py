@@ -17,7 +17,7 @@ from application.guards.output import check_output
 from application.services._trace import trace
 from application.services._turnlog import log_turno
 from infrastructure.devices.device_gateway import DeviceGateway
-from infrastructure.vision.image_index import ImageIndex
+from infrastructure.storage.file_store import FileStore
 
 MAX_STEPS = 15
 
@@ -184,7 +184,7 @@ class Orchestrator:
         memory: MemoryService,
         device_gateway: DeviceGateway,
         session_store: SessionStore,
-        image_index: ImageIndex, 
+        image_index: FileStore,
         *,
         confirm: ConfirmFn | None = None,
         audit_log: BinaryIO | None = None

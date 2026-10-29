@@ -1,5 +1,6 @@
 import os, base64, hashlib, pprint
 from infrastructure.vision.image_index import ImageIndex
+from infrastructure.storage.file_store import FileStore
 
 MAX_IMG_PIXELS = 900_000   # área (w*h). Acima de ~1M o Qwen3VLProcessor gera >1023 tokens de imagem,
                            # a tokenização trunca e dá 400. Medido: 1120x840 passa; 1024x1024 falha → cap 900K.
@@ -44,11 +45,14 @@ def _strip(history: list[dict]) -> list[dict]:
     
     return history
 
-def persist_image(url: str, session_id: str, device_id: str | None, index: ImageIndex) -> str:
-    """data URI -> disco + image_index. Idempotente (id = hash do conteúdo). Devolve o id."""
-    _id = _img_id(url)
-    _save_image(url, session_id, device_id, _id, index)
-    return _id             
+def persist_image(url: str, session_id: str, device_id: str | None, store: FileStore) -> str:
+    """data URI -> FileStore unificado (kind=img). id = hash do conteúdo (dedup). Devolve o id.
+    Caminho: ~/brazaia/{device}/{session}/img/{id}.{ext} — device/session vêm do orchestrator."""
+    b64 = url.split(",", 1)[1] if "," in url else url
+    data = base64.b64decode(b64)
+    mime = url[5:].split(";", 1)[0].lower() if url.startswith("data:") else "image/jpeg"
+    ext = {"image/png": ".png", "image/webp": ".webp"}.get(mime, ".jpg")
+    return store.put(data, device=device_id, session=session_id, kind="img", ext=ext)
             
                 
 
