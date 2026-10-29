@@ -21,8 +21,7 @@ def setup_termux() -> None:
     # 3) permissão das pastas (o Termux:Widget exige leitura+exec) + canal da notificação
     os.chmod(sc, 0o700)
     os.chmod(tasks, 0o700)
-    subprocess.run(["termux-notification-channel", "--id", "brazaia",
-                    "--name", "Brazaia", "--importance", "max"], check=False)
+    subprocess.run(["termux-notification-channel", "brazaia", "Brazaia"], check=False)  # posicional (id nome)
     # 4) config por-dispositivo (FORA do repo) — cria template se não existir
     envf = f"{home}/.brazaia.env"
     if not os.path.exists(envf):

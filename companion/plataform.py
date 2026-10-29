@@ -182,7 +182,7 @@ async def notify(title: str, message: str, image: str | None = None) -> str:
     """Notificação. Termux/Linux = SYNC (entrega e sai); Windows toast = DETACHED."""
     if _IS_TERMUX:
         return await _run_sync(
-            ["termux-notification", "--title", title, "--content", message,"--image-path", image or _asset("braza_logo_full.png")]
+            ["termux-notification", "--channel", "brazaia", "--title", title, "--content", message,"--image-path", image or _asset("braza_logo_full.png")]
         )
     if image:
         await open_file(image)
