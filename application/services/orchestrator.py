@@ -342,7 +342,7 @@ class Orchestrator:
             }
         ]
         saw_image = False
-        ctx = ToolCtx(fala_do_usuario=user_msg, ids_reais=ids_reais, session_id=session_id)
+        ctx = ToolCtx(fala_do_usuario=user_msg, ids_reais=ids_reais, session_id=session_id, device_id=device_id)
         success = False
         for tc in msg.tool_calls:
             name = tc.name
@@ -426,7 +426,7 @@ class Orchestrator:
             return f"[bloqueado] {verify.reason}", False
         
         if tool.side == "server":
-            result =  await active.run(name, payload)
+            result =  await active.run(name, payload, ctx)
         else:
             parsed = tool.input_schema.model_validate(payload)
             result = await self._device_gateway.dispatch(device_id, tool, parsed)

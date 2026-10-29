@@ -53,7 +53,7 @@ class NotifyTool(Tool[NotifyInput]):
         self._gateway = gateway
         self._index = index    
         
-    async def run(self, payload: NotifyInput) -> str:
+    async def run(self, payload: NotifyInput, ctx: ToolCtx) -> str:
         args:dict = {"title": payload.title, "message": payload.message}
         if payload.image_id:
             data_uri = resolve_data_uri(self._index, payload.image_id)

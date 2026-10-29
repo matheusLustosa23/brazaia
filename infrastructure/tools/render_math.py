@@ -31,7 +31,7 @@ class RenderMathTool(Tool[RenderMathInput]):
     def __init__(self, index: ImageIndex) -> None:
         self._index = index
     
-    async def run(self, payload: RenderMathInput) -> str:
+    async def run(self, payload: RenderMathInput, ctx) -> str:
         try:
             html = render_page(payload.content, payload.title)
             png = await html_para_png(html)

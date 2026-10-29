@@ -33,7 +33,7 @@ class DisplayMathTool(Tool[DisplayMathInput]):
     def __init__(self, gateway: DeviceGateway) -> None:
         self._gateway = gateway
         
-    async def run(self, payload: DisplayMathInput) -> str:
+    async def run(self, payload: DisplayMathInput, ctx) -> str:
         html = render_page(payload.content, payload.title)     
         return await self._gateway.request(payload.device, "display_page", {"html": html})
     

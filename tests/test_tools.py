@@ -3,6 +3,9 @@ from domain.tools.base import ToolRegistry
 from infrastructure.tools.echo import EchoTool
 from pydantic import BaseModel
 from domain.tools.base import Tool
+from domain.tools.guard import ToolCtx
+
+_CTX = ToolCtx(fala_do_usuario="teste")   # ctx dummy — run() agora recebe (payload, ctx)
 
 class _DeviceIn(BaseModel):
     url: str
@@ -13,8 +16,9 @@ class _DeviceTool(Tool):
     input_schema = _DeviceIn
     side = "device"
     action_class = "reversible"
-    
-    async def run(self, payload: BaseModel) -> str:
+    router_hint = "abre uma aba (device)"
+
+    async def run(self, payload: BaseModel, ctx: ToolCtx) -> str:
         return "nunca executado no servidor"
 
 class _SlowIn(BaseModel):
@@ -25,8 +29,9 @@ class _SlowTool(Tool):
     description = "trava"
     input_schema = _SlowIn
     timeout_s = 0.05
-    
-    async def run(self, payload: BaseModel) -> str:
+    router_hint = "trava (teste de timeout)"
+
+    async def run(self, payload: BaseModel, ctx: ToolCtx) -> str:
         await asyncio.sleep(1)
         return "nunca"
 
@@ -42,14 +47,14 @@ def _reg_full():
     return reg
 
 async def test_run_echo_retorna_texto():
-    assert await _reg().run("echo",{"text":"oi"}) == "echo: oi"
+    assert await _reg().run("echo",{"text":"oi"}, _CTX) == "echo: oi"
     
 async def test_run_ferramenta_desconhecida():
-    result = await ToolRegistry().run("nop",{})
+    result = await ToolRegistry().run("nop",{}, _CTX)
     assert "não existe" in result
 
 async def test_run_input_invalido():
-    result = await _reg().run("echo",{})
+    result = await _reg().run("echo",{}, _CTX)
     assert "erro de input" in result
 
 def test_as_openai_tools_formato():
@@ -76,11 +81,11 @@ def test_describe_all():
 async def test_timeout_retorna_mensagem():
     reg = ToolRegistry()
     reg.register(_SlowTool())
-    assert "[timeout]" in  await reg.run("slow",{})
+    assert "[timeout]" in  await reg.run("slow",{}, _CTX)
 
 async def test_device_side_nao_executa_no_servidor():
     reg = _reg_full()
-    result = await reg.run("open_tab", {"url":"x"})
+    result = await reg.run("open_tab", {"url":"x"}, _CTX)
     assert "device-side" in  result
 
 async def test_for_device_inclui_server_e_capability():

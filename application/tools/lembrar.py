@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 from domain.tools.base import Tool
+from domain.tools.guard import ToolCtx
 from domain.entities.memory_fact import MemoryFact
 from application.services.memory_service import MemoryService
 
@@ -25,7 +26,7 @@ class LembrarTool(Tool[LembrarInput]):
     def __init__(self, memory: MemoryService) -> None:
         self._memory = memory
 
-    async def run(self, payload: LembrarInput) -> str:
+    async def run(self, payload: LembrarInput, ctx: ToolCtx) -> str:
         fact = MemoryFact(
             category=payload.categoria,
             key=payload.chave,

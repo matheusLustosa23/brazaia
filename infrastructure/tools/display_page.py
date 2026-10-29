@@ -41,7 +41,7 @@ class DisplayPageTool(Tool[DisplayPageInput]):
     timeout_s = 30.0
     router_hint =  "PÁGINA de conteúdo GENÉRICO (tabela, lista, card, texto). NUNCA matemática/fórmula — não renderiza LaTeX (isso é display_math)."
     
-    async def run(self, payload: DisplayPageInput) -> str:
+    async def run(self, payload: DisplayPageInput, ctx: ToolCtx) -> str:
         html = wrap_page(payload.body_html, payload.title)      # injeta o CSS base do brazaia
         return await self._gateway.request(payload.device, "display_page", {"html": html})
     

@@ -39,7 +39,7 @@ class OpenImageTool(Tool[OpenImageInput]):
         self._gateway = gateway
         self._index = index
         
-    async def run(self, payload: OpenImageInput) -> str:
+    async def run(self, payload: OpenImageInput, ctx: ToolCtx) -> str:
         data_uri = resolve_data_uri(self._index, payload.image_id)
         if data_uri is None:
             return (f"[erro] image_id '{payload.image_id}' não existe. Não invente ids. "

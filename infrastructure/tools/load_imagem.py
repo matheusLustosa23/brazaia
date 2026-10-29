@@ -1,5 +1,6 @@
 import os, glob, base64
 from domain.tools.base import Tool
+from domain.tools.guard import ToolCtx
 from pydantic import BaseModel, Field
 from infrastructure.vision.image_index import ImageIndex
 from infrastructure.render.store import resolve_data_uri, _MIME_POR_EXT
@@ -38,7 +39,7 @@ class LoadImageTool(Tool[LoadImageInput]):
     def __init__(self, index: ImageIndex):
         self._index = index
     
-    async def run(self, payload: LoadImageInput) -> str:
+    async def run(self, payload: LoadImageInput, ctx: ToolCtx) -> str:
         img_id = payload.image_id
         data_uri = resolve_data_uri(self._index, img_id)
         if data_uri is None:

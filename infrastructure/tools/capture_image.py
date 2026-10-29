@@ -38,7 +38,7 @@ class CaptureImageTool(Tool[CaptureImageInput]):
     def __init__(self, registry: VisionRegistry):
         self._registry = registry
     
-    async def run(self, payload: CaptureImageInput):
+    async def run(self, payload: CaptureImageInput, ctx: ToolCtx):
         return await self._registry.capture(payload.source)  
     
     def before(self, args: dict, ctx: ToolCtx) -> GuardResult:

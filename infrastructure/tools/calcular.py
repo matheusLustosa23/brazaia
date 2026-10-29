@@ -1,5 +1,6 @@
 from pydantic import BaseModel, Field
 from domain.tools.base import Tool
+from domain.tools.guard import ToolCtx
 
 class CalcularInput(BaseModel):
     expressao: str = Field(..., description="Só a expressão, ex.: '2.4 * 8**1.05', 'sqrt(16)+log(100,10)'. Sem '=' nem texto.")
@@ -17,7 +18,7 @@ class CalcularTool(Tool[CalcularInput]):
     action_class = "read"
     router_hint = "fazer uma conta/cálculo numérico exato (potência, raiz, log, fórmula)"
 
-    async def run(self, payload: CalcularInput) -> str:
+    async def run(self, payload: CalcularInput, ctx: ToolCtx) -> str:
         from sympy.parsing.sympy_parser import parse_expr
         try:
             expr = parse_expr(payload.expressao, evaluate=True)   # parse seguro (só nomes do sympy, sem builtins)
