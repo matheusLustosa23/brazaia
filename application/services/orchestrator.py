@@ -152,10 +152,10 @@ class Orchestrator:
         memory_block = await self._memory.render_compact(user_message)
         # extra_system (ex.: build_system("voz")) é o system COMPLETO quando vem; senão usa o genérico.
         system = extra_system if extra_system else self._system_prompt()
-        if not think:                                      # thinking OFF: chave soft /no_think (desliga o CoT nativo)
-            system = f"{system}\n\n/no_think"
-        # thinking ON: NÃO induz formato nenhum — o modelo já emite o CoT nativo entre <think>…</think>;
-        # o CLI separa por essas tags (_SepThink). Induzir marcador duplicava o raciocínio (bagunça).
+        # thinking OFF: desligado pelo TEMPLATE (chat_template_kwargs.enable_thinking=False), via no_think=not think
+        # na chamada ao llm.stream lá embaixo. O soft-switch "/no_think" no prompt é IGNORADO pelo abliterado
+        # (medido: pensou 3/3) — por isso foi removido. thinking ON: não induz formato; o modelo emite o CoT
+        # nativo entre <think>…</think> e o CLI separa por essas tags (_SepThink).
         active = self._tools.for_device(await self._device_gateway.capabilities(device_id))
         user_turn = _user_turn(user_message, image)
         seen: set[tuple[str, bytes]] = set()
@@ -211,7 +211,10 @@ class Orchestrator:
                     texto = "Não consegui fazer isso agora."
             if user_turn:
                 history = history + [user_turn]
-            history = history + [{"role": "assistant", "content": texto}]
+            # salva só a RESPOSTA no histórico (sem o <think>): evita que o modelo veja CoT antigo e
+            # fique "imitando" raciocínio mesmo com thinking off, e economiza contexto.
+            reply_salvo = texto.rsplit("</think>", 1)[-1].strip() if "</think>" in texto else texto
+            history = history + [{"role": "assistant", "content": reply_salvo}]
             await self._session_store.set(session_id, _strip(history))
             self._flush_trace(session_id)
             return
