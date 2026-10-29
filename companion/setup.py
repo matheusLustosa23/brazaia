@@ -6,6 +6,9 @@ def _mais_x(p: str) -> None:
 
 def setup_termux() -> None:
     home = os.path.expanduser("~")
+    # libs do companion/CLI no Termux, em BLOCO (evita instalar uma a uma)
+    print("instalando deps do Termux (pip install -r companion/requirements-termux.txt)…")
+    subprocess.run(["pip", "install", "-r", "companion/requirements-termux.txt"], check=False)
     sc, icons, tasks = f"{home}/.shortcuts", f"{home}/.shortcuts/icons", f"{home}/.shortcuts/tasks"
     os.makedirs(icons, exist_ok=True)
     os.makedirs(tasks, exist_ok=True)

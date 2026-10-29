@@ -20,6 +20,7 @@ from companion._json import dumps, loads
 from companion.config import load_config
 from companion.tools.capture_handler import CAMERAS
 from companion.runtime import runtime
+from companion.state import estado                 # device_status p/ o rodapé do CLI (embed); inofensivo standalone
 
 LOG = os.path.expanduser("~/ts/connect.log")
 
@@ -40,6 +41,7 @@ async def _sessao(cfg) -> None:
         bem = loads(await ws.recv())
         if bem.get("type") == "welcome":
             log(f"❇️  handshake ok — tools no server: {bem.get('tools')}")
+        estado.device_online = True; estado.device_status = "online"   # rodapé: 🛰 on
         async for msg in ws:
             action = loads(msg)
             if "request_id" in action and "name" in action:        # tool-call do server
@@ -62,6 +64,7 @@ async def conectar(cfg=None) -> None:
             log(f"🔁 caiu ({type(e).__name__}) — reconectando em {backoff}s")
         except Exception as e:
             log(f"💥 {type(e).__name__}: {e}")
+        estado.device_online = False; estado.device_status = "reconectando"   # caiu/server fechou -> rodapé
         await asyncio.sleep(backoff)
         backoff = min(backoff * 2, 30)                             # 1->2->4...->30s
 
