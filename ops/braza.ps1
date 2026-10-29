@@ -74,7 +74,7 @@ switch ($cmd) {
     $old = (Get-NetTCPConnection -LocalPort 8080 -ErrorAction SilentlyContinue).OwningProcess
     if ($old) { Stop-Process -Id $old -Force -ErrorAction SilentlyContinue }
     wsl -u root systemctl stop vllm
-    Write-Host "vLLM parado. 3090 liberada. (pausado p/ jogo; `braza start` religa)" -ForegroundColor Green
+    Write-Host "vLLM parado. 3090 liberada. (pausado p/ jogo; 'braza start' religa)" -ForegroundColor Green
   }
 
   "status" {
