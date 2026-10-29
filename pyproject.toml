@@ -25,6 +25,7 @@ dependencies = [
     "webrtcvad-wheels>=2.0.14",
     "plyer>=2.1.0",
     "pillow>=12.3.0",
+    "pylatexenc>=2.10",            # conversor LaTeX→Unicode p/ render.py (math no terminal; modelo escreve LaTeX natural)
     "win11toast>=0.36.3 ; sys_platform == 'win32'",
     "silero-vad>=6.2.3",
     "piper-tts>=1.8.0",

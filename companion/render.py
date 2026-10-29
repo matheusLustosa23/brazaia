@@ -1,9 +1,20 @@
 # companion/render.py — renderizador do chat (promovido do protótipo scripts/_proto_respostas.py)
-import re
+import re, random, string
 from io import StringIO
 from rich.console import Console
 from rich.markdown import Markdown
 from pylatexenc.latex2text import LatexNodes2Text
+
+# --- animação do checklist/loader (promovido de scripts/_proto_respostas.py) ---
+SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"                                           # spinner do loader/etapas
+VERDE = "#39ff14"                                                  # verde vivo (loader)
+_POOL = string.ascii_uppercase + string.digits + "@#$%*+=?/\\|"   # sem < > & " ' (não quebra ANSI/HTML)
+
+def decode(nome: str, passos: int, fpl: int = 1) -> str:
+    """Efeito 'hacker decode': revela o nome da esquerda p/ direita conforme passos; o resto é ruído."""
+    alvo = nome.upper()
+    trav = min(len(alvo), max(0, passos) // fpl)
+    return alvo[:trav] + "".join(random.choice(_POOL) for _ in range(len(alvo) - trav))
 
 _L2T = LatexNodes2Text()
 _SUP = str.maketrans('0123456789+-=()ni', '⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾ⁿⁱ')
