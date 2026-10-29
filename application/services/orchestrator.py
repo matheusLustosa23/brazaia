@@ -170,6 +170,7 @@ class Orchestrator:
                     if isinstance(_b, dict) and isinstance(_b.get("text"), str):
                         ids_reais.update(re.findall(r"image_id=([0-9a-f]{12})", _b["text"]))
         saw_image = False
+        bruto_turno: list[str] = []   # TUDO que foi streamado no turno (todos os passos) → log bruto p/ auditar o thinking
         for _step in range(MAX_STEPS):
             if saw_image and VISION_STYLE not in system:
                 system = f"{system}\n\n{VISION_STYLE}"
@@ -181,6 +182,7 @@ class Orchestrator:
             ):
                 if kind == "text":
                     texto += val
+                    bruto_turno.append(val)
                     yield val                                   # streama token-a-token
                 else:                                           # ("tool_call_delta", tcd cru)
                     f = frag.setdefault(val.index, {"id": "", "name": "", "args": ""})
@@ -215,6 +217,7 @@ class Orchestrator:
                 async for kind, val in self._llm.stream(messages + [{"role": "system", "content": guard.reason}], no_think=not think):
                     if kind == "text":
                         texto += val
+                        bruto_turno.append(val)
                         yield val
                 if not check_output(texto, ids_reais).ok:
                     texto = "Não consegui fazer isso agora."
@@ -227,7 +230,7 @@ class Orchestrator:
             reply_salvo = texto.rsplit("</think>", 1)[-1].strip() if "</think>" in texto else texto
             history = history + [{"role": "assistant", "content": reply_salvo}]
             await self._session_store.set(session_id, _strip(history))
-            log_turno(session_id, user_message, texto, think=think)   # mensagens BRUTAS (com <think>) p/ auditoria
+            log_turno(session_id, user_message, "".join(bruto_turno), think=think)   # turno BRUTO inteiro (todos os passos, com <think>) p/ auditoria
             self._flush_trace(session_id)
             return
         yield "[aviso] limite de passos atingido; respondo com o que apurei até aqui."
