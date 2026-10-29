@@ -11,9 +11,10 @@ from domain.contracts import SessionStore
 from domain.entities.message import Completion, ToolCall
 from application.services.context_service import ContextManager
 from application.services.memory_service import MemoryService
-from application.services.helpers import _strip, persist_image
+from application.services.helpers import _strip, persist_image, normalize_image_uri
 from application.guards.output import check_output
 from application.services._trace import trace
+from application.services._turnlog import log_turno
 from infrastructure.devices.device_gateway import DeviceGateway
 from infrastructure.vision.image_index import ImageIndex
 
@@ -160,6 +161,14 @@ class Orchestrator:
         user_turn = _user_turn(user_message, image)
         seen: set[tuple[str, bytes]] = set()
         ids_reais: set[str] = set()
+        for _m in history:                                  # semeia ids de turnos ANTERIORES (regra b): um id já
+            _c = _m.get("content")                          # presente no histórico é válido. Sem isso o check_output
+            if isinstance(_c, str):                         # acusava falso ("id que nenhuma tool produziu neste turno")
+                ids_reais.update(re.findall(r"image_id=([0-9a-f]{12})", _c))
+            elif isinstance(_c, list):
+                for _b in _c:
+                    if isinstance(_b, dict) and isinstance(_b.get("text"), str):
+                        ids_reais.update(re.findall(r"image_id=([0-9a-f]{12})", _b["text"]))
         saw_image = False
         for _step in range(MAX_STEPS):
             if saw_image and VISION_STYLE not in system:
@@ -213,9 +222,12 @@ class Orchestrator:
                 history = history + [user_turn]
             # salva só a RESPOSTA no histórico (sem o <think>): evita que o modelo veja CoT antigo e
             # fique "imitando" raciocínio mesmo com thinking off, e economiza contexto.
+            # OBS: trata UM bloco (o comum). Multi-bloco (ex.: re-stream do guard = 2x </think> sem abertura)
+            # ainda não é tratado certo — fica junto do fix do _SepThink do CLI, na rodada de thinking.
             reply_salvo = texto.rsplit("</think>", 1)[-1].strip() if "</think>" in texto else texto
             history = history + [{"role": "assistant", "content": reply_salvo}]
             await self._session_store.set(session_id, _strip(history))
+            log_turno(session_id, user_message, texto, think=think)   # mensagens BRUTAS (com <think>) p/ auditoria
             self._flush_trace(session_id)
             return
         yield "[aviso] limite de passos atingido; respondo com o que apurei até aqui."
@@ -275,6 +287,7 @@ class Orchestrator:
                 
                 
             if isinstance(obs, str) and obs.startswith("data:image/"):
+                obs = normalize_image_uri(obs)
                 img_id = persist_image(obs, session_id, device_id, self._image_index)
                 ids_reais.add(img_id)
                 origem = (
@@ -386,7 +399,7 @@ def _user_turn(text: str, image: str  | None) -> dict:
         "role":"user",
         "content": [
             {"type": "text", "text": text},
-            {"type": "image_url", "image_url": {"url": image}}
+            {"type": "image_url", "image_url": {"url": normalize_image_uri(image)}}
         ]
     }
 
