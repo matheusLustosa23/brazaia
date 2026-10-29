@@ -194,46 +194,6 @@ def _ponto_flush(buf: str) -> int:
         idx = buf.rfind("\n\n", 0, idx)
     return -1
 
-def _tail_parcial(s: str, tag: str) -> int:
-    """Nº de chars finais de s que podem ser PREFIXO de tag (carrega p/ o próximo chunk — tag partida)."""
-    for k in range(min(len(tag) - 1, len(s)), 0, -1):
-        if s.endswith(tag[:k]):
-            return k
-    return 0
-
-class _SepThink:
-    """Separa o CoT NATIVO do resto. Com enable_thinking, o Qwen põe o '<think>' NO PROMPT,
-    então o stream chega SEM a tag de abertura: '…raciocínio… </think> resposta'. Por isso:
-    think_esperado=True → começa JÁ em 'think' e chaveia no '</think>'; senão tudo é 'reply'.
-    achou_fim = viu o '</think>' (se não vier, o que acumulou NÃO era raciocínio → é resposta)."""
-    def __init__(self, think_esperado: bool) -> None:
-        self.modo = "think" if think_esperado else "reply"
-        self.pend = ""
-        self.achou_fim = not think_esperado
-    def feed(self, chunk: str) -> list[tuple[str, str]]:
-        segs: list[tuple[str, str]] = []
-        s = self.pend + chunk; self.pend = ""
-        while s:
-            if self.modo == "think":
-                j = s.find("</think>")
-                if j == -1:
-                    k = _tail_parcial(s, "</think>")
-                    if k: self.pend = s[-k:]; s = s[:-k]
-                    if s: segs.append(("think", s))
-                    break
-                if j: segs.append(("think", s[:j]))
-                s = s[j + 8:]; self.modo = "reply"; self.achou_fim = True
-            else:                                            # reply: mas se vazar um </think> (modo off/ruído), o que veio antes era raciocínio
-                j = s.find("</think>")
-                if j == -1:
-                    k = _tail_parcial(s, "</think>")
-                    if k: self.pend = s[-k:]; s = s[:-k]
-                    if s: segs.append(("reply", s))
-                    break
-                if j: segs.append(("think", s[:j]))          # bloco vazado → marcado como think (off descarta)
-                s = s[j + 8:]
-        return segs
-
 _AMBAR = "\033[38;2;229;192;123m"
 
 def _wrap(t: str, w: int) -> list[str]:
@@ -283,7 +243,7 @@ async def _responder(msg: str):
     global respondendo, session_id, pending_image, pending_name, stream_tail, tail_think, tok_count, ultima_resposta, aguardando, pensando, think_t0, turno_t0
     respondendo = True; aguardando = True                            # aguardando = TTFT (mostra "processando…")
     tok_count = 0; full = []; erro = None                            # contador total + reply + erro
-    think_toks = 0; think_t0 = 0.0; think_secs = 0.0; pensando = False
+    think_toks = 0; think_t0 = 0.0; think_secs = 0.0; pensando = False; blk_toks = 0
     turno_t0 = time.monotonic()
     img = pending_image; pending_image = None                        # consome o anexo (1 vez)
     nome = pending_name; pending_name = None
@@ -293,48 +253,47 @@ async def _responder(msg: str):
     _p(_corpo_md(tag + msg, W, BAR_AZUL) + "\n")
     _p("\n" + _titulo(f"{BOT} brazaia", W, BAR_TEAL, HBG_BOT, NM_BOT) + "\n")
     buf = ""; topo_feito = False
-    sep = _SepThink(think_mode != "off"); pensamento = ""; pensou = False   # separa o <think> nativo da resposta
+    pensamento = ""   # raciocínio do bloco ATUAL (o server etiqueta think/reply por-chamada; multi-caixa por transição)
     try:
         async for ev in chat_stream(msg, session_id, cfg, image=img, think=(think_mode != "off")):
             if "session_id" in ev:
                 session_id = ev["session_id"]                        # lembra a sessão
             elif "delta" in ev:
                 tok_count += 1; aguardando = False                   # 1º token chegou → tira o "processando…"
-                for modo, txt in sep.feed(ev["delta"]):              # 'think' = raciocínio · 'reply' = resposta
-                    if modo == "think":
-                        if think_mode == "off":                      # off: ignora qualquer raciocínio vazado
-                            continue
-                        pensamento += txt; think_toks += 1
-                        if not think_t0: think_t0 = time.monotonic()
-                        if think_mode == "full":
-                            stream_tail = pensamento; tail_think = True   # raciocínio digitando (âmbar)
-                        else:
-                            pensando = True                          # colap: só "pensando…"
+                modo = "think" if ev.get("think") else "reply"       # server já etiqueta (separação por-chamada no orchestrator)
+                txt = ev["delta"]
+                if modo == "think":
+                    if think_mode == "off":                          # off: nem deveria vir raciocínio (belt-and-suspenders)
+                        continue
+                    pensamento += txt; think_toks += 1; blk_toks += 1
+                    if not think_t0: think_t0 = time.monotonic()     # início DESTE bloco
+                    if think_mode == "full":
+                        stream_tail = pensamento; tail_think = True   # raciocínio digitando (âmbar)
                     else:
-                        if pensamento and not pensou:                # fecha o raciocínio 1x (full=caixa · colap=resumo)
-                            think_secs = (time.monotonic() - think_t0) if think_t0 else 0.0
-                            _fecha_raciocinio(pensamento, think_toks, think_t0, W)
-                            pensou = True; pensando = False; stream_tail = ""; tail_think = False
-                        if not topo_feito:
-                            _p(_pad_top(W) + "\n"); topo_feito = True
-                        buf += txt; full.append(txt)                 # resposta "real"
-                        p = _ponto_flush(buf)                        # solta bloco pronto (fora de cerca)
-                        if p == -1 and len(buf) > 2500 and buf.count("```") % 2 == 0:
-                            p = len(buf)                             # force-flush: bloco gigante sem \n\n
-                        if p != -1:
-                            pronto, buf = buf[:p], buf[p + 2:]
-                            _p(_corpo_md(pronto, W, BAR_TEAL) + "\n")
-                        stream_tail = buf; tail_think = False        # rabo = o que falta → DIGITA no prompt
+                        pensando = True                              # colap: só "pensando…"
+                else:
+                    if pensamento:                                   # transição think→reply: fecha ESTE bloco (multi-caixa)
+                        think_secs += (time.monotonic() - think_t0) if think_t0 else 0.0
+                        _fecha_raciocinio(pensamento, blk_toks, think_t0, W)
+                        pensamento = ""; blk_toks = 0; think_t0 = 0.0
+                        pensando = False; stream_tail = ""; tail_think = False
+                    if not topo_feito:
+                        _p(_pad_top(W) + "\n"); topo_feito = True
+                    buf += txt; full.append(txt)                     # resposta "real"
+                    p = _ponto_flush(buf)                            # solta bloco pronto (fora de cerca)
+                    if p == -1 and len(buf) > 2500 and buf.count("```") % 2 == 0:
+                        p = len(buf)                                 # force-flush: bloco gigante sem \n\n
+                    if p != -1:
+                        pronto, buf = buf[:p], buf[p + 2:]
+                        _p(_corpo_md(pronto, W, BAR_TEAL) + "\n")
+                    stream_tail = buf; tail_think = False            # rabo = o que falta → DIGITA no prompt
             elif ev.get("success") is False or "error" in ev or "code" in ev:   # ERRO do servidor (não ficar no escuro)
                 erro = str(ev.get("message") or ev.get("error") or ev)[:200]
                 m = f" ⚠ erro do servidor: {erro}"
                 _p(_corpo(f" \033[1;38;2;255;90;90m{m[1:]}", cell_len(m), W, None) + "\n")
-        if pensamento and not pensou:
-            if sep.achou_fim:                                        # fechou </think> → era raciocínio de verdade
-                think_secs = (time.monotonic() - think_t0) if think_t0 else 0.0
-                _fecha_raciocinio(pensamento, think_toks, think_t0, W)
-            else:                                                    # nunca fechou → NÃO era raciocínio, é a resposta
-                buf = pensamento + buf; think_toks = 0
+        if pensamento:                                               # sobrou raciocínio sem resposta depois → fecha a caixa
+            think_secs += (time.monotonic() - think_t0) if think_t0 else 0.0
+            _fecha_raciocinio(pensamento, blk_toks, think_t0, W)
         pensando = False; stream_tail = ""; tail_think = False        # some o rabo…
         if buf.strip():
             _p(_corpo_md(buf, W, BAR_TEAL) + "\n")                    # …e vira o Markdown final

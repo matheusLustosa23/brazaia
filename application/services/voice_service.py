@@ -151,11 +151,11 @@ class VoiceSession:
         tts_ms = 0.0
         token = no_think_var.set(True)  # desliga o thinking do Qwen3 só neste turno de voz
         try:
-            async for ev in self.orch.run_react(session_id=self.sid, user_message=text,
+            async for kind, ev in self.orch.run_react(session_id=self.sid, user_message=text,
                                                 extra_system=build_system("voz"), think=False):
                 if self._cancel.is_set():
                     break
-                if not isinstance(ev, str):      # orchestrator pode emitir eventos (dict)
+                if kind != "reply":              # run_react agora etiqueta: voz fala só a RESPOSTA (ignora raciocínio)
                     continue
                 if ttft_ms is None:
                     ttft_ms = (time.perf_counter() - t0) * 1000

@@ -25,13 +25,13 @@ async def chat(
     if not req.stream:
         reply = "".join(
             [
-                tok async for tok in orch.run_react(
+                text async for (kind, text) in orch.run_react(
                     session_id=session_id,
                     device_id=req.device_id,
                     user_message=req.message,
                     image=req.image,
                     think=req.think,              # think=False → enable_thinking=False (explícito, confiável)
-                )
+                ) if kind == "reply"              # non-stream devolve só a RESPOSTA (raciocínio descartado)
             ]
         )
         return ApiResponse.ok(ChatData(session_id=session_id, reply=reply))
@@ -39,7 +39,7 @@ async def chat(
         parts: list[str] = []
         try:
             yield sse_event({"session_id": session_id}, event="start")
-            async for token in orch.run_react(
+            async for kind, text in orch.run_react(
                 session_id=session_id,
                 user_message=req.message,
                 device_id=req.device_id,
@@ -48,8 +48,11 @@ async def chat(
             ):
                 if await request.is_disconnected():
                     break
-                parts.append(token)
-                yield sse_event({"delta": token}, event="token")
+                if kind == "think":               # raciocínio: marcado com think=True (o CLI mostra na caixa)
+                    yield sse_event({"delta": text, "think": True}, event="token")
+                else:                             # resposta: delta normal
+                    parts.append(text)
+                    yield sse_event({"delta": text}, event="token")
             yield sse_event({"done": True, "reply": "".join(parts)}, event="end")
 
         except Exception as exc:

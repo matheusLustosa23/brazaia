@@ -3,6 +3,7 @@ from __future__ import annotations
 import orjson, re
 
 from typing import Awaitable, Callable,BinaryIO
+from collections.abc import AsyncIterator
 
 from domain.contracts import LLMClient
 from domain.tools.base import ToolRegistry
@@ -119,6 +120,58 @@ async def deny_by_default(name: str, payload: dict) -> bool:
     return False
 
 
+_FIM_COT = "</think>"
+
+def _tail_parcial(s: str, tag: str) -> int:
+    """Maior sufixo de s que é prefixo de tag (a tag pode chegar partida entre chunks do stream)."""
+    for k in range(min(len(tag) - 1, len(s)), 0, -1):
+        if s.endswith(tag[:k]):
+            return k
+    return 0
+
+
+class _CoTSplit:
+    """Separa raciocínio/resposta de UMA chamada ao LLM. Com enable_thinking a abertura <think> fica
+    NO PROMPT, então o stream chega 'raciocínio </think> resposta' (sem abertura). Começa em 'think'
+    (se esperado) e vira 'reply' no 1º </think>. Separar POR CHAMADA é o único jeito confiável: no
+    texto concatenado do turno os limites somem (medido: resposta pode aparecer no meio)."""
+    def __init__(self, think_esperado: bool) -> None:
+        self.modo = "think" if think_esperado else "reply"
+        self.pend = ""
+
+    def feed(self, chunk: str) -> list[tuple[str, str]]:
+        out: list[tuple[str, str]] = []
+        s = self.pend + chunk
+        self.pend = ""
+        if self.modo == "reply":
+            if s:
+                out.append(("reply", s))
+            return out
+        j = s.find(_FIM_COT)
+        if j == -1:                                   # ainda em raciocínio; segura tag partida no fim
+            k = _tail_parcial(s, _FIM_COT)
+            if k:
+                self.pend = s[-k:]
+                s = s[:-k]
+            if s:
+                out.append(("think", s))
+            return out
+        if j:
+            out.append(("think", s[:j]))
+        resto = s[j + len(_FIM_COT):]
+        self.modo = "reply"
+        if resto:
+            out.append(("reply", resto))
+        return out
+
+    def flush(self) -> list[tuple[str, str]]:
+        """Fim da chamada: devolve o que sobrou pendente (tag partida que nunca fechou)."""
+        if not self.pend:
+            return []
+        p, self.pend = self.pend, ""
+        return [(self.modo, p)]
+
+
 class Orchestrator:
     """Application service: cérebro do agente. Depende só de contratos (domain/),
     nunca de infrastructure/. Injeção por lifespan/dependencies."""
@@ -148,7 +201,7 @@ class Orchestrator:
         self._image_index = image_index
 
     
-    async def run_react(self, session_id, user_message, *, image=None, device_id=None, extra_system=None, think=True):
+    async def run_react(self, session_id, user_message, *, image=None, device_id=None, extra_system=None, think=True) -> AsyncIterator[tuple[str, str]]:
         history = await self._session_store.get(session_id)
         memory_block = await self._memory.render_compact(user_message)
         # extra_system (ex.: build_system("voz")) é o system COMPLETO quando vem; senão usa o genérico.
@@ -177,13 +230,17 @@ class Orchestrator:
             messages = self._context.build(system, memory_block, history, user_turn or {})
             texto = ""
             frag: dict[int, dict] = {}                          # index -> {"id","name","args"}
+            bruto_turno.append(f"\n⟦── chamada {_step + 1} ──⟧\n")   # marca o limite de CADA llm.stream no log bruto
+            sep = _CoTSplit(think)                               # separa raciocínio/resposta DESTA chamada (por-chamada = confiável)
             async for kind, val in self._llm.stream(
                 messages, tools=active.as_openai_tools(), tool_choice="auto", no_think=not think
             ):
                 if kind == "text":
-                    texto += val
                     bruto_turno.append(val)
-                    yield val                                   # streama token-a-token
+                    for tg, piece in sep.feed(val):
+                        if tg == "reply":
+                            texto += piece                      # texto = só a RESPOSTA (raciocínio fica fora do guard/save)
+                        yield (tg, piece)                       # etiquetado: ('think'|'reply', pedaço)
                 else:                                           # ("tool_call_delta", tcd cru)
                     f = frag.setdefault(val.index, {"id": "", "name": "", "args": ""})
                     if val.id:
@@ -192,6 +249,10 @@ class Orchestrator:
                         f["name"] += val.function.name
                     if val.function and val.function.arguments:
                         f["args"] += val.function.arguments
+            for tg, piece in sep.flush():                        # fecha a chamada (raciocínio que não fechou </think>)
+                if tg == "reply":
+                    texto += piece
+                yield (tg, piece)
             if frag:                                            # tool(s) → executa, resultado REAL volta
                 tool_calls = [
                     ToolCall(id=f["id"] or f"call_{i}", name=f["name"], arguments=orjson.loads(f["args"] or "{}"))
@@ -214,26 +275,32 @@ class Orchestrator:
             guard = check_output(texto, ids_reais)
             if not guard.ok:
                 texto = ""
+                bruto_turno.append("\n⟦── guard re-stream ──⟧\n")
+                sep = _CoTSplit(think)
                 async for kind, val in self._llm.stream(messages + [{"role": "system", "content": guard.reason}], no_think=not think):
                     if kind == "text":
-                        texto += val
                         bruto_turno.append(val)
-                        yield val
+                        for tg, piece in sep.feed(val):
+                            if tg == "reply":
+                                texto += piece
+                            yield (tg, piece)
+                for tg, piece in sep.flush():
+                    if tg == "reply":
+                        texto += piece
+                    yield (tg, piece)
                 if not check_output(texto, ids_reais).ok:
                     texto = "Não consegui fazer isso agora."
             if user_turn:
                 history = history + [user_turn]
-            # salva só a RESPOSTA no histórico (sem o <think>): evita que o modelo veja CoT antigo e
-            # fique "imitando" raciocínio mesmo com thinking off, e economiza contexto.
-            # OBS: trata UM bloco (o comum). Multi-bloco (ex.: re-stream do guard = 2x </think> sem abertura)
-            # ainda não é tratado certo — fica junto do fix do _SepThink do CLI, na rodada de thinking.
-            reply_salvo = texto.rsplit("</think>", 1)[-1].strip() if "</think>" in texto else texto
+            # texto já é SÓ a resposta (o _CoTSplit removeu o raciocínio por-chamada) → salva limpo,
+            # sem CoT antigo no histórico (não "imita" raciocínio com think off) e economiza contexto.
+            reply_salvo = texto.strip()
             history = history + [{"role": "assistant", "content": reply_salvo}]
             await self._session_store.set(session_id, _strip(history))
             log_turno(session_id, user_message, "".join(bruto_turno), think=think)   # turno BRUTO inteiro (todos os passos, com <think>) p/ auditoria
             self._flush_trace(session_id)
             return
-        yield "[aviso] limite de passos atingido; respondo com o que apurei até aqui."
+        yield ("reply", "[aviso] limite de passos atingido; respondo com o que apurei até aqui.")
     
     def _system_prompt(self) -> str:
         return(
