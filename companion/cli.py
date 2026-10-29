@@ -40,6 +40,7 @@ think_mode = "off"    # thinking: "off" | "full" (caixa) | "colap" (só resumo).
 pensando = False      # colap: True enquanto recebe o <think> (mostra "pensando…" em vez do texto)
 think_t0 = 0.0        # início do raciocínio (p/ o tempo no modo colapsado)
 turno_t0 = 0.0        # início do turno (p/ o tempo total no rodapé/loader)
+last_delta_t = 0.0    # instante do último delta recebido → detecta GAP (tool rodando/entre passos) p/ loader
 tok_count = 0         # contador de tokens da resposta atual (ao vivo, estilo Claude)
 ctx_usado = 0; ctx_total = 0; ctx_model = ""; ctx_reservado = 0   # contexto + teto de saída → footer
 DIM_A = "\033[38;2;92;99;112m"
@@ -143,6 +144,7 @@ def _prompt_msg() -> StyleAndTextTuples:
     Tudo vive no rodapé, não vai pro histórico."""
     w = _larg()
     linhas: StyleAndTextTuples = []
+    gap = respondendo and (time.monotonic() - last_delta_t) > 0.4   # stream pausou (tool rodando / entre passos) → loader
     if voz_prep:                                               # /voz: preparando o mic
         linhas.append(("bold #e5c07b", "   ⚙ preparando microfone…\n"))
     elif gravando:                                             # /voz: gravando livre até o Enter
@@ -154,11 +156,11 @@ def _prompt_msg() -> StyleAndTextTuples:
         sp = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"[frame % 10]
         secs = (time.monotonic() - think_t0) if think_t0 else 0.0
         linhas.append(("bold #e5c07b", f"   {sp} 💭 pensando… {secs:.0f}s\n"))
-    elif aguardando:                                           # mandou e espera o 1º token (TTFT) → não fica card vazio
+    elif aguardando or gap:                                    # TTFT (1º token) OU gap entre passos (tool rodando) → loader, não parecer travado
         sp = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"[frame % 10]
         secs = (time.monotonic() - turno_t0) if turno_t0 else 0.0
         linhas.append(("bold #4a9eff", f"   {sp} processando… {secs:.0f}s\n"))
-    if stream_tail:                                            # RABO digitando (bg escuro, estilo Ollama)
+    if stream_tail and not gap:                                # RABO digitando (no gap some o rabo congelado e fica só o loader)
         cauda = stream_tail[-400:]                              # cap por CHARS: bloco gigante não trava o render
         lim = _larg() - 2
         barra = "#e5c07b" if tail_think else TEAL_HEX           # 💭 raciocínio = âmbar · resposta = verde
@@ -240,11 +242,11 @@ def _fecha_raciocinio(texto: str, toks: int, t0: float, W: int) -> None:
 async def _responder(msg: str):
     """Consome o stream do backend (chat_stream): session_id + deltas de texto + erro.
     (Fase 1: checklist/eventos entram na Fase 2.)"""
-    global respondendo, session_id, pending_image, pending_name, stream_tail, tail_think, tok_count, ultima_resposta, aguardando, pensando, think_t0, turno_t0
+    global respondendo, session_id, pending_image, pending_name, stream_tail, tail_think, tok_count, ultima_resposta, aguardando, pensando, think_t0, turno_t0, last_delta_t
     respondendo = True; aguardando = True                            # aguardando = TTFT (mostra "processando…")
     tok_count = 0; full = []; erro = None                            # contador total + reply + erro
     think_toks = 0; think_t0 = 0.0; think_secs = 0.0; pensando = False; blk_toks = 0
-    turno_t0 = time.monotonic()
+    turno_t0 = time.monotonic(); last_delta_t = time.monotonic()
     img = pending_image; pending_image = None                        # consome o anexo (1 vez)
     nome = pending_name; pending_name = None
     W = _larg()
@@ -259,7 +261,7 @@ async def _responder(msg: str):
             if "session_id" in ev:
                 session_id = ev["session_id"]                        # lembra a sessão
             elif "delta" in ev:
-                tok_count += 1; aguardando = False                   # 1º token chegou → tira o "processando…"
+                tok_count += 1; aguardando = False; last_delta_t = time.monotonic()   # chegou delta → reseta o relógio do gap
                 modo = "think" if ev.get("think") else "reply"       # server já etiqueta (separação por-chamada no orchestrator)
                 txt = ev["delta"]
                 if modo == "think":
