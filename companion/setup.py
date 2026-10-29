@@ -57,6 +57,11 @@ def setup_tailscale_termux() -> None:
     shutil.copy("companion/boot/termux-boot.sh", f"{home}/.termux/boot/00-brazaia.sh")
     _mais_x(f"{home}/.termux/boot/00-brazaia.sh")
 
+    shutil.copy("companion/boot/healthcheck.sh", f"{home}/brazaia/healthcheck.sh")   # 3b) watchdog
+    _mais_x(f"{home}/brazaia/healthcheck.sh")
+    subprocess.run(["termux-job-scheduler", "--script", f"{home}/brazaia/healthcheck.sh",  # a cada 15min, sobrevive a kill/reboot
+                    "--period-ms", "900000", "--persisted", "true", "--job-id", "1"], check=False)
+
     envf = f"{home}/.brazaia.env"                         # 4) TS_AUTHKEY no env
     txt = open(envf).read() if os.path.exists(envf) else ""
     if "TS_AUTHKEY" not in txt:

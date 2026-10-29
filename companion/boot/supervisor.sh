@@ -9,6 +9,7 @@ TS="$HOME/ts/bin"
 STATE="$HOME/ts/state"
 REPO="$HOME/brazaia"                        # onde o repo esta checado no celular
 mkdir -p "$STATE" "$HOME/ts"
+termux-wake-lock 2>/dev/null                # segura a CPU acordada (contra o Doze) sempre que o supervisor roda
 
 log() { echo "$(date '+%H:%M:%S') $*" >> "$HOME/ts/supervisor.log"; }
 
