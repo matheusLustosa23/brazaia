@@ -171,7 +171,8 @@ class SqlLiteMemoryStore:
             return [_row_to_fact(r) for r in rows]
     
     async def search(self, query: str, limit: int = 10) -> list[MemoryFact]:
-        if not query.split():
+        q = _sanitize_fts5(query)            # tira símbolos; "?" etc viram "" → sem busca (evita 'MATCH ""' → erro fts5)
+        if not q:
             return []
         now = time.time()
         async with self._connect() as db:
@@ -183,7 +184,7 @@ class SqlLiteMemoryStore:
                     WHERE facts_fts MATCH ? AND f.invalid_at IS NULL
                     ORDER BY bm25_rank
                     LIMIT ?""",
-                (_sanitize_fts5(query), limit),
+                (q, limit),
             )
             if rows:
                 ids = [r["id"] for r in rows]

@@ -129,7 +129,7 @@ async def _banner() -> None:                 # FIGLET "brazaia" com gradiente Br
         r, g, b = _grad(i / L)
         sys.stdout.write(f"\033[1m\033[38;2;{r};{g};{b}m {ln}{R}\n"); sys.stdout.flush()
         await asyncio.sleep(0.05)
-    sys.stdout.write(f" {BAR_TEAL}{BOT}{R}  {BAR_AZUL}companion · online{R}\n"); sys.stdout.flush()
+    sys.stdout.write(f" {BAR_TEAL}{BOT}{R}  {BAR_AZUL}companion{R}  {DIM_A}(status no rodapé){R}\n"); sys.stdout.flush()
     await asyncio.sleep(0.6)
 frame = 0
 respondendo = False
@@ -161,7 +161,7 @@ def _prompt_msg() -> StyleAndTextTuples:
         txtcor = "#8a7a52 bg:#15181d" if tail_think else "#7a808c bg:#15181d"
         for ln in cauda.split("\n")[-STREAM_MAX:]:
             linhas.append((barra, "▌"))
-            linhas.append((txtcor, (" 💭" if tail_think else " ") + (ln[:lim]).ljust(lim) + "\n"))
+            linhas.append((txtcor, " " + (ln[:lim]).ljust(lim) + "\n"))
     linhas.append((BORDA, "\n╭─ mensagem " + "─" * (w - 12) + "╮\n"))
     linhas += [(BORDA, "│ "), (f"bold {AZUL}", "❯ ")]
     return linhas
@@ -175,8 +175,9 @@ def _toolbar() -> StyleAndTextTuples:
     out = f" · ↑{tok_count} · {(time.monotonic() - turno_t0):.0f}s" if (respondendo and turno_t0) else ""
     modelo = (ctx_model or "—").split("/")[-1][:24]
     sid = (session_id or "nova")[:8]
+    dev = (cfg.device_id if cfg else "device")
     th = {"off": "💭off", "full": "💭full", "colap": "💭colap"}.get(think_mode, "💭off")
-    txt = f" {status} · sessão {sid}{ctx}{out} · {th} · {modelo} "
+    txt = f" {status} · {dev} · sessão {sid}{ctx}{out} · {th} · {modelo} "
     fill = max(1, w - len(txt) - 6)
     return [(BORDA, "╰─"), (dot, "●"), (DIM, txt), (BORDA, "─" * fill + "╯")]
 
@@ -197,24 +198,19 @@ def _tail_parcial(s: str, tag: str) -> int:
     return 0
 
 class _SepThink:
-    """Separa <think>…</think> (raciocínio) do resto (resposta), tolerando tags partidas entre deltas."""
-    def __init__(self) -> None:
-        self.modo = "reply"       # "reply" | "think"
+    """Separa o CoT NATIVO do resto. Com enable_thinking, o Qwen põe o '<think>' NO PROMPT,
+    então o stream chega SEM a tag de abertura: '…raciocínio… </think> resposta'. Por isso:
+    think_esperado=True → começa JÁ em 'think' e chaveia no '</think>'; senão tudo é 'reply'.
+    achou_fim = viu o '</think>' (se não vier, o que acumulou NÃO era raciocínio → é resposta)."""
+    def __init__(self, think_esperado: bool) -> None:
+        self.modo = "think" if think_esperado else "reply"
         self.pend = ""
+        self.achou_fim = not think_esperado
     def feed(self, chunk: str) -> list[tuple[str, str]]:
         segs: list[tuple[str, str]] = []
         s = self.pend + chunk; self.pend = ""
         while s:
-            if self.modo == "reply":
-                i = s.find("<think>")
-                if i == -1:
-                    k = _tail_parcial(s, "<think>")
-                    if k: self.pend = s[-k:]; s = s[:-k]
-                    if s: segs.append(("reply", s))
-                    break
-                if i: segs.append(("reply", s[:i]))
-                s = s[i + 7:]; self.modo = "think"
-            else:
+            if self.modo == "think":
                 j = s.find("</think>")
                 if j == -1:
                     k = _tail_parcial(s, "</think>")
@@ -222,7 +218,16 @@ class _SepThink:
                     if s: segs.append(("think", s))
                     break
                 if j: segs.append(("think", s[:j]))
-                s = s[j + 8:]; self.modo = "reply"
+                s = s[j + 8:]; self.modo = "reply"; self.achou_fim = True
+            else:                                            # reply: mas se vazar um </think> (modo off/ruído), o que veio antes era raciocínio
+                j = s.find("</think>")
+                if j == -1:
+                    k = _tail_parcial(s, "</think>")
+                    if k: self.pend = s[-k:]; s = s[:-k]
+                    if s: segs.append(("reply", s))
+                    break
+                if j: segs.append(("think", s[:j]))          # bloco vazado → marcado como think (off descarta)
+                s = s[j + 8:]
         return segs
 
 _AMBAR = "\033[38;2;229;192;123m"
@@ -238,8 +243,15 @@ def _wrap(t: str, w: int) -> list[str]:
         out.append(ln)
     return out
 
+def _limpa_think(texto: str) -> str:
+    """Tira um <think> de abertura residual (às vezes vem no stream) e espaços."""
+    t = texto.strip()
+    if t.startswith("<think>"): t = t[7:].strip()
+    return t
+
 def _commit_pensamento(texto: str, W: int) -> None:
     """Raciocínio FULL (opção escolhida): caixa com borda âmbar + texto dim — distinta da resposta (verde)."""
+    texto = _limpa_think(texto)
     inner = W - 6
     _p(f"{_AMBAR}  ┌─ 💭 raciocínio " + "─" * max(0, W - 20) + "┐" + R + "\n")
     for ln in _wrap(texto, inner):
@@ -247,9 +259,11 @@ def _commit_pensamento(texto: str, W: int) -> None:
     _p(f"{_AMBAR}  └" + "─" * max(0, W - 4) + "┘" + R + "\n")
 
 def _commit_colap(texto: str, toks: int, secs: float, W: int) -> None:
-    """Raciocínio COLAPSADO: só o resumo (linhas · tokens · tempo) — esconde o texto."""
-    nlin = len([l for l in texto.strip().split("\n") if l.strip()])
-    _p(f"  {_AMBAR}💭 raciocínio{R} {DIM_A}· {nlin} linhas · {toks} tokens · {secs:.1f}s ▸{R}\n")
+    """Raciocínio COLAPSADO: caixa de UMA linha (só o resumo) — mesma estética da aberta, mas sem o texto."""
+    nlin = len([l for l in _limpa_think(texto).split("\n") if l.strip()])
+    lbl = f"─ 💭 raciocínio · {nlin} linhas · {toks} tok · {secs:.1f}s ▸ "
+    _p(f"{_AMBAR}  ┌{lbl}" + "─" * max(0, W - 4 - cell_len(lbl)) + "┐" + R + "\n")
+    _p(f"{_AMBAR}  └" + "─" * max(0, W - 4) + "┘" + R + "\n")
 
 def _fecha_raciocinio(texto: str, toks: int, t0: float, W: int) -> None:
     """Fixa o raciocínio no scrollback conforme o modo: full=caixa, colap=resumo."""
@@ -275,7 +289,7 @@ async def _responder(msg: str):
     _p(_corpo_md(tag + msg, W, BAR_AZUL) + "\n")
     _p("\n" + _titulo(f"{BOT} brazaia", W, BAR_TEAL, HBG_BOT, NM_BOT) + "\n")
     buf = ""; topo_feito = False
-    sep = _SepThink(); pensamento = ""; pensou = False               # separa <think> (raciocínio) da resposta
+    sep = _SepThink(think_mode != "off"); pensamento = ""; pensou = False   # separa o <think> nativo da resposta
     try:
         async for ev in chat_stream(msg, session_id, cfg, image=img, think=(think_mode != "off")):
             if "session_id" in ev:
@@ -284,6 +298,8 @@ async def _responder(msg: str):
                 tok_count += 1; aguardando = False                   # 1º token chegou → tira o "processando…"
                 for modo, txt in sep.feed(ev["delta"]):              # 'think' = raciocínio · 'reply' = resposta
                     if modo == "think":
+                        if think_mode == "off":                      # off: ignora qualquer raciocínio vazado
+                            continue
                         pensamento += txt; think_toks += 1
                         if not think_t0: think_t0 = time.monotonic()
                         if think_mode == "full":
@@ -309,9 +325,12 @@ async def _responder(msg: str):
                 erro = str(ev.get("message") or ev.get("error") or ev)[:200]
                 m = f" ⚠ erro do servidor: {erro}"
                 _p(_corpo(f" \033[1;38;2;255;90;90m{m[1:]}", cell_len(m), W, None) + "\n")
-        if pensamento and not pensou:                                # raciocínio sem resposta depois → fixa mesmo assim
-            think_secs = (time.monotonic() - think_t0) if think_t0 else 0.0
-            _fecha_raciocinio(pensamento, think_toks, think_t0, W)
+        if pensamento and not pensou:
+            if sep.achou_fim:                                        # fechou </think> → era raciocínio de verdade
+                think_secs = (time.monotonic() - think_t0) if think_t0 else 0.0
+                _fecha_raciocinio(pensamento, think_toks, think_t0, W)
+            else:                                                    # nunca fechou → NÃO era raciocínio, é a resposta
+                buf = pensamento + buf; think_toks = 0
         pensando = False; stream_tail = ""; tail_think = False        # some o rabo…
         if buf.strip():
             _p(_corpo_md(buf, W, BAR_TEAL) + "\n")                    # …e vira o Markdown final
@@ -331,10 +350,14 @@ async def _responder(msg: str):
 
 async def _ticker():
     global frame
+    _ult_status = None
     while True:
         frame += 1
-        if respondendo or stream_tail or gravando or voz_prep:       # redesenha SÓ com animação viva
-            try: get_app().invalidate()                              # ocioso = sem redraw → seleção do terminal não some
+        # redesenha com animação viva OU quando o status do device muda (ex.: conectou no boot → vira online
+        # sozinho, sem precisar o usuário digitar). Ocioso e estável = sem redraw (a seleção do terminal não some).
+        if respondendo or stream_tail or gravando or voz_prep or estado.device_status != _ult_status:
+            _ult_status = estado.device_status
+            try: get_app().invalidate()
             except Exception: pass
         await asyncio.sleep(0.08)
 
@@ -514,10 +537,16 @@ class _Comp(Completer):
         txt = document.text_before_cursor
         if not txt.startswith("/"):
             return
-        partes = txt.split(" ")
-        for c in self.CMDS:                                          # comandos
-            if c.startswith(partes[0]):
-                yield Completion(c, start_position=-len(partes[0]))
+        # /think já aparece EXPANDIDO nas 3 opções (off|full|colap) no dropdown — é o "toggle com opções"
+        opts: list[tuple[str, str]] = []
+        for c in self.CMDS:
+            if c == "/think":
+                opts += [("/think off", "desliga"), ("/think full", "caixa"), ("/think colap", "só resumo")]
+            else:
+                opts.append((c, ""))
+        for c, d in opts:
+            if c.startswith(txt):
+                yield Completion(c, start_position=-len(txt), display=(c + (f"  ({d})" if d else "")))
 
 def _dispatch(msg: str, app) -> None:
     global session_id, think_mode
