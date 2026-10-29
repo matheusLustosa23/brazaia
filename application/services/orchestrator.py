@@ -152,14 +152,10 @@ class Orchestrator:
         memory_block = await self._memory.render_compact(user_message)
         # extra_system (ex.: build_system("voz")) é o system COMPLETO quando vem; senão usa o genérico.
         system = extra_system if extra_system else self._system_prompt()
-        if not think:                                      # chave SOFT do Qwen3 (mais confiável que só o enable_thinking
-            system = f"{system}\n\n/no_think"              # do template — alguns modelos abliterados ignoram o template)
-        else:                                              # thinking LIGADO: marcador de TEXTO PURO (abliterado segue melhor que XML)
-            system = (f"{system}\n\n# Formato OBRIGATÓRIO da saída\n"
-                      "Responda em DUAS partes, nesta ordem e com estas palavras-chave EXATAS (uma vez cada):\n"
-                      "RACIOCÍNIO:\n<aqui todo o seu raciocínio, em pt-BR>\n"
-                      "RESPOSTA:\n<aqui a resposta final ao dono>\n"
-                      "Sempre escreva 'RACIOCÍNIO:' antes e 'RESPOSTA:' antes da resposta final. Nunca pule nenhuma das duas.")
+        if not think:                                      # thinking OFF: chave soft /no_think (desliga o CoT nativo)
+            system = f"{system}\n\n/no_think"
+        # thinking ON: NÃO induz formato nenhum — o modelo já emite o CoT nativo entre <think>…</think>;
+        # o CLI separa por essas tags (_SepThink). Induzir marcador duplicava o raciocínio (bagunça).
         active = self._tools.for_device(await self._device_gateway.capabilities(device_id))
         user_turn = _user_turn(user_message, image)
         seen: set[tuple[str, bytes]] = set()

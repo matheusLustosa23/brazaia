@@ -39,15 +39,17 @@ def wrap(t, w):
         out.append(ln)
     return out
 
-def split_marker(full: str) -> tuple[str, str]:
-    """(raciocinio, resposta) a partir de RACIOCÍNIO: … RESPOSTA: …"""
-    m = re.search(r'RESPOSTA\s*:', full, re.IGNORECASE)
-    if not m:
-        return "", full.strip()                       # sem marcador → tudo é resposta
-    resposta = full[m.end():].strip()
-    antes = full[:m.start()]
-    r = re.search(r'RACIOC[IÍ]NIO\s*:', antes, re.IGNORECASE)
-    raciocinio = (antes[r.end():] if r else antes).strip()
+def split_think(full: str) -> tuple[str, str]:
+    """(raciocinio, resposta) pelas tags NATIVAS <think>…</think> (CoT do Qwen)."""
+    fim = re.search(r'</think>', full, re.IGNORECASE)
+    ini = re.search(r'<think>', full, re.IGNORECASE)
+    if not fim:                                        # não fechou (ou não pensou)
+        if ini:
+            return full[ini.end():].strip(), ""        # só raciocínio, sem resposta ainda
+        return "", full.strip()
+    resposta = full[fim.end():].strip()
+    antes = full[:fim.start()]
+    raciocinio = (antes[ini.end():] if ini else antes).strip()
     return raciocinio, resposta
 
 def render_card(pergunta: str, raciocinio: str, resposta: str) -> None:
@@ -86,13 +88,13 @@ async def main() -> None:
         except Exception as e:
             print(f"  ⚠ falha no stream: {e}"); continue
         texto = "".join(full)
-        raciocinio, resposta = split_marker(texto)
-        tem_marcador = bool(raciocinio) and ("RESPOSTA" in texto.upper())
-        ok += 1 if tem_marcador else 0
+        raciocinio, resposta = split_think(texto)
+        tem_think = ("</think>" in texto.lower())
+        ok += 1 if tem_think else 0
         render_card(msg, raciocinio, resposta)
-        print(f"{DIM}   [marcador: {'OK ✓' if tem_marcador else 'FALTOU ✗ (sem RACIOCÍNIO:/RESPOSTA:)'}]{R}")
-    print("=" * W + f"\nMarcador presente em {ok}/{len(MENSAGENS)}.  "
-          + ("Pode aplicar no CLI. ✅" if ok == len(MENSAGENS) else "Instável — ajustar a instrução antes de aplicar. ⚠"))
+        print(f"{DIM}   [<think> nativo: {'OK ✓' if tem_think else 'não veio (resposta sem CoT) ✗'}]{R}")
+    print("=" * W + f"\n<think> nativo em {ok}/{len(MENSAGENS)}.  "
+          + ("Pode aplicar no CLI. ✅" if ok == len(MENSAGENS) else "Nem todas pensaram (trivial?) — ok, o CLI só mostra a caixa quando há <think>. ⚠"))
 
 if __name__ == "__main__":
     asyncio.run(main())
