@@ -86,8 +86,8 @@ function KillAgentProcs {
 function StartAgent {
   if (-not (EnsureTailscale)) { return $false }   # sem IP tailscale o agente nao consegue bindar (--host)
   KillAgentProcs; Start-Sleep 1                    # garante 1 so (mata qualquer um que ja exista)
-  # Hidden: sem janela pra fechar (robusto). O chrome do screenshot ganha console proprio via CREATE_NO_WINDOW (shot.py).
-  $p = Start-Process $GitBash -ArgumentList '-lc', $AgentScript -WindowStyle Hidden -PassThru
+  # Minimized: o chrome headless do screenshot precisa de window-station (Hidden quebra, mesmo com CREATE_NO_WINDOW).
+  $p = Start-Process $GitBash -ArgumentList '-lc', $AgentScript -WindowStyle Minimized -PassThru
   $p.Id | Out-File $PidFile
   return (Esperar $AgentUrl 60)
 }
@@ -98,8 +98,8 @@ function StopAgent {
 }
 function StartCompanion {
   if (CompanionAlive) { Write-Host "Companion ja no ar." -ForegroundColor Green; return $true }
-  # Hidden: sem janela pra fechar. open_file de imagem/pagina usa ShellExecute (abre na sessao do usuario de qualquer forma)
-  Start-Process $GitBash -ArgumentList '-lc', $CompScript -WindowStyle Hidden | Out-Null
+  # Minimized (consistente com o agente; open_file de imagem/pagina abre viewer/navegador na sessao do usuario)
+  Start-Process $GitBash -ArgumentList '-lc', $CompScript -WindowStyle Minimized | Out-Null
   for ($i=0; $i -lt 10; $i++) { Start-Sleep 1; if (CompanionAlive) { Write-Host "Companion no ar." -ForegroundColor Green; return $true } }
   Write-Host "Companion nao subiu (ver $CompLog)." -ForegroundColor Red; return $false
 }
