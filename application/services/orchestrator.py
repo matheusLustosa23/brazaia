@@ -17,7 +17,7 @@ from application.guards.output import check_output
 from application.services._trace import trace
 from application.services._turnlog import log_turno
 from infrastructure.devices.device_gateway import DeviceGateway
-from infrastructure.storage.file_store import FileStore
+from infrastructure.storage.file_store import FileStore, file_marker
 
 MAX_STEPS = 15
 
@@ -56,9 +56,9 @@ HONESTIDADE = """
 - Fale apenas do que você realmente sabe ou observou: resultado de ferramenta, imagem capturada, memória.
   Não invente fatos, caminhos, nomes, números ou infraestrutura que você não viu.
 - Se algo estiver ausente, ilegível ou incerto, diga que não sabe — nunca preencha com suposição como certeza.
-- Você só descreve/lê uma imagem VISÍVEL neste turno. Sem imagem agora (só o placeholder [imagem capturada · id]), NÃO afirme o que ela mostra — reabra com load_image e ESPERE.
+- Você só descreve/lê uma imagem VISÍVEL neste turno. Sem imagem agora (só o placeholder [imagem capturada · id]), NÃO afirme o que ela mostra — traga de volta com see_file e ESPERE.
   ✗ "qual a resposta que você viu?" (sem imagem aberta) → "Vi $(x+5)^2$." (INVENTADO)
-  ✓ "Não tenho a imagem aberta pra reler — deixa eu reabrir." → chama load_image, ESPERA, só então responde.
+  ✓ "Não tenho a imagem aberta pra reler — deixa eu trazer de volta." → chama see_file, ESPERA, só então responde.
 
 """
 
@@ -398,10 +398,10 @@ class Orchestrator:
             else:
                 ids_reais.update(re.findall(r"image_id=([0-9a-f]{12})", obs))
                 tool_content =  await self._context.summarize(obs, foco=f"resultado de {name}")
-                fids = stash_map.get(tc.id, ({}, []))[1]        # HTML que ESTA tool recebeu -> file_id reusável
-                if fids:
-                    tool_content = f"{tool_content} " + " ".join(f"[file_id={f}]" for f in fids)
-                    ids_reais.update(fids)
+                mks = stash_map.get(tc.id, ({}, []))[1]         # marcadores dos artefatos que ESTA tool gerou
+                if mks:
+                    tool_content = f"{tool_content} " + " ".join(mks)
+                    ids_reais.update(re.findall(r"file_id=([0-9a-f]{12})", " ".join(mks)))
                 trace_txt = tool_content
         
             passos.append((tc.name, trace_txt))
@@ -419,17 +419,23 @@ class Orchestrator:
         return (history, saw_image, success, passos)
 
     def _stash_args(self, arguments: dict, session_id: str, device_id: str | None) -> tuple[dict, list[str]]:
-        """Arg GRANDE (body_html etc.) -> stash no FileStore -> file_id. Devolve (args ENXUTOS p/ o
-        HISTÓRICO com [file_id=…], [file_ids gerados]). A TOOL recebe o arg CHEIO; só a cópia do
-        histórico enxuga — economiza contexto (HTML gigante fora do histórico) e deixa reusável por file_id."""
+        """body_html GRANDE -> stash no FileStore (com kind/title/desc) -> file_id. A TOOL recebe o arg
+        CHEIO; só a CÓPIA do histórico enxuga: o body_html vira um MARCADOR rico ([file_id=X · html ·
+        "título" · desc]) — economiza contexto e diz ao modelo que aquilo é um artefato (pra REABRIR usa
+        open_file, pra RE-OLHAR usa see_file; o guard do display_page recusa marcador como conteúdo).
+        Devolve (args enxutos, [marcadores])."""
         slim = dict(arguments)
-        fids: list[str] = []
+        markers: list[str] = []
         for k, v in arguments.items():
-            if isinstance(v, str) and len(v) >= _STASH_MIN:
-                fid = self._image_index.put_text(v, device=device_id, session=session_id, kind="html", ext=_ext_de(k, v))
-                slim[k] = f"[file_id={fid}]"
-                fids.append(fid)
-        return slim, fids
+            if k == "body_html" and isinstance(v, str) and len(v) >= _STASH_MIN:
+                title = arguments.get("title") or ""
+                desc = arguments.get("desc") or ""
+                fid = self._image_index.put_text(v, device=device_id, session=session_id, kind="html",
+                                                 ext=_ext_de(k, v), title=title, desc=desc)
+                mk = file_marker(fid, "html", title, desc)
+                slim["body_html"] = mk          # histórico: marcador rico (não o HTML gigante nem vazio)
+                markers.append(mk)
+        return slim, markers
 
     def _is_repeat(self, name: str, payload: dict, seen: set[tuple[str, bytes]]) -> bool:
         return (name, orjson.dumps(payload, option=orjson.OPT_SORT_KEYS),) in seen

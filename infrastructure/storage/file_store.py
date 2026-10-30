@@ -21,16 +21,33 @@ def file_id_de(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()[:12]
 
 
+def file_marker(file_id: str, kind: str, title: str = "", desc: str = "") -> str:
+    """Placeholder RICO do artefato (vai no resultado da tool e no histórico) — o modelo sabe o que é
+    sem ter o conteúdo, pra escolher o id certo e NÃO abrir o tipo errado. Ex.:
+    [file_id=ab12cd · html · "Métodos Ágeis" · guia animado de scrum/kanban]."""
+    partes = [f"file_id={file_id}", kind]
+    if title:
+        partes.append(f'"{title}"')
+    if desc:
+        partes.append(desc)
+    return "[" + " · ".join(partes) + "]"
+
+
 class FileStore:
     """Índice id→caminho (memória) + escrita no disco do server. Único pra todos os kinds."""
 
     def __init__(self, raiz: str = _RAIZ) -> None:
         self._raiz = raiz
         self._map: dict[str, str] = {}
+        self._meta: dict[str, dict] = {}                           # id -> {kind, title, desc}
 
-    def put(self, data: bytes, *, device: str | None, session: str, kind: str, ext: str) -> str:
-        """Salva o conteúdo e devolve o file_id (hash). Dedup: mesmo conteúdo → mesmo id, não reescreve."""
+    def put(self, data: bytes, *, device: str | None, session: str, kind: str, ext: str,
+            title: str = "", desc: str = "") -> str:
+        """Salva conteúdo + metadados e devolve o file_id (hash). Dedup: mesmo conteúdo → mesmo id.
+        kind/title/desc alimentam o placeholder rico e o roteamento do open_file/see_file (por kind —
+        o store decide o tipo, o modelo NÃO)."""
         fid = file_id_de(data)
+        self._meta[fid] = {"kind": kind, "title": title, "desc": desc}
         if fid in self._map and os.path.exists(self._map[fid]):
             return fid                                              # já temos esse conteúdo (dedup)
         dev = device or "unknow"                                   # chat sem device → "server"
@@ -44,8 +61,19 @@ class FileStore:
         self._map[fid] = caminho
         return fid
 
-    def put_text(self, texto: str, *, device: str | None, session: str, kind: str, ext: str) -> str:
-        return self.put(texto.encode("utf-8"), device=device, session=session, kind=kind, ext=ext)
+    def put_text(self, texto: str, *, device: str | None, session: str, kind: str, ext: str,
+                 title: str = "", desc: str = "") -> str:
+        return self.put(texto.encode("utf-8"), device=device, session=session, kind=kind, ext=ext,
+                        title=title, desc=desc)
+
+    def meta(self, file_id: str) -> dict:
+        """Metadados do artefato: {kind, title, desc}. {} se desconhecido."""
+        return self._meta.get(file_id, {})
+
+    def kind(self, file_id: str) -> str | None:
+        """Tipo guardado (html/img/audio) — roteamento do open_file/see_file. None se desconhecido."""
+        m = self._meta.get(file_id)
+        return m.get("kind") if m else None
 
     def path(self, file_id: str) -> str | None:
         """Caminho do artefato, se ainda existe no disco; senão None."""
