@@ -97,8 +97,8 @@ async def show_html(html: str) -> str:
         url = _servir("page.html", "text/html; charset=utf-8", html.encode("utf-8"))
         return await _run_detached(["termux-open-url", url])
     import tempfile
-    caminho = os.path.join(tempfile.gettempdir(), "brazaia_page.html")
-    with open(caminho, "w", encoding="utf-8") as f:
+    fd, caminho = tempfile.mkstemp(prefix="brazaia_", suffix=".html")   # nome ÚNICO: sem colidir/travar nome fixo no Windows e sem servir conteúdo velho
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(html)
     return await open_file(caminho)
 
@@ -108,8 +108,8 @@ async def show_image(png: bytes) -> str:
         url = _servir("img.png", "image/png", png)
         return await _run_detached(["termux-open-url", url])
     import tempfile
-    caminho = os.path.join(tempfile.gettempdir(), "brazaia_img.png")
-    with open(caminho, "wb") as f:
+    fd, caminho = tempfile.mkstemp(prefix="brazaia_", suffix=".png")   # nome ÚNICO: corrige o OSError [Errno 22] (nome fixo travado/reaberto) no Windows
+    with os.fdopen(fd, "wb") as f:
         f.write(png)
     return await open_file(caminho)
 

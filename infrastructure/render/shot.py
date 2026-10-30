@@ -78,9 +78,11 @@ def _shot_sync(html: str, largura: int, escala: float) -> bytes:
         origem = Path(tmp) / "p.html"
         origem.write_text(html, encoding="utf-8")
         destino = Path(tmp) / "p.png"
-        try:
-            resultado = subprocess.run(
+        perfil = Path(tmp) / "ud"                       # user-data-dir PRÓPRIO: sem isso, se já há um Chrome
+        try:                                            # aberto (ex.: open_file mostrando páginas), o headless
+            resultado = subprocess.run(                 # ANEXA na instância viva e sai rc=0 SEM gerar o PNG
                 [_chrome(), "--headless=new", "--disable-gpu", "--no-sandbox",
+                 f"--user-data-dir={perfil}", "--no-first-run", "--no-default-browser-check",
                  "--hide-scrollbars", f"--force-device-scale-factor={escala}",
                  f"--window-size={largura},{_ALTURA_MAX}", f"--virtual-time-budget={_ESPERA_KATEX_MS}",
                  f"--screenshot={destino}", origem.as_uri()],
