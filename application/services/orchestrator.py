@@ -172,6 +172,18 @@ class _CoTSplit:
         return [(self.modo, p)]
 
 
+_STASH_MIN = 400   # chars: arg de texto (body_html) >= isso vira [file_id] no histórico (economia + reuso)
+
+def _ext_de(campo: str, conteudo: str) -> str:
+    """Infere a extensão do artefato pelo nome do campo/conteúdo (pro arquivo de cache ficar legível)."""
+    c = conteudo.lstrip()[:200].lower()
+    if "html" in campo.lower() or c.startswith("<") or "<div" in c or "<style" in c:
+        return ".html"
+    if c.startswith("{") or c.startswith("["):
+        return ".json"
+    return ".txt"
+
+
 class Orchestrator:
     """Application service: cérebro do agente. Depende só de contratos (domain/),
     nunca de infrastructure/. Injeção por lifespan/dependencies."""
@@ -233,7 +245,8 @@ class Orchestrator:
             bruto_turno.append(f"\n⟦── chamada {_step + 1} ──⟧\n")   # marca o limite de CADA llm.stream no log bruto
             sep = _CoTSplit(think)                               # separa raciocínio/resposta DESTA chamada (por-chamada = confiável)
             async for kind, val in self._llm.stream(
-                messages, tools=active.as_openai_tools(), tool_choice="auto", no_think=not think
+                messages, tools=active.as_openai_tools(), tool_choice="auto", no_think=not think,
+                max_tokens=self._context.max_saida(messages)        # saída dinâmica: nunca estoura a janela
             ):
                 if kind == "text":
                     bruto_turno.append(val)
@@ -277,7 +290,8 @@ class Orchestrator:
                 texto = ""
                 bruto_turno.append("\n⟦── guard re-stream ──⟧\n")
                 sep = _CoTSplit(think)
-                async for kind, val in self._llm.stream(messages + [{"role": "system", "content": guard.reason}], no_think=not think):
+                _msgs = messages + [{"role": "system", "content": guard.reason}]
+                async for kind, val in self._llm.stream(_msgs, no_think=not think, max_tokens=self._context.max_saida(_msgs)):
                     if kind == "text":
                         bruto_turno.append(val)
                         for tg, piece in sep.feed(val):
@@ -322,6 +336,8 @@ class Orchestrator:
         ids_reais: set[str],
     ) ->  tuple[list[dict], bool, bool, list[tuple]]:
         passos: list[tuple[str, str]] = []
+        # stash dos args GRANDES (body_html) -> file_id; o histórico guarda só [file_id=…] (1x por tool)
+        stash_map = {tc.id: self._stash_args(tc.arguments, session_id, device_id) for tc in msg.tool_calls}
         if user_turn is not None:
             history = history + [user_turn]
         history = history + [
@@ -334,7 +350,7 @@ class Orchestrator:
                         "type": "function",
                         "function": {
                             "name": tc.name,
-                            "arguments": orjson.dumps(tc.arguments).decode()
+                            "arguments": orjson.dumps(stash_map[tc.id][0]).decode()   # args enxutos (body_html -> [file_id])
                         }
                     }
                     for tc in msg.tool_calls
@@ -380,8 +396,12 @@ class Orchestrator:
                 saw_image = True
                 trace_txt = f"[{origem} · image_id={img_id}]"
             else:
-                ids_reais.update(re.findall(r"image_id=([0-9a-f]{12})", obs)) 
+                ids_reais.update(re.findall(r"image_id=([0-9a-f]{12})", obs))
                 tool_content =  await self._context.summarize(obs, foco=f"resultado de {name}")
+                fids = stash_map.get(tc.id, ({}, []))[1]        # HTML que ESTA tool recebeu -> file_id reusável
+                if fids:
+                    tool_content = f"{tool_content} " + " ".join(f"[file_id={f}]" for f in fids)
+                    ids_reais.update(fids)
                 trace_txt = tool_content
         
             passos.append((tc.name, trace_txt))
@@ -397,6 +417,19 @@ class Orchestrator:
             
             
         return (history, saw_image, success, passos)
+
+    def _stash_args(self, arguments: dict, session_id: str, device_id: str | None) -> tuple[dict, list[str]]:
+        """Arg GRANDE (body_html etc.) -> stash no FileStore -> file_id. Devolve (args ENXUTOS p/ o
+        HISTÓRICO com [file_id=…], [file_ids gerados]). A TOOL recebe o arg CHEIO; só a cópia do
+        histórico enxuga — economiza contexto (HTML gigante fora do histórico) e deixa reusável por file_id."""
+        slim = dict(arguments)
+        fids: list[str] = []
+        for k, v in arguments.items():
+            if isinstance(v, str) and len(v) >= _STASH_MIN:
+                fid = self._image_index.put_text(v, device=device_id, session=session_id, kind="html", ext=_ext_de(k, v))
+                slim[k] = f"[file_id={fid}]"
+                fids.append(fid)
+        return slim, fids
 
     def _is_repeat(self, name: str, payload: dict, seen: set[tuple[str, bytes]]) -> bool:
         return (name, orjson.dumps(payload, option=orjson.OPT_SORT_KEYS),) in seen

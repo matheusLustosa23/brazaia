@@ -36,7 +36,13 @@ class ContextManager:
     def input_budget(self) -> int:
         """Teto real do PROMPT (deixa espaço para a geração)."""
         return self._budget - self._reserved
-    
+
+    def max_saida(self, messages: list[dict], margem: int = 512, minimo: int = 512) -> int:
+        """max_tokens DINÂMICO: nunca deixa input+saída furar a janela (budget). Encolhe a saída
+        quando o input é grande (ex.: histórico com HTML grande) — evita o 400 'total > max context'."""
+        room = self._budget - self._count(messages) - margem
+        return max(minimo, min(self._reserved, room))
+
     def build(
         self,
         system_static: str, #preixo estatico imutavel
