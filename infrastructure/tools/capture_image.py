@@ -18,7 +18,9 @@ class CaptureImageInput(BaseModel):
 class CaptureImageTool(Tool[CaptureImageInput]):
     name = "capture_image"
     description = (
-        "Captura um frame AO VIVO da câmera. Use SOMENTE quando o dono pedir pra VER/OLHAR/ANALISAR "
+        "Captura um frame AO VIVO da câmera. É SEMPRE esta a tool pra câmera — 'olha/vê/mostra a câmera', "
+        "'o que tem na webcam' → capture_image (NUNCA see_file: see_file é pra arquivo que já tem file_id, "
+        "não pra câmera). Use SOMENTE quando o dono pedir pra VER/OLHAR/ANALISAR "
         "a câmera. NUNCA acione a câmera por conta própria pra 'verificar/testar se um device está "
         "conectado', confirmar disponibilidade, ou qualquer fim que o dono NÃO pediu — a câmera é "
         "privada e só liga a pedido explícito.\n"

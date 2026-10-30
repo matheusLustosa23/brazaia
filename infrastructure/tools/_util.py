@@ -22,9 +22,18 @@ def so_file_id(texto: str | None) -> str | None:
 
 
 def eh_placeholder(texto: str | None) -> bool:
-    """True se o body_html não é conteúdo de verdade, mas uma MARCA do histórico que o modelo copiou:
-    um marcador [file_id=…] ou a elisão ⟨html omitido…⟩. Os tools de render recusam isso e mandam o
-    modelo re-escrever o HTML (ou usar open_file/see_file pra um artefato existente)."""
+    """True se o body não é conteúdo de verdade, mas uma MARCA do histórico que o modelo copiou:
+    um marcador [file_id=…] ou a elisão ⟨conteúdo omitido…⟩. Os tools de autoria recusam isso e mandam
+    o modelo re-escrever o conteúdo (ou usar open_file/screenshot/see_file pra um artefato existente)."""
     if not texto:
         return False
     return bool(so_file_id(texto)) or texto.lstrip().startswith(ELISION)
+
+
+def id_fantasma(file_id: str | None, ctx) -> bool:
+    """True se o file_id NÃO apareceu nesta conversa (o modelo inventou). ids_reais é semeado do
+    histórico + resultados das tools deste turno; um id fora dele é alucinação. Os consumidores
+    (open_file/see_file/screenshot) recusam antes de rodar e redirecionam."""
+    fid = (file_id or "").strip()
+    reais = getattr(ctx, "ids_reais", None) or set()
+    return bool(fid) and fid not in reais

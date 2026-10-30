@@ -10,7 +10,8 @@ class CalculateTool(Tool[CalculateInput]):
     description = (
         "Avalia uma expressão matemática de forma EXATA (sympy). USE para QUALQUER conta numérica — "
         "potência, raiz, log, fração, fórmula com números (COCOMO a*KLOC**b, PERT, produtividade). "
-        "NUNCA calcule de cabeça nem escreva um gabarito/resultado sem CHAMAR esta tool e usar o valor dela. "
+        "NUNCA calcule de cabeça nem escreva um gabarito/resultado sem CHAMAR esta tool e usar o valor dela "
+        "— nem as 'fáceis' (√361 também é uma chamada). Várias contas no pedido = UMA chamada por conta. "
         "Operadores: + - * / ** ; funções: sqrt, log(x, base), exp, pi, E."
     )
     input_schema = CalculateInput

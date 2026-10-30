@@ -2,8 +2,9 @@ import base64
 import os
 from pydantic import BaseModel, Field
 from domain.tools.base import Tool
-from domain.tools.guard import ToolCtx
+from domain.tools.guard import GuardResult, ToolCtx
 from infrastructure.storage.file_store import FileStore
+from infrastructure.tools._util import id_fantasma
 
 _MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
 
@@ -17,10 +18,12 @@ class SeeFileInput(BaseModel):
 class SeeFileTool(Tool[SeeFileInput]):
     name = "see_file"
     description = (
-        "Traz o CONTEÚDO de um artefato (por file_id) de volta pro SEU contexto pra VOCÊ re-analisar: "
-        "imagem → você re-olha os pixels; HTML/texto → você relê o conteúdo. Use em 'olha de novo aquela "
-        "foto', 'dá um zoom', 'confere o que tem naquele arquivo'. Resolve o TIPO sozinho. Pra MOSTRAR ao "
-        "dono num device (não pra você olhar) → 'open_file'. NUNCA invente um file_id."
+        "Traz o CONTEÚDO de um artefato que JÁ EXISTE (por file_id) pro SEU contexto, pra VOCÊ re-analisar: "
+        "imagem → re-olha os pixels; HTML/texto → relê o conteúdo. Ex.: 'confere o que tem naquele arquivo', "
+        "'dá um zoom naquela imagem que apareceu'. Resolve o TIPO sozinho.\n"
+        "NÃO é pra câmera: 'olha/vê a câmera' é AO VIVO → use 'capture_image' (see_file só mexe em arquivo "
+        "que já tem file_id). NÃO precisa antes de mostrar: pra exibir no device é 'open_file' direto. "
+        "NUNCA invente um file_id — use um que apareceu num resultado."
     )
     input_schema = SeeFileInput
     side = "server"
@@ -29,6 +32,13 @@ class SeeFileTool(Tool[SeeFileInput]):
 
     def __init__(self, store: FileStore) -> None:
         self._store = store
+
+    def before(self, args: dict, ctx: ToolCtx) -> GuardResult:
+        if id_fantasma(args.get("file_id"), ctx):       # id que não apareceu = inventado
+            return GuardResult(ok=False, reason=(
+                "esse file_id não apareceu nesta conversa — não invente. Pra VER a câmera AO VIVO use "
+                "capture_image; pra um arquivo, use um file_id que apareceu num resultado."))
+        return GuardResult(ok=True)
 
     async def run(self, payload: SeeFileInput, ctx: ToolCtx) -> str:
         kind = self._store.kind(payload.file_id)

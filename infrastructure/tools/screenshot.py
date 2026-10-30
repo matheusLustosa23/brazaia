@@ -4,6 +4,7 @@ from domain.tools.guard import GuardResult, ToolCtx
 from infrastructure.render.render import render        # mesmo motor do create_file (pico/free + KaTeX)
 from infrastructure.render.shot import html_para_png
 from infrastructure.storage.file_store import FileStore
+from infrastructure.tools._util import id_fantasma
 
 
 class ScreenshotInput(BaseModel):
@@ -64,4 +65,8 @@ class ScreenshotTool(Tool[ScreenshotInput]):
             return GuardResult(ok=False, reason=(
                 "me dê o file_id da página HTML a fotografar. Se o conteúdo é novo, crie com 'create_file' "
                 "(ext=html) primeiro (ele devolve o file_id), depois chame esta."))
+        if id_fantasma(args.get("file_id"), ctx):       # id que não apareceu = inventado
+            return GuardResult(ok=False, reason=(
+                "esse file_id não apareceu nesta conversa — não invente. Crie a página com create_file "
+                "(ext=html) primeiro, depois fotografe pelo id que ele devolver."))
         return GuardResult(ok=True)

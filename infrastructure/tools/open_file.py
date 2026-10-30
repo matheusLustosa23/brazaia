@@ -6,7 +6,7 @@ from domain.tools.guard import GuardResult, ToolCtx
 from infrastructure.devices.device_gateway import DeviceGateway
 from infrastructure.render.render import render
 from infrastructure.storage.file_store import FileStore
-from infrastructure.tools._util import falha_device
+from infrastructure.tools._util import falha_device, id_fantasma
 
 _MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
 
@@ -25,7 +25,8 @@ class OpenFileTool(Tool[OpenFileInput]):
     description = (
         "REABRE no device um artefato que VOCÊ já gerou, pelo file_id. Resolve o TIPO sozinho: HTML → "
         "mostra no navegador; imagem → abre em tela cheia. Use quando o dono quer VER DE NOVO algo já "
-        "criado (o id apareceu como [file_id=… · tipo · \"título\"]). Pra você MESMO re-analisar o "
+        "criado (o id apareceu como [file_id=… · tipo · \"título\"]). Você NÃO precisa ver/reler o arquivo "
+        "antes — passe o file_id DIRETO (nada de see_file/capture antes). Pra você MESMO re-analisar o "
         "conteúdo (não mostrar ao dono) → 'see_file'. NUNCA invente um file_id."
     )
     input_schema = OpenFileInput
@@ -59,6 +60,10 @@ class OpenFileTool(Tool[OpenFileInput]):
     def before(self, args: dict, ctx: ToolCtx) -> GuardResult:
         device = args.get("device", "")
         conectados = self._gateway.connections.names()
+        if id_fantasma(args.get("file_id"), ctx):       # id que não apareceu = inventado
+            return GuardResult(ok=False, reason=(
+                "esse file_id não apareceu nesta conversa — não invente; use um id que apareceu num "
+                "resultado. Se o conteúdo ainda não existe, crie antes com create_file."))
         if not device:
             return GuardResult(ok=False, reason="em qual device é pra abrir?")
         if device not in conectados:

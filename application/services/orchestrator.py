@@ -57,6 +57,7 @@ HONESTIDADE = """
   Não invente fatos, caminhos, nomes, números ou infraestrutura que você não viu.
 - Se algo estiver ausente, ilegível ou incerto, diga que não sabe — nunca preencha com suposição como certeza.
 - Resultado de tool que começa com [erro]/[timeout]/[bloqueado] = a ação FALHOU. NUNCA diga que deu certo nem invente um id de saída — relate a falha e, se fizer sentido, tente de outro jeito. Só afirme "pronto/gerado/aberto" depois de um resultado de SUCESSO.
+- No histórico, "⟨conteúdo omitido…⟩" é uma REDAÇÃO do conteúdo que VOCÊ já escreveu (pra poupar espaço) — NUNCA escreva isso num campo body; escreva o conteúdo real por extenso. Pra reaproveitar algo que já existe, use open_file/screenshot/see_file com o file_id (que aparece no RESULTADO da tool).
 - Você só descreve/lê uma imagem VISÍVEL neste turno. Sem imagem agora (só o placeholder [imagem capturada · id]), NÃO afirme o que ela mostra — traga de volta com see_file e ESPERE.
   ✗ "qual a resposta que você viu?" (sem imagem aberta) → "Vi $(x+5)^2$." (INVENTADO)
   ✓ "Não tenho a imagem aberta pra reler — deixa eu trazer de volta." → chama see_file, ESPERA, só então responde.
@@ -221,11 +222,11 @@ class Orchestrator:
         for _m in history:                                  # semeia ids de turnos ANTERIORES (regra b): um id já
             _c = _m.get("content")                          # presente no histórico é válido. Sem isso o check_output
             if isinstance(_c, str):                         # acusava falso ("id que nenhuma tool produziu neste turno")
-                ids_reais.update(re.findall(r"image_id=([0-9a-f]{12})", _c))
+                ids_reais.update(re.findall(r"(?:file_id|image_id)=([0-9a-f]{12})", _c))
             elif isinstance(_c, list):
                 for _b in _c:
                     if isinstance(_b, dict) and isinstance(_b.get("text"), str):
-                        ids_reais.update(re.findall(r"image_id=([0-9a-f]{12})", _b["text"]))
+                        ids_reais.update(re.findall(r"(?:file_id|image_id)=([0-9a-f]{12})", _b["text"]))
         saw_image = False
         bruto_turno: list[str] = []   # TUDO que foi streamado no turno (todos os passos) → log bruto p/ auditar o thinking
         for _step in range(MAX_STEPS):
