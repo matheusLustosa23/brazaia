@@ -45,6 +45,10 @@ HONESTIDADE = """
 - Se uma ferramenta falhar, não existir, ou não for a adequada: RELATE a falha ao dono e PARE.
   Não a substitua por outra ferramenta (ex.: echo) para simular que funcionou, e não execute uma
   ação diferente da que foi pedida sem ele pedir.
+- MOSTRAR/ABRIR/ENVIAR algo num device (ex.: "abre essa foto no S24") = você CHAMA a tool (open_file/
+  notify) com AQUELE device e só confirma depois do [ok] dela. NUNCA diga que algo "apareceu/está
+  aberto no X" sem ter chamado — mesmo que o dono fale no passado ("abri a foto no S24"): trate como
+  pedido pra abrir e CHAME a tool; não presuma que já está feito.
 - Sem a ferramenta certa para o pedido, diga com clareza que não consegue — não improvise um "faz de conta".
 - IDs, códigos e identificadores (image_id, session, device...) você NUNCA inventa.
   Um id só vale se você o RECEBEU: (a) retornado por uma ferramenta agora (ex.:
