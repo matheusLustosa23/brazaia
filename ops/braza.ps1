@@ -47,7 +47,7 @@ function StartAgent {
   # libera a 8080 (mata agente travado/orfao) e sobe de novo; espera a API responder de verdade
   $old = (Get-NetTCPConnection -LocalPort 8080 -ErrorAction SilentlyContinue).OwningProcess
   if ($old) { Stop-Process -Id $old -Force -ErrorAction SilentlyContinue; Start-Sleep 1 }
-  $p = Start-Process $GitBash -ArgumentList '-lc', $AgentScript -WindowStyle Hidden -PassThru
+  $p = Start-Process $GitBash -ArgumentList '-lc', $AgentScript -WindowStyle Minimized -PassThru
   $p.Id | Out-File $PidFile
   return (Esperar $AgentUrl 60)
 }
