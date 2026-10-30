@@ -13,11 +13,11 @@ from infrastructure.llm.client import OpenAILLMClient
 from infrastructure.llm import tokenizer
 from infrastructure.tools.capture_image import CaptureImageTool
 from infrastructure.tools.see_file import SeeFileTool
-from infrastructure.tools.display_page import DisplayPageTool
-from infrastructure.tools.render_imagem import RenderImagemTool
+from infrastructure.tools.create_file import CreateFileTool
+from infrastructure.tools.screenshot import ScreenshotTool
 from infrastructure.tools.notify import NotifyTool
 from infrastructure.tools.open_file import OpenFileTool
-from infrastructure.tools.calcular import CalcularTool
+from infrastructure.tools.calculate import CalculateTool
 from infrastructure.memory.sqlite_store import SqlLiteMemoryStore
 from infrastructure.memory.session_store import SqlLiteSessionStore
 from application.services.context_service import ContextManager
@@ -25,7 +25,7 @@ from application.services.memory_service import MemoryService
 from application.services.orchestrator import Orchestrator
 from application.services.device_service import DeviceService
 from application.services.device_handshake import DeviceHandshakeService
-from application.tools.lembrar import LembrarTool
+from application.tools.remember import RememberTool
 from domain.tools.base import ToolRegistry
 from infrastructure.voice.asr import make_asr
 from infrastructure.voice.vad import make_vad
@@ -81,14 +81,14 @@ async def lifespan(app: FastAPI):
     device_gateway = DeviceGateway(conn_manager, rpc_manager, device_service)
     device_handshake = DeviceHandshakeService(device_service, device_gateway)
     
-    registry.register(LembrarTool(memory))
+    registry.register(RememberTool(memory))
     registry.register(CaptureImageTool(vision))
     registry.register(SeeFileTool(store))
-    registry.register(DisplayPageTool(device_gateway))
-    registry.register(RenderImagemTool(store))
+    registry.register(CreateFileTool(store))
+    registry.register(ScreenshotTool(store))
     registry.register(NotifyTool(device_gateway, store))
     registry.register(OpenFileTool(device_gateway, store))
-    registry.register(CalcularTool())
+    registry.register(CalculateTool())
 
     # ── Orchestrator ──
     orchestrator = Orchestrator(

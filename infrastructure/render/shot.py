@@ -90,8 +90,11 @@ def _shot_sync(html: str, largura: int, escala: float) -> bytes:
         except subprocess.TimeoutExpired:
             raise RuntimeError("chrome travou ao gerar o PNG")
         if not destino.exists():
-            erro = resultado.stderr.decode(errors="replace")[:_ERR_TRUNC]
-            raise RuntimeError(f"chrome não gerou o PNG: {erro}")
+            err = resultado.stderr.decode(errors="replace").strip()[:_ERR_TRUNC]
+            out = resultado.stdout.decode(errors="replace").strip()[:_ERR_TRUNC]
+            raise RuntimeError(
+                f"chrome não gerou o PNG (rc={resultado.returncode}; bin={_chrome()}; "
+                f"stderr={err or '∅'}; stdout={out or '∅'})")
         return _cortar(destino.read_bytes())
 
 async def html_para_png(html: str, largura: int = _LARGURA_PADRAO, escala: float = _ESCALA_PADRAO) -> bytes:

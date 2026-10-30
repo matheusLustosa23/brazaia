@@ -12,6 +12,7 @@ Substitui o ImageIndex (imagem vira kind='img') e o FileIndex flat — um store 
 `get(id) -> caminho` é mantido por compatibilidade com os callers do ImageIndex durante a migração."""
 import hashlib
 import os
+import time
 
 _RAIZ = os.path.expanduser("~/brazaia")
 
@@ -21,11 +22,28 @@ def file_id_de(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()[:12]
 
 
-def file_marker(file_id: str, kind: str, title: str = "", desc: str = "") -> str:
-    """Placeholder RICO do artefato (vai no resultado da tool e no histórico) — o modelo sabe o que é
-    sem ter o conteúdo, pra escolher o id certo e NÃO abrir o tipo errado. Ex.:
-    [file_id=ab12cd · html · "Métodos Ágeis" · guia animado de scrum/kanban]."""
+_KIND_POR_EXT = {
+    "html": "html", "htm": "html",
+    "json": "json",
+    "md": "txt", "markdown": "txt", "txt": "txt", "csv": "txt",
+    "log": "txt", "xml": "txt", "yaml": "txt", "yml": "txt",
+}
+
+
+def kind_de_ext(ext: str) -> str:
+    """ext (com ou sem ponto) -> kind pro roteamento do open_file/see_file. 'html'/'json' têm cara
+    própria; o resto de texto cai em 'txt'. create_file só escreve TEXTO (o LLM digita o corpo)."""
+    return _KIND_POR_EXT.get(ext.lower().lstrip("."), "txt")
+
+
+def file_marker(file_id: str, kind: str, title: str = "", desc: str = "", ts: str = "") -> str:
+    """Placeholder RICO do artefato (vai no resultado da tool) — o modelo sabe o que é sem ter o
+    conteúdo, pra escolher o id certo e NÃO abrir o tipo errado. O horário ajuda a desambiguar quando
+    há vários parecidos ('reabre o treino de antes'). Ex.:
+    [file_id=ab12cd · html · 23:25 · "Métodos Ágeis" · guia animado de scrum/kanban]."""
     partes = [f"file_id={file_id}", kind]
+    if ts:
+        partes.append(ts)
     if title:
         partes.append(f'"{title}"')
     if desc:
@@ -42,12 +60,14 @@ class FileStore:
         self._meta: dict[str, dict] = {}                           # id -> {kind, title, desc}
 
     def put(self, data: bytes, *, device: str | None, session: str, kind: str, ext: str,
-            title: str = "", desc: str = "") -> str:
+            title: str = "", desc: str = "", style: str = "free") -> str:
         """Salva conteúdo + metadados e devolve o file_id (hash). Dedup: mesmo conteúdo → mesmo id.
         kind/title/desc alimentam o placeholder rico e o roteamento do open_file/see_file (por kind —
-        o store decide o tipo, o modelo NÃO)."""
+        o store decide o tipo, o modelo NÃO). style (html) é lembrado pra screenshot/open_file
+        renderizarem a página do MESMO jeito que o autor pediu (free/pico)."""
         fid = file_id_de(data)
-        self._meta[fid] = {"kind": kind, "title": title, "desc": desc}
+        self._meta[fid] = {"kind": kind, "title": title, "desc": desc, "style": style,
+                           "ts": time.strftime("%d/%m %H:%M")}
         if fid in self._map and os.path.exists(self._map[fid]):
             return fid                                              # já temos esse conteúdo (dedup)
         dev = device or "unknow"                                   # chat sem device → "server"
@@ -62,13 +82,20 @@ class FileStore:
         return fid
 
     def put_text(self, texto: str, *, device: str | None, session: str, kind: str, ext: str,
-                 title: str = "", desc: str = "") -> str:
+                 title: str = "", desc: str = "", style: str = "free") -> str:
         return self.put(texto.encode("utf-8"), device=device, session=session, kind=kind, ext=ext,
-                        title=title, desc=desc)
+                        title=title, desc=desc, style=style)
 
     def meta(self, file_id: str) -> dict:
-        """Metadados do artefato: {kind, title, desc}. {} se desconhecido."""
+        """Metadados do artefato: {kind, title, desc, ts}. {} se desconhecido."""
         return self._meta.get(file_id, {})
+
+    def marker(self, file_id: str) -> str:
+        """Placeholder rico do artefato montado a partir dos metadados guardados (fonte única — assim
+        tool e orchestrator não divergem). Inclui o horário pra desambiguar vários parecidos."""
+        m = self._meta.get(file_id, {})
+        return file_marker(file_id, m.get("kind") or "file", m.get("title") or "",
+                           m.get("desc") or "", m.get("ts") or "")
 
     def kind(self, file_id: str) -> str | None:
         """Tipo guardado (html/img/audio) — roteamento do open_file/see_file. None se desconhecido."""

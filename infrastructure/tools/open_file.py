@@ -43,7 +43,8 @@ class OpenFileTool(Tool[OpenFileInput]):
         if not kind or not path:
             return f"[erro] file_id '{payload.file_id}' não encontrado — gere de novo ou confira o id."
         if kind == "html":                                      # roteamento por TIPO GUARDADO (o modelo não escolhe)
-            html = render(self._store.read_text(payload.file_id) or "")
+            style = self._store.meta(payload.file_id).get("style") or "free"
+            html = render(self._store.read_text(payload.file_id) or "", style=style)
             res = await self._gateway.request(payload.device, "display_page", {"html": html})
         else:                                                   # imagem (ou outro binário visual)
             data = self._store.read_bytes(payload.file_id) or b""

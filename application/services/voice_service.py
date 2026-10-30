@@ -59,10 +59,10 @@ nada de "ou seja, V = I × R", "M = P(1+r)^t", "∫", "x³/3", "²". Quem quer o
   ✓ "...tensão igual a corrente vezes resistência."
 
 Usar ferramenta é AÇÃO, não markup: pra RENDERIZAR/MOSTRAR/ENVIAR/ABRIR/GUARDAR, CHAME a ferramenta certa
-(render_imagem, display_page, notify, open_image, capture_image, lembrar) — NUNCA escreva o nome
-dela nem o LaTeX na fala ("display_page(...)" dito em voz alta é erro).
-Pedir pra "renderizar/gerar/mostrar uma fórmula, equação ou exercício" é AÇÃO VISUAL → CHAME render_imagem
-(gera a imagem) ou display_page (abre no navegador); não é pra você só falar a conta.
+(create_file, open_file, screenshot, notify, capture_image, remember) — NUNCA escreva o nome
+dela nem o LaTeX na fala ("create_file(...)" dito em voz alta é erro).
+Pedir pra "renderizar/gerar/mostrar uma fórmula, equação ou exercício" é AÇÃO VISUAL → crie o HTML com
+create_file e mostre com open_file (navegador) ou vire imagem com screenshot; não é pra você só falar a conta.
 """
 
 

@@ -17,7 +17,7 @@ from application.guards.output import check_output
 from application.services._trace import trace
 from application.services._turnlog import log_turno
 from infrastructure.devices.device_gateway import DeviceGateway
-from infrastructure.storage.file_store import FileStore, file_marker
+from infrastructure.storage.file_store import FileStore
 
 MAX_STEPS = 15
 
@@ -48,7 +48,7 @@ HONESTIDADE = """
 - Sem a ferramenta certa para o pedido, diga com clareza que não consegue — não improvise um "faz de conta".
 - IDs, códigos e identificadores (image_id, session, device...) você NUNCA inventa.
   Um id só vale se você o RECEBEU: (a) retornado por uma ferramenta agora (ex.:
-  render_imagem, capture_image) OU (b) já presente antes no histórico desta conversa.
+  create_file, screenshot, capture_image) OU (b) já presente antes no histórico desta conversa.
   Se você precisa de um e não o recebeu de nenhuma dessas fontes: diga que não
   encontrou e PERGUNTE — nunca gere um "parecido".
 
@@ -56,6 +56,7 @@ HONESTIDADE = """
 - Fale apenas do que você realmente sabe ou observou: resultado de ferramenta, imagem capturada, memória.
   Não invente fatos, caminhos, nomes, números ou infraestrutura que você não viu.
 - Se algo estiver ausente, ilegível ou incerto, diga que não sabe — nunca preencha com suposição como certeza.
+- Resultado de tool que começa com [erro]/[timeout]/[bloqueado] = a ação FALHOU. NUNCA diga que deu certo nem invente um id de saída — relate a falha e, se fizer sentido, tente de outro jeito. Só afirme "pronto/gerado/aberto" depois de um resultado de SUCESSO.
 - Você só descreve/lê uma imagem VISÍVEL neste turno. Sem imagem agora (só o placeholder [imagem capturada · id]), NÃO afirme o que ela mostra — traga de volta com see_file e ESPERE.
   ✗ "qual a resposta que você viu?" (sem imagem aberta) → "Vi $(x+5)^2$." (INVENTADO)
   ✓ "Não tenho a imagem aberta pra reler — deixa eu trazer de volta." → chama see_file, ESPERA, só então responde.
@@ -75,8 +76,8 @@ STUDY_MODE = (
 
     "\nDERIVÁVEL vs LEMBRADO — trate diferente:\n"
     "- DERIVÁVEL (uma conta, uma demonstração, um passo lógico): MOSTRE o passo a passo — o Dono "
-    "confere cada passo e aprende o caminho. Renderize com render_imagem/display_page; nunca escreva "
-    "LaTeX cru no chat.\n"
+    "confere cada passo e aprende o caminho. Crie o HTML com create_file e mostre com open_file "
+    "(ou vire imagem com screenshot); nunca escreva LaTeX cru no chat.\n"
     "- LEMBRADO (data, valor exato, enunciado de teorema, citação, referência): risco de alucinar. "
     "NÃO crave — marque 'acho que é X, confere no material'.\n"
 
@@ -98,7 +99,7 @@ STUDY_MODE = (
     "- Toda fórmula: renderize e logo abaixo defina cada símbolo ('onde: ...').\n"
     "- Conta: mostre PASSO A PASSO granular (a divisão, depois a multiplicação, depois o resultado) — "
     "nunca pule pro final; o Dono confere cada passo.\n"
-    "- Dê um EXEMPLO concreto e, havendo casos, uma TABELA comparativa (display_page).\n"
+    "- Dê um EXEMPLO concreto e, havendo casos, uma TABELA comparativa (create_file + open_file).\n"
     "- Ofereça uma VERIFICAÇÃO que o Dono faça sozinho (ex.: a soma das freq. relativas dá 100%).\n"
     "- Feche com um resumo curto.\n"
     "- Se o material tiver falha/lacuna, aponte COM NUANCE: o que está certo, o que está incompleto, "
@@ -106,9 +107,9 @@ STUDY_MODE = (
 
     "\nFERRAMENTAS no estudo:\n"
     "- capture_image → ler a página/enunciado/caderno do Dono.\n"
-    "- render_imagem (imagem) / display_page (navegador) → mostrar a fórmula ou a derivação.\n"
-    "- display_page → montar uma tabela/resumo comparativo quando ajudar.\n"
-    "- lembrar → registrar o ponto fraco e o que já foi explicado, pra revisar depois "
+    "- create_file (ext=html) → autorar a fórmula/derivação/tabela; depois open_file (navegador) a "
+    "mostra, ou screenshot a vira imagem pra enviar.\n"
+    "- remember → registrar o ponto fraco e o que já foi explicado, pra revisar depois "
     "('semana passada você travou em integração por partes').\n"
 
     "\nRegra-mãe: na dúvida entre PARECER sábio e SER fiel, seja fiel. O aprendizado do Dono depende disso."
@@ -172,16 +173,7 @@ class _CoTSplit:
         return [(self.modo, p)]
 
 
-_STASH_MIN = 400   # chars: arg de texto (body_html) >= isso vira [file_id] no histórico (economia + reuso)
-
-def _ext_de(campo: str, conteudo: str) -> str:
-    """Infere a extensão do artefato pelo nome do campo/conteúdo (pro arquivo de cache ficar legível)."""
-    c = conteudo.lstrip()[:200].lower()
-    if "html" in campo.lower() or c.startswith("<") or "<div" in c or "<style" in c:
-        return ".html"
-    if c.startswith("{") or c.startswith("["):
-        return ".json"
-    return ".txt"
+_STASH_MIN = 400   # chars: 'body' de texto >= isso vira elisão ⟨conteúdo omitido⟩ no histórico (economia)
 
 
 class Orchestrator:
@@ -336,8 +328,8 @@ class Orchestrator:
         ids_reais: set[str],
     ) ->  tuple[list[dict], bool, bool, list[tuple]]:
         passos: list[tuple[str, str]] = []
-        # stash dos args GRANDES (body_html) -> file_id; o histórico guarda só [file_id=…] (1x por tool)
-        stash_map = {tc.id: self._stash_args(tc.arguments, session_id, device_id) for tc in msg.tool_calls}
+        # enxuga o 'body' GRANDE no histórico (economia); o artefato já foi guardado pela própria tool
+        stash_map = {tc.id: self._stash_args(tc.arguments) for tc in msg.tool_calls}
         if user_turn is not None:
             history = history + [user_turn]
         history = history + [
@@ -350,7 +342,7 @@ class Orchestrator:
                         "type": "function",
                         "function": {
                             "name": tc.name,
-                            "arguments": orjson.dumps(stash_map[tc.id][0]).decode()   # args enxutos (body_html -> [file_id])
+                            "arguments": orjson.dumps(stash_map[tc.id]).decode()   # args enxutos (body -> ⟨omitido⟩)
                         }
                     }
                     for tc in msg.tool_calls
@@ -396,12 +388,9 @@ class Orchestrator:
                 saw_image = True
                 trace_txt = f"[{origem} · image_id={img_id}]"
             else:
-                ids_reais.update(re.findall(r"image_id=([0-9a-f]{12})", obs))
+                # ids REAIS que a tool devolveu (create_file/screenshot põem o file_id no próprio retorno)
+                ids_reais.update(re.findall(r"(?:file_id|image_id)=([0-9a-f]{12})", obs))
                 tool_content =  await self._context.summarize(obs, foco=f"resultado de {name}")
-                mks = stash_map.get(tc.id, ({}, []))[1]         # marcadores dos artefatos que ESTA tool gerou
-                if mks:
-                    tool_content = f"{tool_content} " + " ".join(mks)
-                    ids_reais.update(re.findall(r"file_id=([0-9a-f]{12})", " ".join(mks)))
                 trace_txt = tool_content
         
             passos.append((tc.name, trace_txt))
@@ -418,24 +407,17 @@ class Orchestrator:
             
         return (history, saw_image, success, passos)
 
-    def _stash_args(self, arguments: dict, session_id: str, device_id: str | None) -> tuple[dict, list[str]]:
-        """body_html GRANDE -> stash no FileStore (com kind/title/desc) -> file_id. A TOOL recebe o arg
-        CHEIO; só a CÓPIA do histórico enxuga: o body_html vira um MARCADOR rico ([file_id=X · html ·
-        "título" · desc]) — economiza contexto e diz ao modelo que aquilo é um artefato (pra REABRIR usa
-        open_file, pra RE-OLHAR usa see_file; o guard do display_page recusa marcador como conteúdo).
-        Devolve (args enxutos, [marcadores])."""
+    def _stash_args(self, arguments: dict) -> dict:
+        """A TOOL sempre recebe os args CHEIOS; só a CÓPIA do histórico enxuga o 'body' gigante do
+        create_file, pra economizar contexto. No histórico o body vira uma ELISÃO neutra
+        (⟨conteúdo omitido…⟩) — SEM file_id, pra o modelo NÃO imitar um marcador no lugar do conteúdo
+        (bug observado) e pra ficar legível. O artefato já foi guardado pela própria tool, que devolve o
+        file_id no RESULTADO (reabrir/fotografar depois via open_file/screenshot). Devolve só o slim."""
         slim = dict(arguments)
-        markers: list[str] = []
-        for k, v in arguments.items():
-            if k == "body_html" and isinstance(v, str) and len(v) >= _STASH_MIN:
-                title = arguments.get("title") or ""
-                desc = arguments.get("desc") or ""
-                fid = self._image_index.put_text(v, device=device_id, session=session_id, kind="html",
-                                                 ext=_ext_de(k, v), title=title, desc=desc)
-                mk = file_marker(fid, "html", title, desc)
-                slim["body_html"] = mk          # histórico: marcador rico (não o HTML gigante nem vazio)
-                markers.append(mk)
-        return slim, markers
+        v = arguments.get("body")
+        if isinstance(v, str) and len(v) >= _STASH_MIN:
+            slim["body"] = f"⟨conteúdo omitido do histórico · {len(v)} chars⟩"   # neutro, sem file_id
+        return slim
 
     def _is_repeat(self, name: str, payload: dict, seen: set[tuple[str, bytes]]) -> bool:
         return (name, orjson.dumps(payload, option=orjson.OPT_SORT_KEYS),) in seen

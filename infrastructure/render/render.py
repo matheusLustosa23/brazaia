@@ -5,13 +5,13 @@ NATURAL: bloco `$$...$$`, inline `\\(...\\)`. NUNCA cifrão único `$` pra math
 (fica reservado a dinheiro — R$ 29). Validado (22/08/2026): o 27B obedece a regra
 e o R$ nunca colide (v3 do teste comparativo).
 
-Foto (render_imagem) e página (display_page) usam o MESMO render() -> nunca divergem.
+Imagem (screenshot) e página (create_file/open_file) usam o MESMO render() -> nunca divergem.
 Self-contained (assets embutidos) -> funciona offline, no celular, via file://.
 
-estilo:
-  "pico"  (padrão) -> injeta o Pico; corpo vai em <main>. Barato, consistente.
-  "livre"          -> NÃO injeta Pico; o body_html É a página inteira (o LLM autora
+style:
+  "free"  (PADRÃO) -> NÃO injeta Pico; o body_html É a página inteira (o LLM autora
                        seu próprio <style>). Pra design bespoke. Continua self-contained.
+  "pico"           -> injeta o Pico (classless); corpo vai em <main>. Barato, consistente.
 KaTeX só entra se houver math no corpo (economia de peso).
 """
 import base64, html as _html, re
@@ -22,10 +22,10 @@ _ASSETS = Path(__file__).parent / "assets"
 
 # Instrução que vai pras descriptions das tools (uma verdade só, aqui no motor).
 STYLE_GUIDE = (
-    "Você AUTORA o visual com o SEU próprio CSS (num <style>), com criatividade. O modo 'livre' (PADRÃO) "
+    "Você AUTORA o visual com o SEU próprio CSS (num <style>), com criatividade. O modo 'free' (PADRÃO) "
     "dá conta de tudo sozinho — use ele SEMPRE.\n"
-    "  Só use estilo='pico' se o DONO pedir EXPLICITAMENTE 'usando pico'. Fora isso, é sempre livre (sua criatividade).\n"
-    "MATEMÁTICA (funciona no livre, NÃO precisa de pico): bloco $$…$$ · inline \\(…\\). NUNCA cifrão único $ "
+    "  Só use style='pico' se o DONO pedir EXPLICITAMENTE 'usando pico'. Fora isso, é sempre free (sua criatividade).\n"
+    "MATEMÁTICA (funciona no free, NÃO precisa de pico): bloco $$…$$ · inline \\(…\\). NUNCA cifrão único $ "
     "(é dinheiro: R$ 29). Ex.: \\(\\vec{v}=(3,-4)\\) e $$x=\\frac{-b}{2a}$$.\n"
     "NÃO use CDN/<link> externo (o device pode estar offline) — CSS inline no <style>."
 )
@@ -62,11 +62,11 @@ def _katex_js() -> tuple[str, str]:
             (_ASSETS / "auto-render.min.js").read_text("utf-8"))
 
 
-def render(body_html: str, title: str | None = None, estilo: str = "livre") -> str:
+def render(body_html: str, title: str | None = None, style: str = "free") -> str:
     """body_html (HTML semântico + math natural) -> HTML self-contained. Ver docstring do módulo."""
     tem_math = bool(_TEM_MATH.search(body_html))
     css_parts: list[str] = []
-    if estilo == "pico":
+    if style == "pico":
         css_parts.append(_pico())
         css_parts.append(_PICO_EXTRA)
     if tem_math:
@@ -78,10 +78,10 @@ def render(body_html: str, title: str | None = None, estilo: str = "livre") -> s
             '<meta name="viewport" content="width=device-width,initial-scale=1">'
             f'<title>{_html.escape(title or "brazaia")}</title><style>{css}</style></head>')
 
-    if estilo == "pico":
+    if style == "pico":
         h1 = f"<h1>{_html.escape(title)}</h1>" if title else ""
         corpo = f"<main>{h1}{body_html}</main>"
-    else:                                                  # livre: o LLM manda a página toda
+    else:                                                  # free: o LLM manda a página toda
         corpo = body_html
 
     scripts = ""
