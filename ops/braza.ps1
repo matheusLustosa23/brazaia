@@ -83,12 +83,17 @@ function KillAgentProcs {
   $old = (Get-NetTCPConnection -LocalPort 8080 -State Listen -ErrorAction SilentlyContinue).OwningProcess
   if ($old) { Stop-Process -Id $old -Force -ErrorAction SilentlyContinue }
 }
+function StartHiddenBash($bashScript, $vbsName) {
+  # INVISIVEL de verdade: o git-bash IGNORA -WindowStyle Hidden do Start-Process (abre console proprio).
+  # O VBS Run(cmd, 0, False) nao abre janela nenhuma (mesmo truque do keep-alive do WSL). Fecha = nao existe.
+  $vbs = Join-Path $env:TEMP $vbsName
+  ('CreateObject("Wscript.Shell").Run """' + $GitBash + '"" -lc ' + $bashScript + '", 0, False') | Set-Content -Encoding ASCII $vbs
+  Start-Process wscript.exe $vbs -WindowStyle Hidden
+}
 function StartAgent {
   if (-not (EnsureTailscale)) { return $false }   # sem IP tailscale o agente nao consegue bindar (--host)
   KillAgentProcs; Start-Sleep 1                    # garante 1 so (mata qualquer um que ja exista)
-  # Minimized: o chrome headless do screenshot precisa de window-station (Hidden quebra, mesmo com CREATE_NO_WINDOW).
-  $p = Start-Process $GitBash -ArgumentList '-lc', $AgentScript -WindowStyle Minimized -PassThru
-  $p.Id | Out-File $PidFile
+  StartHiddenBash $AgentScript 'braza-agent.vbs'   # sem janela (screenshot usa --headless=old, renderiza sem console)
   return (Esperar $AgentUrl 60)
 }
 function StopAgent {
@@ -98,8 +103,7 @@ function StopAgent {
 }
 function StartCompanion {
   if (CompanionAlive) { Write-Host "Companion ja no ar." -ForegroundColor Green; return $true }
-  # Minimized (consistente com o agente; open_file de imagem/pagina abre viewer/navegador na sessao do usuario)
-  Start-Process $GitBash -ArgumentList '-lc', $CompScript -WindowStyle Minimized | Out-Null
+  StartHiddenBash $CompScript 'braza-companion.vbs'   # sem janela (VBS); open_file usa ShellExecute (abre na sessao do usuario)
   for ($i=0; $i -lt 10; $i++) { Start-Sleep 1; if (CompanionAlive) { Write-Host "Companion no ar." -ForegroundColor Green; return $true } }
   Write-Host "Companion nao subiu (ver $CompLog)." -ForegroundColor Red; return $false
 }

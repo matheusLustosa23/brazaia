@@ -64,15 +64,30 @@ def _cortar(png: bytes) -> bytes:
     imagem.save(saida, format="PNG", optimize=True)
     return saida.getvalue()
 
-def _shot_sync(html: str, largura: int, escala: float) -> bytes:
-    """chrome headless SÍNCRONO (subprocess.run) — chamado via to_thread.
+def _shot_playwright(html: str, largura: int, escala: float) -> bytes:
+    """Screenshot via Playwright (chromium próprio, por CDP). Renderiza OFFSCREEN e captura via DevTools —
+    funciona num processo SEM console/janela (agente Hidden/VBS/service), onde o `chrome.exe --screenshot`
+    sai rc=0 sem PNG. full_page corta na altura do conteúdo sozinho (não precisa do _cortar)."""
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(args=["--disable-gpu", "--no-sandbox"])
+        try:
+            page = browser.new_page(viewport={"width": largura, "height": 1024}, device_scale_factor=escala)
+            page.set_content(html, wait_until="load")
+            page.wait_for_timeout(500)                   # deixa o KaTeX/layout assentar antes do print
+            return page.screenshot(full_page=True, type="png")
+        finally:
+            browser.close()
 
-    Por que sync-em-thread e NÃO asyncio.create_subprocess_exec: no Windows o
-    create_subprocess_exec exige o ProactorEventLoop; se o uvicorn subir a API
-    com outro loop, levanta NotImplementedError. subprocess.run funciona em
-    QUALQUER SO/loop, e o to_thread mantém o event loop livre. É render
-    server-side (~1x por tool call), então uma thread curta é de boa.
-    """
+
+def _shot_sync(html: str, largura: int, escala: float) -> bytes:
+    """Playwright (CDP) primeiro — funciona SEM console/janela. Fallback: chrome.exe --screenshot (só
+    funciona em contexto COM console, ex.: dev local). Chamado via to_thread (sync em thread evita o
+    ProactorEventLoop do Windows). É ~1x por tool call, então uma thread curta é de boa."""
+    try:
+        return _shot_playwright(html, largura, escala)
+    except ImportError:
+        pass                                             # playwright não instalado -> tenta o chrome CLI
     import subprocess
     with tempfile.TemporaryDirectory() as tmp:
         origem = Path(tmp) / "p.html"
@@ -80,11 +95,14 @@ def _shot_sync(html: str, largura: int, escala: float) -> bytes:
         destino = Path(tmp) / "p.png"
         perfil = Path(tmp) / "ud"                       # user-data-dir PRÓPRIO: sem isso, se já há um Chrome
         try:                                            # aberto (ex.: open_file mostrando páginas), o headless
-            resultado = subprocess.run(                 # ANEXA na instância viva e sai rc=0 SEM gerar o PNG
-                [_chrome(), "--headless=new", "--disable-gpu", "--no-sandbox",
+            # --headless=old (NAO =new): o 'new' nao gera o PNG quando o processo roda SEM console/desktop
+            # (agente Hidden/service -> rc=0 sem arquivo). O 'old' renderiza nesse contexto. Ver pesquisa/diag.
+            resultado = subprocess.run(
+                [_chrome(), "--headless=old", "--disable-gpu", "--no-sandbox",
                  f"--user-data-dir={perfil}", "--no-first-run", "--no-default-browser-check",
                  "--hide-scrollbars", f"--force-device-scale-factor={escala}",
                  f"--window-size={largura},{_ALTURA_MAX}", f"--virtual-time-budget={_ESPERA_KATEX_MS}",
+                 "--run-all-compositor-stages-before-draw",   # garante o paint antes do print (timed content/KaTeX)
                  f"--screenshot={destino}", origem.as_uri()],
                 capture_output=True,
                 timeout=_TIMEOUT_S
