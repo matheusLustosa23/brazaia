@@ -71,21 +71,38 @@ def roda(chrome: str, flags: list[str], tmp: Path, i: int) -> tuple[bool, int, s
     return ok, r.returncode, f"{tam}B · {err or '∅'}"
 
 
+def _passada(chrome: str, tmp: Path, titulo: str) -> None:
+    print(f"\n### {titulo}")
+    print(f"{'COMBO':<34} {'PNG?':<6} {'rc':<4} detalhe")
+    print("-" * 80)
+    for i, (nome, flags) in enumerate(COMBOS):
+        ok, rc, det = roda(chrome, flags, tmp, i)
+        print(f"{nome:<34} {'✅' if ok else '❌':<6} {rc:<4} {det}")
+    print("-" * 80)
+
+
 def main() -> None:
+    import time
     chrome = achar_chrome()
-    print(f"chrome: {chrome}\n")
+    print(f"chrome: {chrome}")
     with tempfile.TemporaryDirectory() as t:
         tmp = Path(t)
-        print(f"{'COMBO':<34} {'PNG?':<6} {'rc':<4} detalhe")
-        print("-" * 80)
-        vencedor = None
-        for i, (nome, flags) in enumerate(COMBOS):
-            ok, rc, det = roda(chrome, flags, tmp, i)
-            print(f"{nome:<34} {'✅' if ok else '❌':<6} {rc:<4} {det}")
-            if ok and vencedor is None:
-                vencedor = nome
-        print("-" * 80)
-        print(f"\n>>> PRIMEIRA combo que gerou PNG: {vencedor or 'NENHUMA — colar a saída aqui'}")
+        _passada(chrome, tmp, "PASSO 1 — Chrome LIMPO (nenhuma janela aberta)")
+
+        # PASSO 2: reproduz a condição REAL — abre um Chrome normal (perfil padrão) e deixa rodando,
+        # igual quando o agente mostrou páginas via open_file. Aí testamos de novo.
+        print("\n>>> abrindo um Chrome NORMAL (perfil padrão) pra simular o estado real... "
+              "(feche essa janela depois)")
+        janela = tmp / "aberta.html"; janela.write_text("<h1>janela de teste — pode fechar</h1>", encoding="utf-8")
+        proc = subprocess.Popen([chrome, janela.as_uri()])
+        time.sleep(4)                                    # dá tempo do Chrome registrar a instância
+        _passada(chrome, tmp, "PASSO 2 — COM um Chrome JÁ ABERTO (condição do teste real)")
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+        print("\n>>> LEIA o PASSO 2: se 'new SEM user-data-dir' deu ❌ e as COM user-data-dir deram ✅,")
+        print(">>> então o fix (--user-data-dir no shot.py) é EXATAMENTE o necessário — só reiniciar o agent.")
 
 
 if __name__ == "__main__":
