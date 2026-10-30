@@ -74,10 +74,6 @@ def _shot_sync(html: str, largura: int, escala: float) -> bytes:
     server-side (~1x por tool call), então uma thread curta é de boa.
     """
     import subprocess
-    # Windows: dá um console OCULTO ao chrome. Sem isso, se o agente foi lançado sem console (background/
-    # Hidden), o headless sai rc=0 SEM gerar o PNG. Com CREATE_NO_WINDOW o chrome tem seu próprio console
-    # (invisível) e funciona mesmo o agente rodando sem janela. No POSIX a flag não existe -> 0 (no-op).
-    _cf = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     with tempfile.TemporaryDirectory() as tmp:
         origem = Path(tmp) / "p.html"
         origem.write_text(html, encoding="utf-8")
@@ -91,8 +87,7 @@ def _shot_sync(html: str, largura: int, escala: float) -> bytes:
                  f"--window-size={largura},{_ALTURA_MAX}", f"--virtual-time-budget={_ESPERA_KATEX_MS}",
                  f"--screenshot={destino}", origem.as_uri()],
                 capture_output=True,
-                timeout=_TIMEOUT_S,
-                creationflags=_cf
+                timeout=_TIMEOUT_S
             )
         except subprocess.TimeoutExpired:
             raise RuntimeError("chrome travou ao gerar o PNG")
