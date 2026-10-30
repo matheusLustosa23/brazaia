@@ -58,6 +58,8 @@ ip -4 addr show tailscale0          # tem que mostrar o IP 100.x na interface
 ## Passo 4 — agente na outra GPU (opcional, se tiver 2)
 `subir_agente.sh` sobe o agente fixado na GPU menor (`CUDA_VISIBLE_DEVICES=1`) e faz bind **só no IP do Tailscale** (`--host <ip-tailscale>`, não `0.0.0.0` → não expõe na LAN). Assim vLLM e agente coexistem.
 
+- **Gotcha (screenshot):** o agente usa o chromium do Playwright pra tirar print do HTML (`create_file`/`screenshot`). Rode **uma vez** na venv do agente: `uv run playwright install chromium`. Sem isso o `chrome.exe --screenshot` é usado como fallback, mas ele sai `rc=0 sem PNG` quando o agente roda **sem console/janela** (VBS Hidden) — por isso o Playwright é o caminho padrão.
+
 ## Passo 5 — o toggle `braza`
 `braza.ps1` (PowerShell) com `start`/`stop`/`status`: **ajuste os caminhos, IPs e o `$Gpu0Limite`**.
 - `start`: checa a GPU livre (se tiver jogo, **avisa, não mata**) → sobe um **keep-alive** (senão o WSL se desliga ao fim do comando) → `systemctl start vllm` → espera o health → sobe o agente.
