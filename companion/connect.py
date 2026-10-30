@@ -23,10 +23,39 @@ from companion.runtime import runtime
 from companion.state import estado                 # device_status p/ o rodapé do CLI (embed); inofensivo standalone
 
 LOG = os.path.expanduser("~/ts/connect.log")
+PIDFILE = os.path.expanduser("~/.braza_companion.pid")   # cross-platform: braza e o CLI leem o mesmo
 
 
 def log(*a) -> None:
     print(time.strftime("%H:%M:%S"), *a, flush=True)
+
+
+# ── gestão de processo CROSS-PLATFORM (Windows: tasklist/taskkill; POSIX: os.kill) ──
+def _pid_vivo(pid: int) -> bool:
+    if os.name == "nt":
+        import subprocess
+        out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True)
+        return str(pid) in (out.stdout or "")
+    try:
+        os.kill(pid, 0); return True
+    except OSError:
+        return False
+
+
+def _matar(pid: int) -> None:
+    import subprocess, signal
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True)   # /T mata a árvore
+    else:
+        try: os.kill(pid, signal.SIGTERM)
+        except OSError: pass
+
+
+def _pid_salvo() -> int | None:
+    try:
+        return int(open(PIDFILE).read().strip())
+    except Exception:
+        return None
 
 
 async def _sessao(cfg) -> None:
@@ -83,16 +112,21 @@ def _watch() -> None:
 
 
 def _start_bg() -> None:
-    """Inicia o connect DESTACADO em background e confirma: 'conectado' ou 'falhou a conectar'."""
+    """Inicia o connect DESTACADO em background e confirma: 'conectado' ou 'falhou a conectar'.
+    (No Windows o braza é o lançador preferido — Minimized, p/ window-station do open_image/browser.)"""
     import subprocess
-    if subprocess.run(["pgrep", "-f", "companion.connect --fg"], capture_output=True).returncode == 0:
+    pid = _pid_salvo()
+    if pid and _pid_vivo(pid):
         print("🟢 connect ja esta rodando (use: status / --watch / stop)")
         return
     os.makedirs(os.path.dirname(LOG), exist_ok=True)
     pos = os.path.getsize(LOG) if os.path.exists(LOG) else 0      # le so o que ESTE start produzir
     logf = open(LOG, "a")
-    subprocess.Popen([sys.executable, "-m", "companion.connect", "--fg"],
-                     stdout=logf, stderr=logf, start_new_session=True)
+    kw = {"creationflags": subprocess.CREATE_NEW_CONSOLE} if os.name == "nt" else {"start_new_session": True}
+    p = subprocess.Popen([sys.executable, "-m", "companion.connect", "--fg"],
+                         stdout=logf, stderr=logf, **kw)
+    try: open(PIDFILE, "w").write(str(p.pid))
+    except Exception: pass
     for _ in range(16):                                          # espera o 1o resultado (~8s)
         time.sleep(0.5)
         with open(LOG) as f:
@@ -107,12 +141,11 @@ def _start_bg() -> None:
 
 def _status() -> None:
     """Mostra o estado da conexao: conectado / reconectando / parado."""
-    import subprocess
-    rodando = subprocess.run(["pgrep", "-f", "companion.connect --fg"],
-                             capture_output=True).returncode == 0
+    pid = _pid_salvo()
+    rodando = bool(pid and _pid_vivo(pid))
     ultima = ""
     if os.path.exists(LOG):
-        linhas = [l for l in open(LOG).read().splitlines() if l.strip()]
+        linhas = [l for l in open(LOG, encoding="utf-8", errors="replace").read().splitlines() if l.strip()]
         ultima = linhas[-1] if linhas else ""
     if not rodando:
         print("⚫ parado (connect nao esta rodando)")
@@ -125,10 +158,15 @@ def _status() -> None:
 
 
 def _stop() -> None:
-    """Desconecta: mata o connect (--fg). Se o supervisor estiver rodando, ele reergue em ~30s."""
-    import subprocess
-    r = subprocess.run(["pkill", "-f", "companion.connect --fg"])
-    print("⏹ connect desconectado" if r.returncode == 0 else "⚫ connect ja estava parado")
+    """Desconecta: mata o connect (--fg) pelo PID salvo. Se o supervisor estiver rodando, reergue em ~30s."""
+    pid = _pid_salvo()
+    if pid and _pid_vivo(pid):
+        _matar(pid)
+        try: os.remove(PIDFILE)
+        except OSError: pass
+        print("⏹ connect desconectado")
+    else:
+        print("⚫ connect ja estava parado")
 
 
 if __name__ == "__main__":
@@ -139,6 +177,10 @@ if __name__ == "__main__":
     elif "--watch" in sys.argv:
         _watch()
     elif "--fg" in sys.argv:
+        try:
+            open(PIDFILE, "w").write(str(os.getpid()))   # authoritative: quem subir o --fg registra o PID
+        except Exception:
+            pass
         try:
             asyncio.run(conectar())
         except KeyboardInterrupt:
