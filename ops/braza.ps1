@@ -86,8 +86,8 @@ function KillAgentProcs {
 function StartAgent {
   if (-not (EnsureTailscale)) { return $false }   # sem IP tailscale o agente nao consegue bindar (--host)
   KillAgentProcs; Start-Sleep 1                    # garante 1 so (mata qualquer um que ja exista)
-  # Minimized (NAO Hidden): o chrome headless do screenshot precisa de window-station
-  $p = Start-Process $GitBash -ArgumentList '-lc', $AgentScript -WindowStyle Minimized -PassThru
+  # Hidden: sem janela pra fechar (robusto). O chrome do screenshot ganha console proprio via CREATE_NO_WINDOW (shot.py).
+  $p = Start-Process $GitBash -ArgumentList '-lc', $AgentScript -WindowStyle Hidden -PassThru
   $p.Id | Out-File $PidFile
   return (Esperar $AgentUrl 60)
 }
@@ -98,8 +98,8 @@ function StopAgent {
 }
 function StartCompanion {
   if (CompanionAlive) { Write-Host "Companion ja no ar." -ForegroundColor Green; return $true }
-  # Minimized (NAO Hidden): open_file de imagem/pagina abre viewer/navegador e precisa de window-station
-  Start-Process $GitBash -ArgumentList '-lc', $CompScript -WindowStyle Minimized | Out-Null
+  # Hidden: sem janela pra fechar. open_file de imagem/pagina usa ShellExecute (abre na sessao do usuario de qualquer forma)
+  Start-Process $GitBash -ArgumentList '-lc', $CompScript -WindowStyle Hidden | Out-Null
   for ($i=0; $i -lt 10; $i++) { Start-Sleep 1; if (CompanionAlive) { Write-Host "Companion no ar." -ForegroundColor Green; return $true } }
   Write-Host "Companion nao subiu (ver $CompLog)." -ForegroundColor Red; return $false
 }
@@ -117,7 +117,39 @@ function TailLog($path, $title, $wsl) {
   Get-Content $path -Tail 40 -Wait
 }
 
+function ShowHelp {
+  Write-Host @"
+braza — gestao do stack (vLLM + agente + companion) no server
+
+COMANDOS:
+  start    [alvos]   sobe os componentes            (sem alvo = todos)
+  stop     [alvos]   para os componentes            (sem alvo = todos)
+  restart  [alvos]   para e sobe de novo            (sem alvo = todos)
+  status             estado de tudo (GPU, vLLM, agente, companion, watchdog)
+  logs     <alvo>    acompanha o log em tempo real (Ctrl+C sai)
+  watchdog           mantem agente + companion vivos (loop; roda no boot)
+  help               esta ajuda
+
+ALVOS (flags, aceita PT/EN, combinaveis; SEM flag = todos):
+  --all | --tudo
+  --vllm
+  --agent | --agente
+  --companion | --companheiro
+
+EXEMPLOS:
+  braza start                 sobe tudo
+  braza restart --agente      so o agente
+  braza stop --vllm           para o vLLM (libera a 3090 p/ jogo)
+  braza restart --agent --companion   agente + companion
+  braza logs --companion      log do companion   (--agent | --vllm)
+  braza status                ve o estado
+"@ -ForegroundColor Cyan
+}
+
+if ($cmd -in @('-h','--help','/?','?','ajuda','h')) { $cmd = 'help' }
+
 switch ($cmd) {
+  "help" { ShowHelp }
   "start" {
     Remove-Item $PauseFlag -ErrorAction SilentlyContinue      # tira a pausa de jogo
     if ($tgtVllm) {
@@ -202,5 +234,5 @@ switch ($cmd) {
     }
   }
 
-  default { Write-Host "Uso: braza start|stop|restart [--all|--vllm|--agent|--companion] | status | watchdog | logs [--agent|--vllm|--companion]" }
+  default { Write-Host "comando '$cmd' desconhecido." -ForegroundColor Yellow; ShowHelp }
 }
