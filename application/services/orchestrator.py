@@ -21,6 +21,7 @@ from infrastructure.devices.device_gateway import DeviceGateway
 from infrastructure.storage.file_store import FileStore
 
 MAX_STEPS = 15
+_FALHA_TOOL = re.compile(r"\[(erro|timeout|falha)")   # prefixo que as tools usam p/ dizer que falharam
 
 ConfirmFn = Callable[[str, dict], Awaitable[bool]]
 
@@ -260,7 +261,7 @@ class Orchestrator:
                                  "reservado": self._context.reserved})
             flow(session_id, f"llm#{_step + 1}", f"→ prompt {usado} tok ({len(messages)} msgs) · max_saida={max_tok}")
             t_llm = time.monotonic(); t_1o = 0.0
-            n_tok = {"think": 0, "reply": 0}; txt_think = ""
+            n_tok = {"think": 0, "reply": 0, "tool": 0}; txt_think = ""
             texto = ""
             frag: dict[int, dict] = {}                          # index -> {"id","name","args"}
             bruto_turno.append(f"\n⟦── chamada {_step + 1} ──⟧\n")   # marca o limite de CADA llm.stream no log bruto
@@ -281,6 +282,7 @@ class Orchestrator:
                             txt_think += piece
                         yield (tg, piece)                       # etiquetado: ('think'|'reply', pedaço)
                 else:                                           # ("tool_call_delta", tcd cru)
+                    n_tok["tool"] += 1                          # args da tool também são geração (ex.: body do create_file)
                     f = frag.setdefault(val.index, {"id": "", "name": "", "args": ""})
                     if val.id:
                         f["id"] = val.id
@@ -288,6 +290,9 @@ class Orchestrator:
                         f["name"] += val.function.name
                     if val.function and val.function.arguments:
                         f["args"] += val.function.arguments
+                        # args AO VIVO: o cliente mostra a tool sendo montada (ex.: body HTML) em vez de esperar mudo
+                        yield ("event", {"evento": "tool_args", "index": val.index, "tool": f["name"],
+                                         "delta": val.function.arguments})
             for tg, piece in sep.flush():                        # fecha a chamada (raciocínio que não fechou </think>)
                 n_tok[tg] += 1
                 if tg == "reply":
@@ -296,10 +301,10 @@ class Orchestrator:
                     txt_think += piece
                 yield (tg, piece)
             dt = time.monotonic() - t_llm
-            n = n_tok["think"] + n_tok["reply"]
+            n = n_tok["think"] + n_tok["reply"] + n_tok["tool"]
             saida = (f"tool_calls={','.join(f['name'] for _, f in sorted(frag.items()))}" if frag else "texto")
             flow(session_id, f"llm#{_step + 1}", f"← {dt:.1f}s · 1º token {(t_1o - t_llm) if t_1o else 0:.1f}s "
-                                                 f"· think={n_tok['think']} reply={n_tok['reply']} pedaços "
+                                                 f"· think={n_tok['think']} reply={n_tok['reply']} tool={n_tok['tool']} pedaços "
                                                  f"({n / dt if dt else 0:.0f}/s) · saída={saida}")
             if txt_think:
                 flow(session_id, "think", curto(txt_think, 400))
@@ -333,6 +338,8 @@ class Orchestrator:
             guard = check_output(texto, ids_reais)
             if not guard.ok:
                 flow(session_id, "guard", f"✗ reprovado: {curto(guard.reason, 300)} → re-stream")
+                # a resposta reprovada JÁ foi streamada pro cliente → avisa pra ele descartar o que mostrou
+                yield ("event", {"evento": "guard", "ok": False, "acao": "refazendo", "motivo": guard.reason})
                 texto = ""
                 bruto_turno.append("\n⟦── guard re-stream ──⟧\n")
                 sep = _CoTSplit(think)
@@ -351,6 +358,8 @@ class Orchestrator:
                 if not check_output(texto, ids_reais).ok:
                     flow(session_id, "guard", "✗ re-stream reprovado de novo → resposta padrão")
                     texto = "Não consegui fazer isso agora."
+                    yield ("event", {"evento": "guard", "ok": False, "acao": "padrao", "motivo": "re-stream reprovado de novo"})
+                    yield ("reply", texto)                      # sem isso o cliente nunca via a resposta padrão (só ia pro histórico)
                 else:
                     flow(session_id, "guard", f"✓ re-stream ok: {curto(texto, 300)}")
             if user_turn:
@@ -419,7 +428,7 @@ class Orchestrator:
             name = tc.name
             payload = tc.arguments
             yield ("event", {"evento": "passo", "id": tc.id, "tool": name,   # cria/acende a linha do checklist
-                             "estado": "executando", "porque": name, "improvisado": True})
+                             "estado": "executando", "porque": _porque(name, payload), "improvisado": True})
             exec_ok = False
             flow(session_id, "tool", f"▶ {name} args={curto(orjson.dumps(stash_map[tc.id]).decode(), 300)}")   # args enxutos (sem body gigante)
             t_tool = time.monotonic()
@@ -530,6 +539,8 @@ class Orchestrator:
             return f"[falha] {confirm.reason}", False
         
         trace(f"[execute tool] {name} ({payload}) device:{device_id}")
+        if isinstance(result, str) and _FALHA_TOOL.match(result):   # a tool rodou mas DEVOLVEU erro ([erro…]/[timeout]/[falha])
+            return result, False
         return  result, True
     
     def _trace(
@@ -555,6 +566,14 @@ class Orchestrator:
     async def create_session(self) -> str:
         return await self._session_store.create()
             
+def _porque(name: str, args: dict) -> str:
+    """Rótulo da linha do checklist: tool + o arg mais descritivo (ex.: 'calculate · 17*23')."""
+    for k in ("title", "expression", "desc", "file_id", "device", "text", "query"):
+        v = args.get(k) if isinstance(args, dict) else None
+        if isinstance(v, str) and v.strip():
+            return f"{name} · {_det_curto(v, 60)}"
+    return name
+
 def _det_curto(s: str, n: int = 120) -> str:
     """1ª linha, sem quebra, cortada em n — o detalhe (└) que o checklist mostra sob o passo ok/erro."""
     t = (s or "").strip()

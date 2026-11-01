@@ -53,7 +53,8 @@ async def chat(
                     flow(session_id, "cliente", "✗ desconectou no meio do stream → turno interrompido")
                     break
                 if kind == "event":               # evento estruturado (etapa/passo/contexto/fim) → SSE próprio
-                    flow(session_id, "sse", f"{text.get('evento', 'evento')} {curto(orjson.dumps(text).decode(), 300)}")
+                    if text.get("evento") != "tool_args":     # 1 por delta → inundaria o log (o resumo sai na linha llm#N)
+                        flow(session_id, "sse", f"{text.get('evento', 'evento')} {curto(orjson.dumps(text).decode(), 300)}")
                     yield sse_event(text, event=text.get("evento", "evento"))
                     continue
                 if kind == "think":               # raciocínio: marcado com think=True (o CLI mostra na caixa)
