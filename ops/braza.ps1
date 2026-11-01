@@ -8,6 +8,7 @@
 #   braza status                                       # estado de tudo
 #   braza watchdog                                     # mantém agente + companion vivos (loop)
 #   braza logs [--agent|--vllm|--companion]            # acompanha o log (tail -f)
+#   braza cli [--device NOME]                          # abre o CLI do companion AQUI (chat com o agente)
 # Ex.: braza start --vllm   |   braza restart --agent --companion   |   braza stop --companion
 param(
   [Parameter(Position=0)][string]$cmd = "status",
@@ -31,6 +32,7 @@ $Gpu0Limite  = 2000              # MiB em uso na 3090 acima disso (SEM vLLM) = t
 
 # ---- alvos (flags) ----  sem flag = tudo. Aceita PT/EN e 0-2 tracos (--agent, --agente, agente...)
 $flags = @($rest) | Where-Object { $_ }
+if ($cmd -eq 'cli') { $cliArgs = $flags; $flags = @() }      # o cli tem argumentos proprios (--device)
 $norm  = @()
 foreach ($f in $flags) {
   switch -regex ($f.ToLower()) {
@@ -121,6 +123,37 @@ function TailLog($path, $title, $wsl) {
   Get-Content $path -Tail 40 -Wait
 }
 
+function StartCli($argv) {
+  $argv = @($argv)
+  # CLI interativo NESTE terminal. Device PROPRIO (default server-cli): se usasse 'server' (o do companion de
+  # fundo), o registro no agente seria sobrescrito e, ao sair do CLI, o unregister derrubaria o do watchdog.
+  $device = 'server-cli'
+  for ($i = 0; $i -lt $argv.Count; $i++) {
+    if ($argv[$i] -in @('--device','-d')) { $device = $argv[$i+1]; $i++ } else { $device = $argv[$i] }   # aceita o nome solto
+  }
+  if (-not $device) { Write-Host "uso: braza cli [--device NOME]" -ForegroundColor Yellow; return }
+  if ($device -eq 'server') { Write-Host "device 'server' e do companion de fundo (watchdog) -> escolha outro nome" -ForegroundColor Red; return }
+  if (-not (AgentHealthy)) { Write-Host "Agente fora do ar -> braza start (o CLI conversa com a API)." -ForegroundColor Red; return }
+  $key = ((Select-String -Path (Join-Path $Repo '.env.dev') -Pattern '^AGENT_API_KEY=').Line -split '=',2)[1].Trim().Trim('"')
+  $vars = @{ SERVER_WS_URL = "ws://${TsIp}:8080/api/v1"; DEVICE_ID = $device; DEVICE_NAME = $device;
+             AGENT_API_KEY = $key; PYTHONUTF8 = '1'; PYTHONIOENCODING = 'utf-8' }
+  $antes = @{}
+  foreach ($k in $vars.Keys) {
+    $antes[$k] = [Environment]::GetEnvironmentVariable($k, 'Process')
+    $forca = $k -in @('DEVICE_ID','DEVICE_NAME')                                          # device: o parametro manda
+    if ($forca -or -not $antes[$k]) { [Environment]::SetEnvironmentVariable($k, $vars[$k], 'Process') }   # resto: ja setado = respeita
+  }
+  $encAntes = [Console]::OutputEncoding
+  [Console]::OutputEncoding = [System.Text.Encoding]::UTF8                                      # emoji/box do CLI
+  Push-Location $Repo
+  try { & (Join-Path $Repo '.venv\Scripts\python.exe') -m companion.cli }
+  finally {
+    Pop-Location
+    [Console]::OutputEncoding = $encAntes
+    foreach ($k in $vars.Keys) { [Environment]::SetEnvironmentVariable($k, $antes[$k], 'Process') }   # devolve o env da sessao
+  }
+}
+
 function ShowHelp {
   Write-Host @"
 braza — gestao do stack (vLLM + agente + companion) no server
@@ -132,6 +165,8 @@ COMANDOS:
   status             estado de tudo (GPU, vLLM, agente, companion, watchdog)
   logs     <alvo>    acompanha o log em tempo real (Ctrl+C sai)
   watchdog           mantem agente + companion vivos (loop; roda no boot)
+  cli [--device N]   abre o CLI do companion aqui (chat com o agente; device default 'server-cli')
+                     no bash/WSL: bash /mnt/c/workspace/brazaia/ops/cli.sh [--device N]
   help               esta ajuda
 
 ALVOS (flags, aceita PT/EN, combinaveis; SEM flag = todos):
@@ -147,6 +182,8 @@ EXEMPLOS:
   braza restart --agent --companion   agente + companion
   braza logs --companion      log do companion   (--agent | --vllm)
   braza status                ve o estado
+  braza cli                   conversa com o agente neste terminal (/sair fecha)
+  braza cli --device sala     idem, registrado como device 'sala'
 "@ -ForegroundColor Cyan
 }
 
@@ -237,6 +274,8 @@ switch ($cmd) {
       Start-Sleep 30
     }
   }
+
+  "cli" { StartCli $cliArgs }
 
   default { Write-Host "comando '$cmd' desconhecido." -ForegroundColor Yellow; ShowHelp }
 }

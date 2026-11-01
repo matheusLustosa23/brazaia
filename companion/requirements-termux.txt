@@ -19,3 +19,4 @@ socksio               # SOCKS5 pro httpx (chat sai pelo tailscaled no Termux, ig
 rich                  # render do chat no terminal (companion.render / cli)
 prompt_toolkit        # a caixa de input + scrollback do CLI
 pylatexenc            # LaTeX→Unicode da matemática no terminal (companion.render)
+pyfiglet              # banner do CLI (opcional: sem ele cai num banner simples)
