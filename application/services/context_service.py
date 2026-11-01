@@ -37,6 +37,16 @@ class ContextManager:
         """Teto real do PROMPT (deixa espaço para a geração)."""
         return self._budget - self._reserved
 
+    @property
+    def budget(self) -> int:
+        """Janela TOTAL do modelo (input + saída reservada) — para o rodapé de contexto do CLI."""
+        return self._budget
+
+    @property
+    def reserved(self) -> int:
+        """Tokens reservados para a geração (saída) — para o rodapé de contexto do CLI."""
+        return self._reserved
+
     def max_saida(self, messages: list[dict], margem: int = 512, minimo: int = 512) -> int:
         """max_tokens DINÂMICO: nunca deixa input+saída furar a janela (budget). Encolhe a saída
         quando o input é grande (ex.: histórico com HTML grande) — evita o 400 'total > max context'."""

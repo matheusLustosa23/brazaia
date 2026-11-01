@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import orjson, re
+import orjson, re, time
 
 from typing import Awaitable, Callable,BinaryIO
 from collections.abc import AsyncIterator
@@ -16,6 +16,7 @@ from application.services.helpers import _strip, persist_image, normalize_image_
 from application.guards.output import check_output
 from application.services._trace import trace
 from application.services._turnlog import log_turno
+from application.services._flowlog import flow, curto
 from infrastructure.devices.device_gateway import DeviceGateway
 from infrastructure.storage.file_store import FileStore
 
@@ -220,7 +221,7 @@ class Orchestrator:
         self._image_index = image_index
 
     
-    async def run_react(self, session_id, user_message, *, image=None, device_id=None, extra_system=None, think=True) -> AsyncIterator[tuple[str, str]]:
+    async def run_react(self, session_id, user_message, *, image=None, device_id=None, extra_system=None, think=True) -> AsyncIterator[tuple]:
         history = await self._session_store.get(session_id)
         memory_block = await self._memory.render_compact(user_message)
         # extra_system (ex.: build_system("voz")) é o system COMPLETO quando vem; senão usa o genérico.
@@ -231,6 +232,9 @@ class Orchestrator:
         # nativo entre <think>…</think> e o CLI separa por essas tags (_SepThink).
         active = self._tools.for_device(await self._device_gateway.capabilities(device_id))
         user_turn = _user_turn(user_message, image)
+        t_turno = time.monotonic()
+        flow(session_id, "user", f"{curto(user_message, 300)!r} · device={device_id} · img={'sim' if image else 'não'} "
+                                 f"· think={think} · hist={len(history)} msgs · tools={','.join(active.get_all_tool_names())}")
         seen: set[tuple[str, bytes]] = set()
         ids_reais: set[str] = set()
         for _m in history:                                  # semeia ids de turnos ANTERIORES (regra b): um id já
@@ -247,19 +251,34 @@ class Orchestrator:
             if saw_image and VISION_STYLE not in system:
                 system = f"{system}\n\n{VISION_STYLE}"
             messages = self._context.build(system, memory_block, history, user_turn or {})
+            max_tok = self._context.max_saida(messages)        # saída dinâmica: nunca estoura a janela
+            usado = self._context.count(messages)
+            if _step == 0:                                      # rodapé de contexto: 1x por turno, com o prompt REAL
+                yield ("event", {"evento": "contexto",
+                                 "usado": usado,
+                                 "total": self._context.budget,
+                                 "reservado": self._context.reserved})
+            flow(session_id, f"llm#{_step + 1}", f"→ prompt {usado} tok ({len(messages)} msgs) · max_saida={max_tok}")
+            t_llm = time.monotonic(); t_1o = 0.0
+            n_tok = {"think": 0, "reply": 0}; txt_think = ""
             texto = ""
             frag: dict[int, dict] = {}                          # index -> {"id","name","args"}
             bruto_turno.append(f"\n⟦── chamada {_step + 1} ──⟧\n")   # marca o limite de CADA llm.stream no log bruto
             sep = _CoTSplit(think)                               # separa raciocínio/resposta DESTA chamada (por-chamada = confiável)
             async for kind, val in self._llm.stream(
                 messages, tools=active.as_openai_tools(), tool_choice="auto", no_think=not think,
-                max_tokens=self._context.max_saida(messages)        # saída dinâmica: nunca estoura a janela
+                max_tokens=max_tok
             ):
+                if not t_1o:
+                    t_1o = time.monotonic()                     # 1º delta (texto OU tool) → latência até o 1º token
                 if kind == "text":
                     bruto_turno.append(val)
                     for tg, piece in sep.feed(val):
+                        n_tok[tg] += 1
                         if tg == "reply":
                             texto += piece                      # texto = só a RESPOSTA (raciocínio fica fora do guard/save)
+                        else:
+                            txt_think += piece
                         yield (tg, piece)                       # etiquetado: ('think'|'reply', pedaço)
                 else:                                           # ("tool_call_delta", tcd cru)
                     f = frag.setdefault(val.index, {"id": "", "name": "", "args": ""})
@@ -270,30 +289,50 @@ class Orchestrator:
                     if val.function and val.function.arguments:
                         f["args"] += val.function.arguments
             for tg, piece in sep.flush():                        # fecha a chamada (raciocínio que não fechou </think>)
+                n_tok[tg] += 1
                 if tg == "reply":
                     texto += piece
+                else:
+                    txt_think += piece
                 yield (tg, piece)
+            dt = time.monotonic() - t_llm
+            n = n_tok["think"] + n_tok["reply"]
+            saida = (f"tool_calls={','.join(f['name'] for _, f in sorted(frag.items()))}" if frag else "texto")
+            flow(session_id, f"llm#{_step + 1}", f"← {dt:.1f}s · 1º token {(t_1o - t_llm) if t_1o else 0:.1f}s "
+                                                 f"· think={n_tok['think']} reply={n_tok['reply']} pedaços "
+                                                 f"({n / dt if dt else 0:.0f}/s) · saída={saida}")
+            if txt_think:
+                flow(session_id, "think", curto(txt_think, 400))
+            if texto:
+                flow(session_id, "reply", curto(texto, 400))
             if frag:                                            # tool(s) → executa, resultado REAL volta
                 tool_calls = [
                     ToolCall(id=f["id"] or f"call_{i}", name=f["name"], arguments=orjson.loads(f["args"] or "{}"))
                     for i, f in sorted(frag.items())
                 ]
                 resp = Completion(content=texto or None, tool_calls=tool_calls, finish_reason="tool_calls")
-                history, saw_image, _ok, _passos = await self._handle_tool_calls(
-                    session_id, history, 
-                    user_turn, 
-                    resp, 
-                    active, 
-                    device_id, 
-                    seen, 
-                    user_message, 
+                yield ("event", {"evento": "etapa", "fase": "inicio", "emoji": "🔧", "nome": "executando ferramentas"})
+                async for _item in self._handle_tool_calls(
+                    session_id, history,
+                    user_turn,
+                    resp,
+                    active,
+                    device_id,
+                    seen,
+                    user_message,
                     ids_reais
-                )
+                ):
+                    if _item[0] == "event":                     # passo (exec/ok/erro) → repassa ao stream
+                        yield _item
+                    else:                                       # ("result", (history, saw_image, ok, passos))
+                        history, saw_image, _ok, _passos = _item[1]
+                yield ("event", {"evento": "etapa", "fase": "fim"})
                 user_turn = None
                 continue
    
             guard = check_output(texto, ids_reais)
             if not guard.ok:
+                flow(session_id, "guard", f"✗ reprovado: {curto(guard.reason, 300)} → re-stream")
                 texto = ""
                 bruto_turno.append("\n⟦── guard re-stream ──⟧\n")
                 sep = _CoTSplit(think)
@@ -310,7 +349,10 @@ class Orchestrator:
                         texto += piece
                     yield (tg, piece)
                 if not check_output(texto, ids_reais).ok:
+                    flow(session_id, "guard", "✗ re-stream reprovado de novo → resposta padrão")
                     texto = "Não consegui fazer isso agora."
+                else:
+                    flow(session_id, "guard", f"✓ re-stream ok: {curto(texto, 300)}")
             if user_turn:
                 history = history + [user_turn]
             # texto já é SÓ a resposta (o _CoTSplit removeu o raciocínio por-chamada) → salva limpo,
@@ -320,7 +362,12 @@ class Orchestrator:
             await self._session_store.set(session_id, _strip(history))
             log_turno(session_id, user_message, "".join(bruto_turno), think=think)   # turno BRUTO inteiro (todos os passos, com <think>) p/ auditoria
             self._flush_trace(session_id)
+            flow(session_id, "fim", f"stop · {time.monotonic() - t_turno:.1f}s · {_step + 1} chamada(s) LLM "
+                                    f"· resposta {len(reply_salvo)} chars")
+            yield ("event", {"evento": "fim", "finish_reason": "stop"})
             return
+        flow(session_id, "fim", f"length · estourou MAX_STEPS={MAX_STEPS} · {time.monotonic() - t_turno:.1f}s")
+        yield ("event", {"evento": "fim", "finish_reason": "length"})   # estourou MAX_STEPS
         yield ("reply", "[aviso] limite de passos atingido; respondo com o que apurei até aqui.")
     
     def _system_prompt(self) -> str:
@@ -342,7 +389,7 @@ class Orchestrator:
         seen: set[tuple[str, bytes]],
         user_msg: str,
         ids_reais: set[str],
-    ) ->  tuple[list[dict], bool, bool, list[tuple]]:
+    ) ->  AsyncIterator[tuple]:
         passos: list[tuple[str, str]] = []
         # enxuga o 'body' GRANDE no histórico (economia); o artefato já foi guardado pela própria tool
         stash_map = {tc.id: self._stash_args(tc.arguments) for tc in msg.tool_calls}
@@ -371,15 +418,20 @@ class Orchestrator:
         for tc in msg.tool_calls:
             name = tc.name
             payload = tc.arguments
-            
+            yield ("event", {"evento": "passo", "id": tc.id, "tool": name,   # cria/acende a linha do checklist
+                             "estado": "executando", "porque": name, "improvisado": True})
+            exec_ok = False
+            flow(session_id, "tool", f"▶ {name} args={curto(orjson.dumps(stash_map[tc.id]).decode(), 300)}")   # args enxutos (sem body gigante)
+            t_tool = time.monotonic()
             if self._is_repeat(name, payload, seen):
                 obs = "[loop cortado] repetição da mesma ação detectada."
             else:
                 self._remember_call(name, payload, seen)
                 obs, exec_ok = await self._execute(name, payload, active, device_id, ctx)
                 success = exec_ok
-                
-                
+            dt_tool = time.monotonic() - t_tool
+
+
             if isinstance(obs, str) and obs.startswith("data:image/"):
                 obs = normalize_image_uri(obs)
                 img_id = persist_image(obs, session_id, device_id, self._image_index)
@@ -419,9 +471,13 @@ class Orchestrator:
                 }
             ]
             self._trace(session_id, name, payload, obs,  trace_txt)
-            
-            
-        return (history, saw_image, success, passos)
+            flow(session_id, "tool", f"{'✓' if exec_ok else '✗'} {name} {dt_tool:.2f}s · obs {len(obs) if isinstance(obs, str) else '?'} chars "
+                                     f"→ {curto(trace_txt if exec_ok else obs, 300)}")
+            det = _det_curto(trace_txt if exec_ok else obs)          # vira o detalhe (└) do passo
+            yield ("event", {"evento": "passo", "id": tc.id, "tool": name,
+                             "estado": "ok" if exec_ok else "erro", "detalhe": det})
+
+        yield ("result", (history, saw_image, success, passos))
 
     def _stash_args(self, arguments: dict) -> dict:
         """A TOOL sempre recebe os args CHEIOS; só a CÓPIA do histórico enxuga o 'body' gigante do
@@ -499,6 +555,14 @@ class Orchestrator:
     async def create_session(self) -> str:
         return await self._session_store.create()
             
+def _det_curto(s: str, n: int = 120) -> str:
+    """1ª linha, sem quebra, cortada em n — o detalhe (└) que o checklist mostra sob o passo ok/erro."""
+    t = (s or "").strip()
+    if not t:
+        return ""
+    t = t.splitlines()[0]
+    return t[:n] + ("…" if len(t) > n else "")
+
 def _user_turn(text: str, image: str  | None) -> dict:
     if not image:
         return {"role":"user","content": text}
