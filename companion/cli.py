@@ -17,7 +17,7 @@ from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.styles import Style
 from rich.cells import cell_len
 
-from companion.render import md_ansi
+from companion.render import md_ansi, SPIN, decode
 from companion.config import load_config, CompanionConfig
 from companion.chat_client import chat_stream
 from companion.connect import conectar                 # loop de device REAL (handshake + RPC + reconexão)
@@ -35,6 +35,7 @@ pending_name = None   # nome do arquivo anexado (só p/ exibir no card)
 ultima_resposta = ""  # último reply do LLM (limpo, sem barras) — pra /copiar
 stream_tail = ""      # "rabo" do bloco sendo DIGITADO (typewriter na região viva do prompt)
 tail_think = False    # True quando o rabo é RACIOCÍNIO (<think>), p/ estilo diferente da resposta
+tool_build: dict = {} # tool_calls sendo MONTADAS ao vivo: index -> {"tool", "args" (JSON cru), "t0"}
 aguardando = False    # True entre mandar e o 1º token chegar (TTFT) → mostra "processando…"
 think_mode = "off"    # thinking: "off" | "full" (caixa) | "colap" (só resumo). Toggle /think
 pensando = False      # colap: True enquanto recebe o <think> (mostra "pensando…" em vez do texto)
@@ -43,6 +44,8 @@ turno_t0 = 0.0        # início do turno (p/ o tempo total no rodapé/loader)
 last_delta_t = 0.0    # instante do último delta recebido → detecta GAP (tool rodando/entre passos) p/ loader
 tok_count = 0         # contador de tokens da resposta atual (ao vivo, estilo Claude)
 ctx_usado = 0; ctx_total = 0; ctx_model = ""; ctx_reservado = 0   # contexto + teto de saída → footer
+checklist: list = []  # passos (tools) do turno AO VIVO: [{id,desc,tool,estado,det,f0}] — vem dos eventos 'passo'
+checklist_base = 0    # nº de itens já fixados no turno → numeração CONTÍNUA entre as rodadas de tools
 DIM_A = "\033[38;2;92;99;112m"
 TEAL_HEX = "#2da84f"    # cor (prompt) do rabo digitando
 STREAM_MAX = 14       # nº de linhas visíveis do rabo (não deixa a caixa crescer sem limite)
@@ -56,6 +59,7 @@ VERDE_A = "\033[38;2;0;200;83m"                      # verde vivo (loader/etapas
 R = "\033[0m"
 # card do turno: FAIXA do título (bg da cor) + CORPO (grafite, combina com code one-dark)
 BODY_BG = "#282c34"; BODY_RGB = "40;44;52"
+SKEL_RGB = "31;35;42"; SKEL_BG = "#1f232a"           # fundo do checklist (recuado vs o corpo) · ANSI e hex (ao vivo)
 HBG_USER = "30;96;168";  NM_USER = "235;242;255"    # título · você  → AZUL (bandeira)
 HBG_BOT = "45;160;75";   NM_BOT = "235;255;240"     # título · brazaia → VERDE (bandeira)
 
@@ -104,6 +108,61 @@ def _corpo_md(bloco: str, W: int, bar: str) -> str:
         linhas.append(f"\033[48;2;{BODY_RGB}m{LEFT}{R}{ln}\033[48;2;{BODY_RGB}m{' ' * pad}{R}")
     return "\n".join(linhas)
 
+# checklist estilo Claude: marca por estado (hex p/ o ao vivo · ANSI p/ o fixado no scrollback)
+_MARCA = {"ok": ("✔", "#2da84f", VERDE_A), "err": ("✗", "#e05a5a", "\033[38;2;224;90;90m"),
+          "exec": ("▸", "#e5c07b", "\033[38;2;229;192;123m")}
+
+def _aplicar_passo(ev: dict) -> None:
+    """Evento 'passo' → executando cria a linha; ok/erro fecha a MESMA linha (casada pelo id da tool_call)."""
+    pid, estado = ev.get("id"), ev.get("estado")
+    if estado == "executando":
+        checklist.append({"id": pid, "desc": (ev.get("porque") or ev.get("tool") or "").strip(),
+                          "tool": ev.get("tool"), "estado": "exec", "det": "", "f0": frame})
+        return
+    for it in checklist:
+        if it["id"] == pid:
+            it["estado"] = "ok" if estado == "ok" else "err"
+            it["det"] = ev.get("detalhe", "")
+            return
+
+def _uma_linha(s: str, w: int) -> str:
+    """Corta pra caber em 1 linha visual — wrap faz o patch_stdout deixar fantasma."""
+    if cell_len(s) <= w:
+        return s
+    while s and cell_len(s + "…") > w:
+        s = s[:-1]
+    return s + "…"
+
+def _checklist_frags() -> StyleAndTextTuples:
+    """Checklist AO VIVO (rodapé): ✔ feito · ✗ erro · ▸ executando (decode + spinner)."""
+    fr: StyleAndTextTuples = []
+    W = _larg(); w = W - 1
+    for i, it in enumerate(checklist, checklist_base + 1):
+        m, cor, _ = _MARCA[it["estado"]]
+        if it["estado"] == "exec":
+            spin = f"   ⚙ {SPIN[frame % len(SPIN)]}"
+            linha = _uma_linha(f"   {m} {i}. {decode(it['desc'], frame - it['f0'])}", w - cell_len(spin)) + spin
+        else:
+            linha = _uma_linha(f"   {m} {i}. {it['desc']}", w)
+        fr.append((f"{cor} bg:{SKEL_BG}", linha.ljust(W) + "\n"))
+        if it["det"] and it["estado"] != "exec":
+            fr.append((f"#5c6370 bg:{SKEL_BG}", _uma_linha(f"       └ {it['det']}", w).ljust(W) + "\n"))
+    return fr
+
+def _commit_checklist(W: int) -> None:
+    """Fixa o checklist no scrollback (fim de cada rodada de tools) e limpa o ao vivo. Numeração contínua."""
+    global checklist_base
+    for it in checklist:
+        checklist_base += 1
+        est = "ok" if it["estado"] == "exec" else it["estado"]      # exec sem fechamento (stream caiu) vira ✔ ao fixar
+        m, _, ans = _MARCA[est]
+        txt = f" {m} {checklist_base}. {it['desc']}"
+        _p(_corpo(f" {ans}{txt[1:]}", cell_len(txt), W, BAR_TEAL, bg=SKEL_RGB) + "\n")
+        if it["det"]:
+            det = _uma_linha(f"   └ {it['det']}", W - 2)
+            _p(_corpo(f"{DIM_A}{det}", cell_len(det), W, BAR_TEAL, bg=SKEL_RGB) + "\n")
+    checklist.clear()
+
 def _osc_on() -> None:                       # NÃO força cor de fundo → respeita a TRANSPARÊNCIA do terminal
     sys.stdout.write("\033[2J\033[H"); sys.stdout.flush()    # só limpa a tela
 
@@ -139,6 +198,29 @@ respondendo = False
 def _p(s: str) -> None:
     pf(ANSI(s), end="")
 
+_ESC = re.compile(r'\\(u[0-9a-fA-F]{4}|.)')
+_ESC_MAP = {"n": "\n", "t": "  ", "r": "", '"': '"', "\\": "\\", "/": "/"}
+
+def _desescapa(s: str) -> str:
+    """JSON PARCIAL dos args → texto legível (\\n vira quebra, \\" vira aspas). Tolerante: o JSON ainda está incompleto."""
+    return _ESC.sub(lambda m: chr(int(m.group(1)[1:], 16)) if m.group(1)[0] == "u" and len(m.group(1)) == 5
+                    else _ESC_MAP.get(m.group(1), m.group(1)), s)
+
+def _tool_build_frags(w: int) -> StyleAndTextTuples:
+    """Tool sendo MONTADA (args streamando): cabeçalho com tamanho/tempo + rabo legível dos args."""
+    fr: StyleAndTextTuples = []
+    lim = w - 2
+    for b in tool_build.values():
+        sp = SPIN[frame % len(SPIN)]
+        secs = time.monotonic() - b["t0"]
+        tam = f"{len(b['args'])} chars · " if len(b["args"]) > 20 else ""   # qwen3_coder só solta o param no fim → até lá, só o tempo
+        fr.append(("bold #c678dd", f"   {sp} 🔧 montando {b['tool'] or 'ferramenta'}… {tam}{secs:.0f}s\n"))
+        cauda = _desescapa(b["args"][-1500:])
+        for ln in cauda.split("\n")[-STREAM_MAX:]:
+            fr.append(("#c678dd", "▌"))
+            fr.append(("#8c7a96 bg:#15181d", " " + ln[:lim].ljust(lim) + "\n"))
+    return fr
+
 def _prompt_msg() -> StyleAndTextTuples:
     """Rabo do texto sendo digitado (typewriter) ACIMA da caixa de input fixa no rodapé.
     Tudo vive no rodapé, não vai pro histórico."""
@@ -156,6 +238,10 @@ def _prompt_msg() -> StyleAndTextTuples:
         sp = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"[frame % 10]
         secs = (time.monotonic() - think_t0) if think_t0 else 0.0
         linhas.append(("bold #e5c07b", f"   {sp} 💭 pensando… {secs:.0f}s\n"))
+    elif tool_build:                                           # args da tool chegando (ex.: HTML do create_file) — já mostra
+        linhas += _tool_build_frags(w)
+    elif checklist:                                            # tools da rodada atual (ao vivo) — o ▸ já anima
+        linhas += _checklist_frags()
     elif aguardando or gap:                                    # TTFT (1º token) OU gap entre passos (tool rodando) → loader, não parecer travado
         sp = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"[frame % 10]
         secs = (time.monotonic() - turno_t0) if turno_t0 else 0.0
@@ -177,8 +263,9 @@ def _toolbar() -> StyleAndTextTuples:
     status = estado.device_status or ("online" if estado.device_online else "offline")
     dot = {"online": "#2da84f", "reconectando": "#e5c07b", "offline": "#e05a5a"}.get(status, "#e05a5a")
     pct = int(100 * ctx_usado / ctx_total) if ctx_total else 0
-    ctx = f" · ctx {ctx_usado}/{ctx_total} ({pct}%)" if ctx_total else ""   # Fase 1: escondido até o backend mandar 'contexto'
-    out = f" · ↑{tok_count} · {(time.monotonic() - turno_t0):.0f}s" if (respondendo and turno_t0) else ""
+    ctx = f" · ctx {ctx_usado}/{ctx_total} ({pct}%)" if ctx_total else ""   # escondido até o backend mandar 'contexto'
+    teto = f"/{ctx_reservado}" if ctx_reservado else ""                     # ↑ tokens da resposta / teto de saída
+    out = f" · ↑{tok_count}{teto} · {(time.monotonic() - turno_t0):.0f}s" if (respondendo and turno_t0) else ""
     modelo = (ctx_model or "—").split("/")[-1][:24]
     sid = (session_id or "nova")[:8]
     dev = (cfg.device_id if cfg else "device")
@@ -239,14 +326,30 @@ def _fecha_raciocinio(texto: str, toks: int, t0: float, W: int) -> None:
     else:
         _commit_pensamento(texto, W)
 
+def _fecha_escrita(pensamento: str, buf: str, blk_toks: int, think_secs: float, W: int):
+    """Antes de uma tool: fixa no scrollback o raciocínio aberto e o texto pendente da chamada,
+    pra montagem/checklist virem DEPOIS deles. Devolve o estado zerado (think_secs, pensamento, buf, blk_toks)."""
+    global think_t0, pensando, stream_tail, tail_think
+    if pensamento:
+        think_secs += (time.monotonic() - think_t0) if think_t0 else 0.0
+        _fecha_raciocinio(pensamento, blk_toks, think_t0, W)
+        think_t0 = 0.0; pensando = False
+    if buf.strip():
+        _p(_corpo_md(buf, W, BAR_TEAL) + "\n")
+    stream_tail = ""; tail_think = False
+    return think_secs, "", "", 0
+
 async def _responder(msg: str):
-    """Consome o stream do backend (chat_stream): session_id + deltas de texto + erro.
-    (Fase 1: checklist/eventos entram na Fase 2.)"""
-    global respondendo, session_id, pending_image, pending_name, stream_tail, tail_think, tok_count, ultima_resposta, aguardando, pensando, think_t0, turno_t0, last_delta_t
+    """Consome o stream do backend (chat_stream): session_id + deltas de texto + eventos
+    (contexto → rodapé · etapa/passo → checklist das tools · fim → motivo) + erro."""
+    global ctx_usado, ctx_total, ctx_model, ctx_reservado, checklist_base
+    global respondendo, session_id, pending_image, pending_name, stream_tail, tail_think, tok_count, tool_build, ultima_resposta, aguardando, pensando, think_t0, turno_t0, last_delta_t
     respondendo = True; aguardando = True                            # aguardando = TTFT (mostra "processando…")
     tok_count = 0; full = []; erro = None                            # contador total + reply + erro
     think_toks = 0; think_t0 = 0.0; think_secs = 0.0; pensando = False; blk_toks = 0
     turno_t0 = time.monotonic(); last_delta_t = time.monotonic()
+    checklist.clear(); checklist_base = 0; motivo = None             # numeração do checklist recomeça a cada turno
+    tool_build = {}
     img = pending_image; pending_image = None                        # consome o anexo (1 vez)
     nome = pending_name; pending_name = None
     W = _larg()
@@ -260,6 +363,35 @@ async def _responder(msg: str):
         async for ev in chat_stream(msg, session_id, cfg, image=img, think=(think_mode != "off")):
             if "session_id" in ev:
                 session_id = ev["session_id"]                        # lembra a sessão
+            elif ev.get("evento") == "contexto":                     # rodapé: prompt real / janela + teto de saída
+                ctx_usado = ev.get("usado", 0); ctx_total = ev.get("total", 0)
+                ctx_reservado = ev.get("reservado", ctx_reservado)
+                ctx_model = ev.get("model", "") or ctx_model
+            elif ev.get("evento") == "tool_args":                    # tool sendo MONTADA: mostra os args chegando
+                aguardando = False; last_delta_t = time.monotonic()
+                if not tool_build:                                   # 1º pedaço: fecha o que a chamada já escreveu
+                    think_secs, pensamento, buf, blk_toks = _fecha_escrita(pensamento, buf, blk_toks, think_secs, W)
+                b = tool_build.setdefault(ev.get("index", 0), {"tool": "", "args": "", "t0": time.monotonic()})
+                b["tool"] = ev.get("tool") or b["tool"]; b["args"] += ev.get("delta", "")
+            elif ev.get("evento") == "etapa":
+                if ev.get("fase") == "inicio":                       # vai rodar tool: fecha o que a chamada já escreveu,
+                    aguardando = False                               # pra o checklist ficar DEPOIS dele no scrollback
+                    think_secs, pensamento, buf, blk_toks = _fecha_escrita(pensamento, buf, blk_toks, think_secs, W)
+                    tool_build = {}                                  # montagem acabou → vira linha do checklist
+                else:                                                # fim da rodada: fixa os passos no scrollback
+                    _commit_checklist(W)
+                    last_delta_t = time.monotonic()                  # volta pro LLM: loader conta o gap a partir daqui
+            elif ev.get("evento") == "passo":
+                _aplicar_passo(ev)
+            elif ev.get("evento") == "guard":                        # server reprovou o que JÁ foi mostrado (ex.: id inventado)
+                if buf.strip():
+                    _p(_corpo_md(buf, W, BAR_TEAL) + "\n")
+                buf = ""; stream_tail = ""; full.clear()             # /copiar fica só com a resposta válida
+                av = (" ⚠ resposta acima descartada pela validação — refazendo" if ev.get("acao") == "refazendo"
+                      else " ⚠ a nova tentativa também foi reprovada")
+                _p(_corpo(f" \033[1;38;2;255;200;0m{av[1:]}", cell_len(av), W, None) + "\n")
+            elif ev.get("evento") == "fim":
+                motivo = ev.get("finish_reason")
             elif "delta" in ev:
                 tok_count += 1; aguardando = False; last_delta_t = time.monotonic()   # chegou delta → reseta o relógio do gap
                 modo = "think" if ev.get("think") else "reply"       # server já etiqueta (separação por-chamada no orchestrator)
@@ -291,8 +423,13 @@ async def _responder(msg: str):
                     stream_tail = buf; tail_think = False            # rabo = o que falta → DIGITA no prompt
             elif ev.get("success") is False or "error" in ev or "code" in ev:   # ERRO do servidor (não ficar no escuro)
                 erro = str(ev.get("message") or ev.get("error") or ev)[:200]
+                if checklist:
+                    _commit_checklist(W)
                 m = f" ⚠ erro do servidor: {erro}"
                 _p(_corpo(f" \033[1;38;2;255;90;90m{m[1:]}", cell_len(m), W, None) + "\n")
+        if checklist:                                                # stream acabou no meio de uma rodada → fixa o que veio
+            _commit_checklist(W)
+        tool_build = {}
         if pensamento:                                               # sobrou raciocínio sem resposta depois → fecha a caixa
             think_secs += (time.monotonic() - think_t0) if think_t0 else 0.0
             _fecha_raciocinio(pensamento, blk_toks, think_t0, W)
@@ -301,12 +438,18 @@ async def _responder(msg: str):
             _p(_corpo_md(buf, W, BAR_TEAL) + "\n")                    # …e vira o Markdown final
         total = time.monotonic() - turno_t0
         resp_toks = tok_count - think_toks
-        rzn = "ERRO" if erro else "stop"
+        if motivo == "length":                                       # estourou MAX_STEPS no server
+            av = " ⚠ limite de passos atingido — resposta parcial"
+            _p(_corpo(f" \033[1;38;2;255;200;0m{av[1:]}", cell_len(av), W, None) + "\n")
+        rzn = "ERRO" if erro else (motivo or "stop")
         th = f" · 💭 {think_toks}tok/{think_secs:.1f}s" if think_toks else ""
         info = f" · fim · {resp_toks} tok · {total:.1f}s{th} · {rzn}"
         _p(_corpo(f" {DIM_A}{info[1:]}", cell_len(info), W, None) + "\n")
     except Exception as e:
         pensando = False; stream_tail = ""; tail_think = False
+        if checklist:
+            _commit_checklist(W)
+        tool_build = {}
         _p(_corpo(f" \033[38;2;255;90;90m⚠ falha no stream: {e}",
                   cell_len(f" ⚠ falha no stream: {e}"), W, None) + "\n")
     ultima_resposta = "".join(full)                                  # guarda p/ /copiar
@@ -320,7 +463,7 @@ async def _ticker():
         frame += 1
         # redesenha com animação viva OU quando o status do device muda (ex.: conectou no boot → vira online
         # sozinho, sem precisar o usuário digitar). Ocioso e estável = sem redraw (a seleção do terminal não some).
-        if respondendo or stream_tail or gravando or voz_prep or transcrevendo or estado.device_status != _ult_status:
+        if respondendo or stream_tail or checklist or gravando or voz_prep or transcrevendo or estado.device_status != _ult_status:
             _ult_status = estado.device_status
             try: get_app().invalidate()
             except Exception: pass
