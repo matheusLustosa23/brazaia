@@ -1,9 +1,12 @@
+import orjson, traceback
+
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
 from api.v1.dependencies import get_orchestrator, require_api_key
 from api.v1.routing import ExcludeNoneRoute, error_responses
 from api.v1.sse import sse_event
+from application.services._flowlog import flow, curto
 from schemas.chat_schema import ChatData, ChatRequest
 from schemas.shared import ApiResponse
 from application.services.orchestrator import Orchestrator
@@ -47,7 +50,12 @@ async def chat(
                 think=req.think,                  # think=False → enable_thinking=False (explícito, confiável)
             ):
                 if await request.is_disconnected():
+                    flow(session_id, "cliente", "✗ desconectou no meio do stream → turno interrompido")
                     break
+                if kind == "event":               # evento estruturado (etapa/passo/contexto/fim) → SSE próprio
+                    flow(session_id, "sse", f"{text.get('evento', 'evento')} {curto(orjson.dumps(text).decode(), 300)}")
+                    yield sse_event(text, event=text.get("evento", "evento"))
+                    continue
                 if kind == "think":               # raciocínio: marcado com think=True (o CLI mostra na caixa)
                     yield sse_event({"delta": text, "think": True}, event="token")
                 else:                             # resposta: delta normal
@@ -56,6 +64,7 @@ async def chat(
             yield sse_event({"done": True, "reply": "".join(parts)}, event="end")
 
         except Exception as exc:
+            flow(session_id, "erro", f"{type(exc).__name__}: {curto(exc, 500)} · trace: {curto(traceback.format_exc(), 1500)}")
             err = ApiResponse.error(500, str(exc)).model_dump(exclude_none=True)
             yield sse_event(err, event="error")
     return StreamingResponse(
