@@ -7,5 +7,7 @@ export CUDA_VISIBLE_DEVICES=1            # o agente só enxerga a 2060 → STT/P
 cd /c/workspace/brazaia
 source .venv/Scripts/activate
 # loga tudo em agente.log (gitignored) — o braza sobe escondido, entao e aqui que vc le o traceback.
-exec uv run --no-sync uvicorn main:app --host 100.79.27.100 --port 8080 >> /c/workspace/brazaia/agente.log 2>&1
+# python do .venv direto (= uv run --no-sync, sem sync): o uv do WinGet e um ALIAS que falha
+# ("Permission denied") quando o braza roda numa sessao SSH/servico.
+exec python -m uvicorn main:app --host 100.79.27.100 --port 8080 >> /c/workspace/brazaia/agente.log 2>&1
 

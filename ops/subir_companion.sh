@@ -8,4 +8,5 @@ source .venv/Scripts/activate
 export SERVER_WS_URL="${SERVER_WS_URL:-ws://100.79.27.100:8080/api/v1}"
 export DEVICE_ID="${DEVICE_ID:-server}"
 export DEVICE_NAME="${DEVICE_NAME:-server}"
-exec uv run --no-sync python -m companion.connect --fg >> /c/workspace/brazaia/companion.log 2>&1
+# python do .venv direto (= uv run --no-sync): o alias do uv no WinGet falha fora da sessao interativa
+exec python -m companion.connect --fg >> /c/workspace/brazaia/companion.log 2>&1
