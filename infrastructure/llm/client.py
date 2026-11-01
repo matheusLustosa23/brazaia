@@ -100,6 +100,11 @@ class OpenAILLMClient:
         self._retries = s.llm_max_retries
         self._backoff = s.llm_backoff_base_s
         self._max_out = s.reserved_output_tokens
+
+    @property
+    def model(self) -> str:
+        """Nome servido no vLLM (alias) — só p/ exibição (rodapé do CLI)."""
+        return self._model
         
     async def complete(
         self,

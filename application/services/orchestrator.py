@@ -22,6 +22,8 @@ from infrastructure.storage.file_store import FileStore
 
 MAX_STEPS = 15
 _FALHA_TOOL = re.compile(r"\[(erro|timeout|falha)")   # prefixo que as tools usam p/ dizer que falharam
+LIMITE_PASSOS = ("Limite de passos do turno atingido: NÃO chame mais ferramentas. Responda AGORA ao usuário "
+                 "com o que já foi feito e apurado, e diga o que ficou faltando.")
 
 ConfirmFn = Callable[[str, dict], Awaitable[bool]]
 
@@ -258,7 +260,8 @@ class Orchestrator:
                 yield ("event", {"evento": "contexto",
                                  "usado": usado,
                                  "total": self._context.budget,
-                                 "reservado": self._context.reserved})
+                                 "reservado": self._context.reserved,
+                                 "model": getattr(self._llm, "model", "")})   # fakes de teste não têm → ""
             flow(session_id, f"llm#{_step + 1}", f"→ prompt {usado} tok ({len(messages)} msgs) · max_saida={max_tok}")
             t_llm = time.monotonic(); t_1o = 0.0
             n_tok = {"think": 0, "reply": 0, "tool": 0}; txt_think = ""
@@ -375,9 +378,36 @@ class Orchestrator:
                                     f"· resposta {len(reply_salvo)} chars")
             yield ("event", {"evento": "fim", "finish_reason": "stop"})
             return
-        flow(session_id, "fim", f"length · estourou MAX_STEPS={MAX_STEPS} · {time.monotonic() - t_turno:.1f}s")
-        yield ("event", {"evento": "fim", "finish_reason": "length"})   # estourou MAX_STEPS
-        yield ("reply", "[aviso] limite de passos atingido; respondo com o que apurei até aqui.")
+        # estourou MAX_STEPS: 1 chamada FINAL sem tools responde com o que já foi apurado, e o turno é salvo
+        # (antes só avisava "respondo com o que apurei" sem responder, e o turno — tools inclusas — se perdia)
+        flow(session_id, "limite", f"estourou MAX_STEPS={MAX_STEPS} → resposta final sem tools")
+        messages = self._context.build(system, memory_block, history, user_turn or {})
+        messages = messages + [{"role": "system", "content": LIMITE_PASSOS}]
+        bruto_turno.append("\n⟦── resposta final (limite de passos) ──⟧\n")
+        texto = ""
+        sep = _CoTSplit(think)
+        async for kind, val in self._llm.stream(messages, no_think=not think, max_tokens=self._context.max_saida(messages)):
+            if kind == "text":
+                bruto_turno.append(val)
+                for tg, piece in sep.feed(val):
+                    if tg == "reply":
+                        texto += piece
+                    yield (tg, piece)
+        for tg, piece in sep.flush():
+            if tg == "reply":
+                texto += piece
+            yield (tg, piece)
+        if not texto.strip() or not check_output(texto, ids_reais).ok:
+            texto = "Atingi o limite de passos e não consegui concluir. Me diga como prefere seguir."
+            yield ("reply", texto)
+        if user_turn:
+            history = history + [user_turn]
+        history = history + [{"role": "assistant", "content": texto.strip()}]
+        await self._session_store.set(session_id, _strip(history))
+        log_turno(session_id, user_message, "".join(bruto_turno), think=think)
+        self._flush_trace(session_id)
+        flow(session_id, "fim", f"length · {time.monotonic() - t_turno:.1f}s · resposta {len(texto.strip())} chars")
+        yield ("event", {"evento": "fim", "finish_reason": "length"})
     
     def _system_prompt(self) -> str:
         return(
