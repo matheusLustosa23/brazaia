@@ -12,12 +12,33 @@ CREATE TABLE IF NOT EXISTS sessions (
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS session_narrative (
+    session_id TEXT PRIMARY KEY,
+    cards      TEXT NOT NULL DEFAULT '[]'
+);
 """
+
+
+def _texto(content) -> str:
+    """Texto de um content str ou multimodal (lista de partes)."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text")
+    return ""
+
+
+def _resumo(history: list[dict]) -> dict:
+    """preview = 1ª fala do usuário numa linha · turnos = nº de falas do usuário (não de mensagens)."""
+    users = [m for m in history if m.get("role") == "user"]
+    preview = " ".join(_texto(users[0].get("content")).split())[:70] if users else "(sessão vazia)"
+    return {"preview": preview, "turnos": len(users)}
 
 class InMemorySessionStore:
     
     def __init__(self):
         self._data: dict[str,list[dict]] = {}
+        self._narr: dict[str,list[dict]] = {}
     
     async def create(self) -> str:
         sid = uuid.uuid4().hex
@@ -32,6 +53,16 @@ class InMemorySessionStore:
     
     async def append(self, session_id: str, message: dict) -> None:
         self._data.setdefault(session_id, []).append(message)
+
+    async def list_sessions(self) -> list[dict]:
+        return [{"session_id": sid, **_resumo(h), "created_at": 0.0, "updated_at": 0.0}
+                for sid, h in self._data.items()]
+
+    async def get_narrative(self, session_id: str) -> list[dict]:
+        return self._narr.get(session_id, [])
+
+    async def append_narrative(self, session_id: str, card: dict) -> None:
+        self._narr.setdefault(session_id, []).append(card)
     
 
 class SqlLiteSessionStore:
@@ -78,8 +109,9 @@ class SqlLiteSessionStore:
     async def set(self, session_id: str, history: list[dict]) -> None:
         now = time.time()
         async with self._connect() as db:
-            await db.execute(
-                "INSERT OR REPLACE INTO sessions (session_id, history, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            await db.execute(                                   # upsert: preserva o created_at (o REPLACE zerava)
+                "INSERT INTO sessions (session_id, history, created_at, updated_at) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(session_id) DO UPDATE SET history = excluded.history, updated_at = excluded.updated_at",
                 (session_id, orjson.dumps(history).decode(), now, now),
             )
             await db.commit()
@@ -89,3 +121,29 @@ class SqlLiteSessionStore:
         history = await self.get(session_id)
         history.append(message)
         await self.set(session_id,history)
+
+    async def list_sessions(self) -> list[dict]:
+        """Todas as sessões, da mais recente p/ a mais antiga (por updated_at)."""
+        async with self._connect() as db:
+            cur = await db.execute(
+                "SELECT session_id, history, created_at, updated_at FROM sessions ORDER BY updated_at DESC"
+            )
+            rows = await cur.fetchall()
+        return [{"session_id": sid, **_resumo(orjson.loads(h)), "created_at": c, "updated_at": u}
+                for sid, h, c, u in rows]
+
+    async def get_narrative(self, session_id: str) -> list[dict]:
+        async with self._connect() as db:
+            cur = await db.execute("SELECT cards FROM session_narrative WHERE session_id = ?", (session_id,))
+            row = await cur.fetchone()
+        return orjson.loads(row[0]) if row else []
+
+    async def append_narrative(self, session_id: str, card: dict) -> None:
+        cards = await self.get_narrative(session_id)
+        cards.append(card)
+        async with self._connect() as db:
+            await db.execute(
+                "INSERT OR REPLACE INTO session_narrative (session_id, cards) VALUES (?, ?)",
+                (session_id, orjson.dumps(cards).decode()),
+            )
+            await db.commit()

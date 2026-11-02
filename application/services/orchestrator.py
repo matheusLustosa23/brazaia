@@ -595,6 +595,26 @@ class Orchestrator:
     
     async def create_session(self) -> str:
         return await self._session_store.create()
+
+    async def list_sessions(self) -> list[dict]:
+        return await self._session_store.list_sessions()
+
+    async def historico(self, session_id: str) -> list[dict]:
+        return await self._session_store.get(session_id)
+
+    async def narrativa(self, session_id: str) -> list[dict]:
+        return await self._session_store.get_narrative(session_id)
+
+    async def salvar_narrativa(self, session_id: str, card: dict) -> None:
+        await self._session_store.append_narrative(session_id, card)
+
+    async def contexto_atual(self, session_id: str) -> dict:
+        """Contexto que o PRÓXIMO turno vai ocupar (system + memória + histórico) — rodapé ao retomar
+        uma sessão e no fim de cada turno (o histórico cresceu)."""
+        history = await self._session_store.get(session_id)
+        messages = self._context.build(self._system_prompt(), await self._memory.render_compact(""), history, {})
+        return {"usado": self._context.count(messages), "total": self._context.budget,
+                "reservado": self._context.reserved, "model": getattr(self._llm, "model", "")}
             
 def _porque(name: str, args: dict) -> str:
     """Rótulo da linha do checklist: tool + o arg mais descritivo (ex.: 'calculate · 17*23')."""
