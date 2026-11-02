@@ -19,7 +19,7 @@ from rich.cells import cell_len
 
 from companion.render import md_ansi, SPIN, decode
 from companion.config import load_config, CompanionConfig
-from companion.chat_client import chat_stream
+from companion.chat_client import chat_stream, listar_sessoes, carregar_sessao
 from companion.connect import conectar                 # loop de device REAL (handshake + RPC + reconexão)
 from companion.state import estado                    # estado.device_online (status no footer)
 from companion.plataform import _IS_TERMUX             # adapta o CLI ao Termux (voz AAC, sem anexo/clipboard)
@@ -33,6 +33,7 @@ _grav = None          # GravacaoLivre ativa (start/stop manual, controlado pelo 
 pending_image = None  # data URL da imagem anexada (vai na próxima mensagem)
 pending_name = None   # nome do arquivo anexado (só p/ exibir no card)
 ultima_resposta = ""  # último reply do LLM (limpo, sem barras) — pra /copiar
+sessoes_cache: list = []  # última listagem de /chat/sessions (mais recente 1º) → /sessao N e o autocomplete
 stream_tail = ""      # "rabo" do bloco sendo DIGITADO (typewriter na região viva do prompt)
 tail_think = False    # True quando o rabo é RACIOCÍNIO (<think>), p/ estilo diferente da resposta
 tool_build: dict = {} # tool_calls sendo MONTADAS ao vivo: index -> {"tool", "args" (JSON cru), "t0"}
@@ -639,12 +640,162 @@ async def _colar(app):                                # Ctrl+V — imagem do cli
     _p(f"{VERDE_A}   📎 [imagem colada] {nome} · {len(data)//1024} KB — mande a mensagem{R}\n")
     app.invalidate()
 
+def _quando(ts: float) -> str:
+    """updated_at → 'há 5 min' / 'há 3 h' / 'ontem 14:02' / '28/10 09:15' (curto, p/ a lista de sessões)."""
+    if not ts:
+        return "—"
+    d = time.time() - ts
+    if d < 3600:
+        return f"há {max(1, int(d // 60))} min"
+    if d < 6 * 3600:
+        return f"há {int(d // 3600)} h"
+    lt = time.localtime(ts)
+    if time.strftime("%d/%m", lt) == time.strftime("%d/%m", time.localtime(time.time() - 86400)):
+        return time.strftime("ontem %H:%M", lt)
+    return time.strftime("%d/%m %H:%M", lt)
+
+async def _atualizar_sessoes() -> bool:
+    """Busca a lista no server (fica em sessoes_cache). False se o server não respondeu."""
+    global sessoes_cache
+    try:
+        sessoes_cache = await listar_sessoes(cfg)
+        return True
+    except Exception as e:
+        _p(f"{DIM_A}   ⚠ não consegui listar as sessões: {e}{R}\n")
+        return False
+
+def _mostrar_sessoes(page: int = 1) -> None:
+    """Lista paginada (10 por página), mais recente primeiro; a atual vem marcada com ●."""
+    if not sessoes_cache:
+        _p(f"{DIM_A}   (nenhuma sessão com conversa ainda){R}\n"); return
+    por = 10
+    tot = (len(sessoes_cache) + por - 1) // por
+    page = max(1, min(page, tot))
+    ini = (page - 1) * por
+    _p(f"{DIM_A}   ── sessões {ini + 1}–{min(ini + por, len(sessoes_cache))} de {len(sessoes_cache)} · pág {page}/{tot} ──{R}\n")
+    for i in range(ini, min(ini + por, len(sessoes_cache))):
+        s = sessoes_cache[i]
+        atual = f"{VERDE_A}●{DIM_A}" if s["session_id"] == session_id else " "
+        _p(f"{DIM_A}  {atual}{i + 1:>3}. {_quando(s.get('updated_at', 0)):>12} · {s.get('turnos', 0):>2} turnos · "
+           f"{s.get('preview', '')[:60]}{R}\n")
+    prox = f"/sessoes {page + 1} → próxima · " if page < tot else ""
+    _p(f"{DIM_A}   ({prox}/sessao N retoma · /sessao <busca> + Tab · /nova começa outra){R}\n")
+
+def _texto_de(content) -> str:
+    """Texto de um content str ou multimodal (lista) — 📎 se tiver imagem."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        txt = " ".join(p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text")
+        img = any(isinstance(p, dict) and p.get("type") == "image_url" for p in content)
+        return ("📎 [imagem] " if img else "") + txt
+    return str(content or "")
+
+def _linha_passo(i: int, desc: str, est: str, det: str, W: int) -> None:
+    """Uma linha do checklist FIXADA (mesmo visual do _commit_checklist) — usada no replay."""
+    m, _, ans = _MARCA.get(est, _MARCA["ok"])
+    txt = f" {m} {i}. {desc}"
+    _p(_corpo(f" {ans}{txt[1:]}", cell_len(txt), W, BAR_TEAL, bg=SKEL_RGB) + "\n")
+    if det:
+        d = _uma_linha(f"   └ {det}", W - 2)
+        _p(_corpo(f"{DIM_A}{d}", cell_len(d), W, BAR_TEAL, bg=SKEL_RGB) + "\n")
+
+def _render_narrativa(cards: list) -> None:
+    """Replay FIEL (o que a tela mostrou em cada turno): você · checklist das tools · resposta · aviso de limite."""
+    W = _larg()
+    for card in cards:
+        u = ("📎 [imagem anexada]\n" if card.get("image") else "") + (card.get("user") or "")
+        _p("\n" + _titulo("🫵 você", W, BAR_AZUL, HBG_USER, NM_USER) + "\n" + _pad_top(W) + "\n")
+        _p(_corpo_md(u, W, BAR_AZUL) + "\n")
+        _p("\n" + _titulo(f"{BOT} brazaia", W, BAR_TEAL, HBG_BOT, NM_BOT) + "\n")
+        for i, it in enumerate(card.get("checklist", []), 1):
+            _linha_passo(i, it.get("desc", ""), it.get("estado", "ok"), it.get("det", ""), W)
+        if card.get("reply"):
+            _p(_pad_top(W) + "\n" + _corpo_md(card["reply"], W, BAR_TEAL) + "\n")
+        if card.get("finish_reason") == "length":
+            av = " ⚠ limite de passos atingido — resposta parcial"
+            _p(_corpo(f" \033[1;38;2;255;200;0m{av[1:]}", cell_len(av), W, None) + "\n")
+
+def _render_historico(history: list) -> None:
+    """Replay a partir das MENSAGENS (sessões sem narrativa completa, ex.: turnos por voz)."""
+    W = _larg(); n = 0; abertas: dict = {}                    # tool_call id → nº da linha (pra casar o resultado)
+    for m in history:
+        role, c = m.get("role"), m.get("content")
+        if role == "user":
+            n = 0
+            _p("\n" + _titulo("🫵 você", W, BAR_AZUL, HBG_USER, NM_USER) + "\n" + _pad_top(W) + "\n")
+            _p(_corpo_md(_texto_de(c) or "(vazio)", W, BAR_AZUL) + "\n")
+            _p("\n" + _titulo(f"{BOT} brazaia", W, BAR_TEAL, HBG_BOT, NM_BOT) + "\n")
+        elif role == "assistant":
+            for tc in (m.get("tool_calls") or []):
+                n += 1
+                abertas[tc.get("id")] = (n, (tc.get("function") or {}).get("name", "tool"))
+            if c:
+                _p(_pad_top(W) + "\n" + _corpo_md(_texto_de(c), W, BAR_TEAL) + "\n")
+        elif role == "tool":
+            i, nome = abertas.pop(m.get("tool_call_id"), (n, "tool"))
+            res = _texto_de(c)
+            _linha_passo(i, nome, "err" if res.startswith(("[erro", "[falha", "[timeout", "[loop")) else "ok",
+                         " ".join(res.split())[:120], W)
+
+async def _retomar(sid: str) -> None:
+    """Troca pra sessão sid: replay do que já foi conversado + rodapé com o contexto dela."""
+    global session_id, ctx_usado, ctx_total, ctx_model, ctx_reservado, ultima_resposta
+    try:
+        data = await carregar_sessao(cfg, sid)
+    except Exception as e:
+        _p(f"{DIM_A}   ⚠ não consegui abrir a sessão: {e}{R}\n"); return
+    session_id = sid
+    hist, narr = data.get("history", []), data.get("narrative", [])
+    _p(f"\n{VERDE_A}   ↺ sessão {sid[:8]} retomada{R}\n")
+    turnos = sum(1 for m in hist if m.get("role") == "user")
+    if narr and len(narr) == turnos:                          # narrativa cobre TODOS os turnos → replay fiel
+        _render_narrativa(narr)
+        ultima_resposta = narr[-1].get("reply", "") or ultima_resposta
+    else:                                                     # turnos sem narrativa (voz, versões antigas) → pelas mensagens
+        _render_historico(hist)
+        for m in reversed(hist):
+            if m.get("role") == "assistant" and m.get("content"):
+                ultima_resposta = _texto_de(m["content"]); break
+    c = data.get("contexto") or {}
+    if c:
+        ctx_usado, ctx_total = c.get("usado", 0), c.get("total", 0)
+        ctx_reservado = c.get("reservado", ctx_reservado); ctx_model = c.get("model", "") or ctx_model
+    _p(f"\n{DIM_A}   — fim do histórico · continue de onde parou —{R}\n\n")
+
+async def _cmd_sessao(arg: str) -> None:
+    """/sessao N (posição na lista) ou /sessao <início do id>."""
+    if not sessoes_cache:
+        await _atualizar_sessoes()
+    alvo = None
+    if arg.isdigit() and 1 <= int(arg) <= len(sessoes_cache):
+        alvo = sessoes_cache[int(arg) - 1]["session_id"]
+    elif arg:
+        ids = [s["session_id"] for s in sessoes_cache if s["session_id"].startswith(arg)]
+        alvo = ids[0] if len(ids) == 1 else None
+    if alvo:
+        await _retomar(alvo)
+    else:
+        _p(f"{DIM_A}   uso: /sessao N  ou  /sessao <início do id>  (veja /sessoes){R}\n")
+
+async def _cmd_sessoes(page: int) -> None:
+    if await _atualizar_sessoes():
+        _mostrar_sessoes(page)
+
 class _Comp(Completer):
     """Autocomplete dos slash-commands."""
-    CMDS = ["/voz", "/think", "/ajuda", "/sair"] if _IS_TERMUX else ["/voz", "/anexo", "/think", "/ajuda", "/sair"]
+    CMDS = (["/voz", "/think", "/sessoes", "/sessao", "/nova", "/ajuda", "/sair"] if _IS_TERMUX
+            else ["/voz", "/anexo", "/think", "/sessoes", "/sessao", "/nova", "/ajuda", "/sair"])
     def get_completions(self, document, complete_event):
         txt = document.text_before_cursor
         if not txt.startswith("/"):
+            return
+        if txt.startswith("/sessao "):                         # busca nas sessões: nº, id ou trecho da 1ª fala
+            frag = txt[len("/sessao "):].lower()
+            for i, s in enumerate(sessoes_cache, 1):
+                if not frag or frag in f"{i} {s['session_id']} {s.get('preview', '')}".lower():
+                    yield Completion(str(i), start_position=-len(frag),
+                                     display=f"{i}. {_quando(s.get('updated_at', 0))} · {s.get('preview', '')[:45]}")
             return
         # /think já aparece EXPANDIDO nas 3 opções (off|full|colap) no dropdown — é o "toggle com opções"
         opts: list[tuple[str, str]] = []
@@ -678,11 +829,17 @@ def _dispatch(msg: str, app) -> None:
             think_mode = modos[(modos.index(think_mode) + 1) % 3]    # cicla off → full → colap
         desc = {"off": "desligado", "full": "completo (caixa)", "colap": "colapsado (só resumo)"}[think_mode]
         _p(f"{VERDE_A}   💭 thinking: {think_mode} — {desc}{R}\n")
-    elif cmd in ("/sessoes", "/sessao"):               # Fase 3: backend de sessões (/chat/sessions) ainda não existe
-        _p(f"{DIM_A}   sessões chegam na próxima fase (o backend ainda não tem /chat/sessions){R}\n")
+    elif cmd == "/sessoes":
+        asyncio.create_task(_cmd_sessoes(int(partes[1]) if len(partes) > 1 and partes[1].isdigit() else 1))
+    elif cmd == "/sessao":
+        asyncio.create_task(_cmd_sessao(partes[1] if len(partes) > 1 else ""))
+    elif cmd == "/nova":                               # próxima mensagem abre sessão nova (o server cria)
+        session_id = None
+        _p(f"{VERDE_A}   ✚ nova sessão — a próxima mensagem começa do zero{R}\n")
     elif cmd in ("/ajuda", "/help"):
         extra = "" if _IS_TERMUX else " · /anexo · Ctrl+V cola imagem"
-        _p(f"{DIM_A}   comandos: /voz (voz→texto) · /think [off|full|colap] (cicla se sem arg){extra} · /sair{R}\n")
+        _p(f"{DIM_A}   comandos: /voz (voz→texto) · /think [off|full|colap] (cicla se sem arg) · /sessoes [pág] · "
+           f"/sessao N|id · /nova{extra} · /sair{R}\n")
     else:
         _p(f"{DIM_A}   comando desconhecido: {cmd} (tente /ajuda){R}\n")
 
@@ -729,7 +886,11 @@ async def main() -> None:
     _osc_on()
     try:
         await _banner()                                         # "brazaia" no startup (colado no fluxo)
-        _p(f"{DIM_A}   digite e Enter · /voz{'' if _IS_TERMUX else ' · /anexo · Ctrl+V cola imagem'} · /sair{R}\n")
+        _p(f"{DIM_A}   digite e Enter · /voz{'' if _IS_TERMUX else ' · /anexo · Ctrl+V cola imagem'} · /sessoes · /sair{R}\n")
+        if await _atualizar_sessoes() and sessoes_cache:             # só avisa (não despeja a lista no startup)
+            ult = sessoes_cache[0]
+            _p(f"{DIM_A}   {len(sessoes_cache)} sessões · última {_quando(ult.get('updated_at', 0))}: "
+               f"\"{ult.get('preview', '')[:50]}\" → /sessao 1 retoma · /sessoes lista{R}\n")
         asyncio.create_task(_ticker())
         import companion.connect as _dev                        # status vai pro FOOTER, sem spam no topo
         _dev.log = lambda *a, **k: None                          # silencia o log do connect (ele seta estado.device_status)
