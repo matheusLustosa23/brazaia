@@ -1,24 +1,9 @@
 import os, base64, hashlib, pprint
-from infrastructure.vision.image_index import ImageIndex
 from infrastructure.storage.file_store import FileStore
 
 MAX_IMG_PIXELS = 900_000   # área (w*h). Acima de ~1M o Qwen3VLProcessor gera >1023 tokens de imagem,
                            # a tokenização trunca e dá 400. Medido: 1120x840 passa; 1024x1024 falha → cap 900K.
 _WEB_SAFE = ("image/jpeg", "image/png", "image/webp")
-
-def _img_id(url: str) -> str:
-    b64 = url.split(",", 1)[1] if "," in url else url
-    return hashlib.sha256(b64.encode()).hexdigest()[:12]        # id determinístico (hash do conteúdo)
-
-def _save_image(url: str, session_id: str, device_id: str | None, img_id: str, index: ImageIndex) -> None:
-    dev = device_id or "server"                                 # chat sem device → "server"
-    outdir = os.path.expanduser(f"~/brazaia/{dev}/{session_id}")
-    os.makedirs(outdir, exist_ok=True)
-    path = os.path.join(outdir, f"{img_id}.jpg")
-    b64 = url.split(",", 1)[1] if "," in url else url
-    with open(path, "wb") as f:
-        f.write(base64.b64decode(b64))
-    index.put(img_id, path)
 
 def _has_image(history: list[dict]) -> bool:
     return any(

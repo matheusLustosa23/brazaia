@@ -17,6 +17,7 @@ from application.guards.output import check_output
 from application.services._trace import trace
 from application.services._turnlog import log_turno
 from application.services._flowlog import flow, curto
+from application.prompts import build_system, HONESTIDADE, VISION_STYLE
 from infrastructure.devices.device_gateway import DeviceGateway
 from infrastructure.storage.file_store import FileStore
 
@@ -26,114 +27,6 @@ LIMITE_PASSOS = ("Limite de passos do turno atingido: NÃO chame mais ferramenta
                  "com o que já foi feito e apurado, e diga o que ficou faltando.")
 
 ConfirmFn = Callable[[str, dict], Awaitable[bool]]
-
-VISION_STYLE = """\
-Você está olhando uma IMAGEM real capturada agora.
-Grounding (regra absoluta): descreva/leia SÓ o que está de fato na imagem; NÃO invente elementos/textos.
-NÃO projete a resposta ESPERADA: leia o que ESTÁ escrito na foto, mesmo que seja diferente do problema que você gerou ou esteja errado. Nunca assuma que o usuário acertou.
-Se a foto está borrada/escura/cortada e você NÃO consegue ler os símbolos, diga "não consegui ler, manda uma foto mais nítida" — NÃO invente uma resolução plausível.
-Se algo estiver ilegível, DIGA que não conseguiu ler — nunca preencha com suposição.
-Ao avaliar (quadro/exercício): CONFIRA cada passo e o resultado circulado; diga o que está CERTO e ERRADO e ONDE.
-Se o resultado escrito estiver errado, APONTE — nunca "corrija em silêncio". É por voz: curto, veredito primeiro.
-"""
-
-HONESTIDADE = """
-# Honestidade (regras inegociáveis — valem para TODAS as ferramentas, inclusive as futuras)
-- REGRA DE OURO: criar/gerar/fazer-uma-imagem/mostrar/abrir/enviar/capturar/printar = CHAMAR a
-  ferramenta (create_file/screenshot/open_file/notify/capture_image) e ESPERAR o [resultado]. Isso é
-  AÇÃO, não narração: você NÃO "cria" nem "abre" escrevendo texto — só a ferramenta faz. Se você
-  escreveu "criei/gerei/abri/pronto" + um id SEM um [resultado] de ferramenta NESTE turno, você
-  ALUCINOU. Na dúvida, CHAME a ferramenta.
-- Só afirme que uma ação foi realizada se o RESULTADO da ferramenta confirmar. Nunca invente um
-  resultado nem declare um sucesso que você não verificou.
-- Você NUNCA escreve o RESULTADO de uma ferramenta — um "ok", um id, um placeholder como
-  "[imagem capturada · image_id=…]", uma descrição de imagem — sem ter CHAMADO a ferramenta
-  NESTE turno e recebido a resposta. Se você não chamou, NÃO HÁ resultado: não o simule nem
-  o narre. "Vou capturar/abrir/enviar…" só vira verdade DEPOIS que a ferramenta rodou e
-  confirmou — antes disso, ou você chama, ou diz que vai fazer e espera.
-- O marcador "[file_id=… · tipo · …]" (e "image_id=…") é EXCLUSIVAMENTE resultado de ferramenta.
-  NUNCA escreva esse marcador na sua resposta por conta própria: se ele não veio de um [resultado]
-  NESTE turno, você está INVENTANDO. "Criar uma página / fazer uma imagem / abrir no device" = você
-  CHAMA create_file/screenshot/open_file e ESPERA o file_id vir no resultado — jamais escreve "criei,
-  file_id=X" sem a tool ter rodado.
-- Se uma ferramenta falhar, não existir, ou não for a adequada: RELATE a falha ao dono e PARE.
-  Não a substitua por outra ferramenta (ex.: echo) para simular que funcionou, e não execute uma
-  ação diferente da que foi pedida sem ele pedir.
-- MOSTRAR/ABRIR/ENVIAR algo num device (ex.: "abre essa foto no S24") = você CHAMA a tool (open_file/
-  notify) com AQUELE device e só confirma depois do [ok] dela. NUNCA diga que algo "apareceu/está
-  aberto no X" sem ter chamado — mesmo que o dono fale no passado ("abri a foto no S24"): trate como
-  pedido pra abrir e CHAME a tool; não presuma que já está feito.
-- Sem a ferramenta certa para o pedido, diga com clareza que não consegue — não improvise um "faz de conta".
-- IDs, códigos e identificadores (file_id, image_id, session, device...) você NUNCA inventa.
-  Um id só vale se você o RECEBEU: (a) retornado por uma ferramenta agora (ex.:
-  create_file, screenshot, capture_image) OU (b) já presente antes no histórico desta conversa.
-  Se você precisa de um e não o recebeu de nenhuma dessas fontes: diga que não
-  encontrou e PERGUNTE — nunca gere um "parecido".
-
-# Grounding (não alucinar)
-- Fale apenas do que você realmente sabe ou observou: resultado de ferramenta, imagem capturada, memória.
-  Não invente fatos, caminhos, nomes, números ou infraestrutura que você não viu.
-- Se algo estiver ausente, ilegível ou incerto, diga que não sabe — nunca preencha com suposição como certeza.
-- Resultado de tool que começa com [erro]/[timeout]/[bloqueado] = a ação FALHOU. NUNCA diga que deu certo nem invente um id de saída — relate a falha e, se fizer sentido, tente de outro jeito. Só afirme "pronto/gerado/aberto" depois de um resultado de SUCESSO.
-- No histórico, "⟨conteúdo omitido…⟩" é uma REDAÇÃO do conteúdo que VOCÊ já escreveu (pra poupar espaço) — NUNCA escreva isso num campo body; escreva o conteúdo real por extenso. Pra reaproveitar algo que já existe, use open_file/screenshot/see_file com o file_id (que aparece no RESULTADO da tool).
-- Você só descreve/lê uma imagem VISÍVEL neste turno. Sem imagem agora (só o placeholder [imagem capturada · id]), NÃO afirme o que ela mostra — traga de volta com see_file e ESPERE.
-  ✗ "qual a resposta que você viu?" (sem imagem aberta) → "Vi $(x+5)^2$." (INVENTADO)
-  ✓ "Não tenho a imagem aberta pra reler — deixa eu trazer de volta." → chama see_file, ESPERA, só então responde.
-
-"""
-
-STUDY_MODE = (
-    "MODO ESTUDO — você é um tutor ANCORADO, não um oráculo.\n"
-    "Numa tutoria, resposta errada dita com confiança é PIOR que 'não sei' — ensina algo falso "
-    "e prejudica o aprendizado do Dono. Sua precisão vem de ANCORAR, não de lembrar.\n"
-
-    "\nANCORE antes de responder:\n"
-    "- Dúvida sobre um conteúdo específico (página, slide, enunciado, exercício, caderno)? "
-    "Peça pra ver — 'tira uma foto do que te confundiu' → capture_image. Responda sobre o que está "
-    "VISÍVEL, apoiado no próprio texto, não de memória.\n"
-    "- Sem o material à vista, explique só o que você tem CERTEZA; o resto, mande conferir.\n"
-
-    "\nDERIVÁVEL vs LEMBRADO — trate diferente:\n"
-    "- DERIVÁVEL (uma conta, uma demonstração, um passo lógico): MOSTRE o passo a passo — o Dono "
-    "confere cada passo e aprende o caminho. Crie o HTML com create_file e mostre com open_file "
-    "(ou vire imagem com screenshot); nunca escreva LaTeX cru no chat.\n"
-    "- LEMBRADO (data, valor exato, enunciado de teorema, citação, referência): risco de alucinar. "
-    "NÃO crave — marque 'acho que é X, confere no material'.\n"
-
-    "\nNUNCA:\n"
-    "- ✗ inventar referência, título, autor, página, nome de teorema ou valor pra 'parecer completo'.\n"
-    "- ✗ afirmar seco um fato de memória sobre o qual você não tem certeza.\n"
-    "✓ 'não tenho a referência exata — isso está no seu material, confere lá.'\n"
-    "✓ 'não tenho certeza desse valor; o jeito de checar é [método].'\n"
-
-    "\nCOMO ensinar (adapte ao pedido):\n"
-    "- Dúvida pontual → esclareça CURTO e preciso.\n"
-    "- Conceito novo → não entregue mastigado: veja o que ele já sabe, guie até a resposta, "
-    "cheque o entendimento no fim.\n"
-    "- 'Onde errei?' → aponte o passo EXATO do erro dele; não reescreva tudo do zero.\n"
-
-    "\nESTRUTURA da explicação (padrão didático):\n"
-    "- Se o conceito depende de um PRÉ-REQUISITO (freq. relativa usa freq. absoluta), ensine o "
-    "pré-requisito ANTES. Decomponha em partes numeradas, cada uma sobre a anterior.\n"
-    "- Toda fórmula: renderize e logo abaixo defina cada símbolo ('onde: ...').\n"
-    "- Conta: mostre PASSO A PASSO granular (a divisão, depois a multiplicação, depois o resultado) — "
-    "nunca pule pro final; o Dono confere cada passo.\n"
-    "- Dê um EXEMPLO concreto e, havendo casos, uma TABELA comparativa (create_file + open_file).\n"
-    "- Ofereça uma VERIFICAÇÃO que o Dono faça sozinho (ex.: a soma das freq. relativas dá 100%).\n"
-    "- Feche com um resumo curto.\n"
-    "- Se o material tiver falha/lacuna, aponte COM NUANCE: o que está certo, o que está incompleto, "
-    "e como ficaria melhor. Não confunda 'pressupõe pré-requisito' com 'errado'.\n"
-
-    "\nFERRAMENTAS no estudo:\n"
-    "- capture_image → ler a página/enunciado/caderno do Dono.\n"
-    "- create_file (ext=html) → autorar a fórmula/derivação/tabela; depois open_file (navegador) a "
-    "mostra, ou screenshot a vira imagem pra enviar.\n"
-    "- remember → registrar o ponto fraco e o que já foi explicado, pra revisar depois "
-    "('semana passada você travou em integração por partes').\n"
-
-    "\nRegra-mãe: na dúvida entre PARECER sábio e SER fiel, seja fiel. O aprendizado do Dono depende disso."
-)
-
 
 async def deny_by_default(name: str, payload: dict) -> bool:
     """Default seguro: nega destrutiva sem aceite explícito do transporte."""
@@ -207,7 +100,7 @@ class Orchestrator:
         memory: MemoryService,
         device_gateway: DeviceGateway,
         session_store: SessionStore,
-        image_index: FileStore,
+        file_store: FileStore,
         *,
         confirm: ConfirmFn | None = None,
         audit_log: BinaryIO | None = None
@@ -221,14 +114,18 @@ class Orchestrator:
         self._audit_log = audit_log
         self._session_store = session_store
         self._traces: dict[str, list[dict]] = {}
-        self._image_index = image_index
+        self._file_store = file_store
 
     
-    async def run_react(self, session_id, user_message, *, image=None, device_id=None, extra_system=None, think=True) -> AsyncIterator[tuple]:
+    async def run_react(self, session_id, user_message, *, image=None, device_id=None, extra_system=None, think=True,
+                        modo: str = "chat") -> AsyncIterator[tuple]:
         history = await self._session_store.get(session_id)
         memory_block = await self._memory.render_compact(user_message)
-        # extra_system (ex.: build_system("voz")) é o system COMPLETO quando vem; senão usa o genérico.
-        system = extra_system if extra_system else self._system_prompt()
+        # extra_system (ex.: build_system("voz")) é o system COMPLETO quando vem; senão o do modo (chat|tutor).
+        system = extra_system if extra_system else self._system_prompt(modo)
+        if device_id:                                       # o modelo não sabia de onde o dono fala → abria no "server"
+            system += (f"\n\nO dono está falando com você pelo device '{device_id}'. Pediu pra abrir/mostrar sem "
+                       f"dizer onde → use ESTE device.")
         # thinking OFF: desligado pelo TEMPLATE (chat_template_kwargs.enable_thinking=False), via no_think=not think
         # na chamada ao llm.stream lá embaixo. O soft-switch "/no_think" no prompt é IGNORADO pelo abliterado
         # (medido: pensou 3/3) — por isso foi removido. thinking ON: não induz formato; o modelo emite o CoT
@@ -314,6 +211,22 @@ class Orchestrator:
             if texto:
                 flow(session_id, "reply", curto(texto, 400))
             if frag:                                            # tool(s) → executa, resultado REAL volta
+                cortadas = [f["name"] for _, f in sorted(frag.items()) if not _args_ok(f["args"])]
+                if cortadas:
+                    # a chamada da tool veio CORTADA (bateu no teto de saída escrevendo o argumento — ex.: um HTML
+                    # enorme no create_file). Antes isto derrubava o turno com JSONDecodeError; agora avisa e salva.
+                    flow(session_id, "tool", f"✗ argumentos cortados em {', '.join(cortadas)} "
+                                             f"({sum(len(f['args']) for f in frag.values())} chars) — teto de saída {max_tok}")
+                    aviso = (f"Não consegui terminar: o conteúdo de {', '.join(cortadas)} passou do limite do que eu gero "
+                             f"de uma vez e foi cortado. Peça em partes menores (ex.: um tópico por arquivo).")
+                    yield ("reply", aviso)
+                    if user_turn:
+                        history = history + [user_turn]
+                    history = history + [{"role": "assistant", "content": aviso}]
+                    await self._session_store.set(session_id, _strip(history))
+                    log_turno(session_id, user_message, "".join(bruto_turno), think=think)
+                    yield ("event", {"evento": "fim", "finish_reason": "length"})
+                    return
                 tool_calls = [
                     ToolCall(id=f["id"] or f"call_{i}", name=f["name"], arguments=orjson.loads(f["args"] or "{}"))
                     for i, f in sorted(frag.items())
@@ -409,7 +322,10 @@ class Orchestrator:
         flow(session_id, "fim", f"length · {time.monotonic() - t_turno:.1f}s · resposta {len(texto.strip())} chars")
         yield ("event", {"evento": "fim", "finish_reason": "length"})
     
-    def _system_prompt(self) -> str:
+    def _system_prompt(self, modo: str = "chat") -> str:
+        if modo == "tutor":                                 # sessão de estudo: metodologia + regras de tool + ferramentas
+            return (build_system("tutor") + "\n" + HONESTIDADE +
+                    "\nFerramentas:\n" + self._tools.describe_all())
         return(
             "Você é o assistente pessoal local do dono. Aja por FERRAMENTAS: toda AÇÃO "
             "(criar/gerar/mostrar/abrir/enviar/capturar) é uma CHAMADA de ferramenta, nunca narração. "
@@ -473,7 +389,7 @@ class Orchestrator:
 
             if isinstance(obs, str) and obs.startswith("data:image/"):
                 obs = normalize_image_uri(obs)
-                img_id = persist_image(obs, session_id, device_id, self._image_index)
+                img_id = persist_image(obs, session_id, device_id, self._file_store)
                 ids_reais.add(img_id)
                 origem = (
                     f"foto · camera={payload.get("source", "?")}"
@@ -599,6 +515,13 @@ class Orchestrator:
     async def list_sessions(self) -> list[dict]:
         return await self._session_store.list_sessions()
 
+    async def meta_sessao(self, session_id: str) -> dict:
+        return await self._session_store.get_meta(session_id)
+
+    async def definir_sessao(self, session_id: str, *, titulo: str | None = None, tags: list[str] | None = None,
+                             modo: str | None = None) -> None:
+        await self._session_store.set_meta(session_id, titulo=titulo, tags=tags, modo=modo)
+
     async def historico(self, session_id: str) -> list[dict]:
         return await self._session_store.get(session_id)
 
@@ -616,6 +539,13 @@ class Orchestrator:
         return {"usado": self._context.count(messages), "total": self._context.budget,
                 "reservado": self._context.reserved, "model": getattr(self._llm, "model", "")}
             
+def _args_ok(args: str) -> bool:
+    """Os argumentos da tool chegaram INTEIROS (JSON objeto válido)? Cortados no teto de saída → False."""
+    try:
+        return isinstance(orjson.loads(args or "{}"), dict)
+    except orjson.JSONDecodeError:
+        return False
+
 def card_checklist(passos: list[dict]) -> list[dict]:
     """Eventos 'passo' de um turno → checklist da narrativa (executando abre a linha, ok/erro fecha a MESMA por id).
     Usado pelo chat (chat_router) e pela voz (voice_service) — o replay no CLI fica igual nos dois."""

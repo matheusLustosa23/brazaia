@@ -15,10 +15,11 @@ router = APIRouter(prefix="/chat", tags=["chat"], route_class=ExcludeNoneRoute)
 
 
 @router.get("/sessions", dependencies=[Depends(require_api_key)])
-async def sessions(orch: Orchestrator = Depends(get_orchestrator)):
-    """Sessões COM conversa, da mais recente p/ a mais antiga: id, preview (1ª fala), turnos, created_at/updated_at.
-    (Vazias ficam de fora: toda requisição sem session_id cria uma, mesmo se o turno falhar.)"""
-    return {"sessions": [s for s in await orch.list_sessions() if s["turnos"] > 0]}
+async def sessions(tag: str | None = None, orch: Orchestrator = Depends(get_orchestrator)):
+    """Sessões COM conversa, da mais recente p/ a mais antiga: id, titulo, tags, modo, preview (1ª fala), turnos,
+    created_at/updated_at. ?tag=replica filtra. (Vazias ficam de fora: toda requisição sem session_id cria uma.)"""
+    return {"sessions": [s for s in await orch.list_sessions()
+                         if s["turnos"] > 0 and (tag is None or tag in (s.get("tags") or []))]}
 
 
 @router.get("/sessions/{session_id}", dependencies=[Depends(require_api_key)])
@@ -26,7 +27,8 @@ async def sessao(session_id: str, orch: Orchestrator = Depends(get_orchestrator)
     """Uma sessão p/ retomar: history (o que o LLM vê) + narrative (o que a TELA mostrou, por turno) + contexto."""
     return {"history": await orch.historico(session_id),
             "narrative": await orch.narrativa(session_id),
-            "contexto": await orch.contexto_atual(session_id)}
+            "contexto": await orch.contexto_atual(session_id),
+            "meta": await orch.meta_sessao(session_id)}
 
 
 
@@ -42,6 +44,9 @@ async def chat(
     orch: Orchestrator = Depends(get_orchestrator)
 ):
     session_id = req.session_id or await orch.create_session()
+    if req.titulo is not None or req.tags is not None or req.modo is not None:   # nome/etiquetas/modo da sessão
+        await orch.definir_sessao(session_id, titulo=req.titulo, tags=req.tags, modo=req.modo)
+    modo = req.modo or (await orch.meta_sessao(session_id))["modo"]            # o modo fica gravado na sessão
     if not req.stream:
         reply = "".join(
             [
@@ -51,6 +56,7 @@ async def chat(
                     user_message=req.message,
                     image=req.image,
                     think=req.think,              # think=False → enable_thinking=False (explícito, confiável)
+                    modo=modo,
                 ) if kind == "reply"              # non-stream devolve só a RESPOSTA (raciocínio descartado)
             ]
         )
@@ -67,6 +73,7 @@ async def chat(
                 device_id=req.device_id,
                 image=req.image,
                 think=req.think,                  # think=False → enable_thinking=False (explícito, confiável)
+                modo=modo,
             ):
                 if await request.is_disconnected():
                     flow(session_id, "cliente", "✗ desconectou no meio do stream → turno interrompido")

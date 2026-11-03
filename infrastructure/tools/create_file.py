@@ -53,7 +53,8 @@ class CreateFileTool(Tool[CreateFileInput]):
         fid = self._store.put_text(corpo, device=ctx.device_id, session=ctx.session_id, kind=kind,
                                    ext="." + ext, title=payload.title or "", desc=payload.desc or "",
                                    style=payload.style)
-        return f"[arquivo CRIADO] {self._store.marker(fid)} — agora use em 'open_file', 'screenshot', 'notify' ou 'see_file'."
+        return (f"[arquivo CRIADO] {self._store.marker(fid)} — guardado. Só MOSTRE (open_file/screenshot/notify) se o "
+                f"dono pediu pra ver/abrir/mostrar; senão diga que criou e ofereça abrir.")
 
     def before(self, args: dict, ctx: ToolCtx) -> GuardResult:
         if eh_placeholder(args.get("body") or ""):        # colou marca do histórico -> não é conteúdo

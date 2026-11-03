@@ -18,6 +18,7 @@ from infrastructure.tools.screenshot import ScreenshotTool
 from infrastructure.tools.notify import NotifyTool
 from infrastructure.tools.open_file import OpenFileTool
 from infrastructure.tools.calculate import CalculateTool
+from infrastructure.tools.list_devices import ListDevicesTool
 from infrastructure.memory.sqlite_store import SqlLiteMemoryStore
 from infrastructure.memory.session_store import SqlLiteSessionStore
 from application.services.context_service import ContextManager
@@ -61,7 +62,7 @@ async def lifespan(app: FastAPI):
     await _session_store.init()
     
      # -- VISION / STORAGE --
-    store = FileStore()                       # armazém unificado de artefatos (imagem/html) — substitui o ImageIndex
+    store = FileStore()                       # armazém unificado de artefatos (imagem/html/…) por file_id
     vision = VisionRegistry()
     vision.register(WebCam())
     
@@ -89,6 +90,7 @@ async def lifespan(app: FastAPI):
     registry.register(NotifyTool(device_gateway, store))
     registry.register(OpenFileTool(device_gateway, store))
     registry.register(CalculateTool())
+    registry.register(ListDevicesTool(device_gateway))
 
     # ── Orchestrator ──
     orchestrator = Orchestrator(
@@ -98,7 +100,7 @@ async def lifespan(app: FastAPI):
         memory=memory,
         device_gateway=device_gateway,
         session_store=_session_store,
-        image_index=store
+        file_store=store
     )
 
     # ── Sub-Containers ──
@@ -140,7 +142,7 @@ async def lifespan(app: FastAPI):
     app.state.asr = asr
     app.state.vad = vad
     app.state.tts = tts
-    app.state.image_index = store
+    app.state.file_store = store
     app.state.vision = vision
     app.state.container = container
 

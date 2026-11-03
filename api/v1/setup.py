@@ -3,7 +3,7 @@ from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from domain.exceptions.base import AgentError
 from schemas.shared import ApiResponse
-from api.v1.routers import device_ws, health_router, chat_router, voice_router
+from api.v1.routers import device_ws, health_router, chat_router, voice_router, files_router, devices_router
 
 
 def register_routers(app: FastAPI) -> None:
@@ -12,6 +12,8 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(device_ws.router, prefix="/api/v1")
     app.include_router(chat_router.router, prefix="/api/v1")
     app.include_router(voice_router.router, prefix="/api/v1")
+    app.include_router(files_router.router, prefix="/api/v1")
+    app.include_router(devices_router.router, prefix="/api/v1")
     
 
 

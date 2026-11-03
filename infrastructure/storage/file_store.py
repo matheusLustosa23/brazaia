@@ -8,9 +8,9 @@ manda pro server, server salva, device apaga. Recuperável por file_id no load_f
 NÃO entra aqui o áudio de voz/turno (transiente: transcrito → vai pro contexto → descartado). Só
 artefato de tool (capture_image, render_image, display_page) e, no futuro, a tool de gravar áudio.
 
-Substitui o ImageIndex (imagem vira kind='img') e o FileIndex flat — um store só pra tudo.
-`get(id) -> caminho` é mantido por compatibilidade com os callers do ImageIndex durante a migração."""
+Um store só pra tudo (imagem vira kind='img'). Sobrevive a restart: metadados em <id>.meta.json ao lado."""
 import hashlib
+import json
 import os
 import time
 
@@ -57,7 +57,56 @@ class FileStore:
     def __init__(self, raiz: str = _RAIZ) -> None:
         self._raiz = raiz
         self._map: dict[str, str] = {}
-        self._meta: dict[str, dict] = {}                           # id -> {kind, title, desc}
+        self._meta: dict[str, dict] = {}                           # id -> {kind, title, desc, ts, session, device}
+        self._carregar()
+
+    def _carregar(self) -> None:
+        """Reconstrói o índice a partir do DISCO (~/brazaia/{device}/{session}/{kind}/{id}.{ext}). Sem isto,
+        depois de reiniciar o agente nenhum file_id antigo abria (o índice só vivia em memória). Os metadados
+        (título/descrição/horário) vêm do <id>.meta.json ao lado; arquivo antigo sem ele vira kind+mtime."""
+        if not os.path.isdir(self._raiz):
+            return
+        for dev in os.listdir(self._raiz):
+            d_dev = os.path.join(self._raiz, dev)
+            if not os.path.isdir(d_dev) or dev == "cache":
+                continue
+            for session in os.listdir(d_dev):
+                d_ses = os.path.join(d_dev, session)
+                if not os.path.isdir(d_ses):
+                    continue
+                for kind in os.listdir(d_ses):
+                    d_kind = os.path.join(d_ses, kind)
+                    if not os.path.isdir(d_kind):
+                        continue
+                    for nome in os.listdir(d_kind):
+                        if nome.endswith(".meta.json"):
+                            continue
+                        fid = os.path.splitext(nome)[0]
+                        caminho = os.path.join(d_kind, nome)
+                        meta = {"kind": kind, "title": "", "desc": "", "style": "free",
+                                "ts": time.strftime("%d/%m %H:%M", time.localtime(os.path.getmtime(caminho)))}
+                        try:
+                            with open(os.path.join(d_kind, f"{fid}.meta.json"), encoding="utf-8") as f:
+                                meta.update(json.load(f))
+                        except (OSError, ValueError):
+                            pass
+                        meta.update(session=session, device=dev)
+                        self._map[fid] = caminho
+                        self._meta[fid] = meta
+
+    def listar(self, session: str) -> list[dict]:
+        """Artefatos de UMA sessão, do mais antigo pro mais novo: [{file_id, kind, title, desc, ts, ext, bytes}]."""
+        itens = []
+        for fid, m in self._meta.items():
+            caminho = self._map.get(fid)
+            if m.get("session") != session or not caminho or not os.path.exists(caminho):
+                continue
+            itens.append({"file_id": fid, "kind": m.get("kind"), "title": m.get("title") or "",
+                          "desc": m.get("desc") or "", "ts": m.get("ts") or "",
+                          "ext": os.path.splitext(caminho)[1].lstrip("."), "bytes": os.path.getsize(caminho),
+                          "_mtime": os.path.getmtime(caminho)})
+        itens.sort(key=lambda x: x.pop("_mtime"))
+        return itens
 
     def put(self, data: bytes, *, device: str | None, session: str, kind: str, ext: str,
             title: str = "", desc: str = "", style: str = "free") -> str:
@@ -66,11 +115,12 @@ class FileStore:
         o store decide o tipo, o modelo NÃO). style (html) é lembrado pra screenshot/open_file
         renderizarem a página do MESMO jeito que o autor pediu (free/pico)."""
         fid = file_id_de(data)
-        self._meta[fid] = {"kind": kind, "title": title, "desc": desc, "style": style,
-                           "ts": time.strftime("%d/%m %H:%M")}
-        if fid in self._map and os.path.exists(self._map[fid]):
-            return fid                                              # já temos esse conteúdo (dedup)
         dev = device or "unknow"                                   # chat sem device → "server"
+        meta = {"kind": kind, "title": title, "desc": desc, "style": style,
+                "ts": time.strftime("%d/%m %H:%M")}
+        if fid in self._map and os.path.exists(self._map[fid]):
+            self._meta[fid] = {**self._meta.get(fid, {}), **meta}  # já temos esse conteúdo (dedup): só atualiza o rótulo
+            return fid
         if not ext.startswith("."):
             ext = "." + ext
         pasta = os.path.join(self._raiz, dev, session, kind)
@@ -78,7 +128,13 @@ class FileStore:
         caminho = os.path.join(pasta, f"{fid}{ext}")
         with open(caminho, "wb") as f:
             f.write(data)
+        try:                                                        # metadados ao lado → sobrevivem a reinício
+            with open(os.path.join(pasta, f"{fid}.meta.json"), "w", encoding="utf-8") as f:
+                json.dump(meta, f, ensure_ascii=False)
+        except OSError:
+            pass
         self._map[fid] = caminho
+        self._meta[fid] = {**meta, "session": session, "device": dev}
         return fid
 
     def put_text(self, texto: str, *, device: str | None, session: str, kind: str, ext: str,
@@ -119,5 +175,5 @@ class FileStore:
         return b.decode("utf-8", "replace") if b is not None else None
 
     def get(self, file_id: str) -> str | None:
-        """Compat ImageIndex.get — devolve o caminho (migração gradual dos callers)."""
+        """Caminho do artefato (= path); usado pelo resolve_data_uri do notify."""
         return self.path(file_id)

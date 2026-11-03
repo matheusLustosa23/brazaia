@@ -19,6 +19,10 @@ CREATE TABLE IF NOT EXISTS session_narrative (
 """
 
 
+_META_COLS = (("titulo", "titulo TEXT"), ("tags", "tags TEXT NOT NULL DEFAULT '[]'"),
+              ("modo", "modo TEXT NOT NULL DEFAULT 'chat'"))
+
+
 def _texto(content) -> str:
     """Texto de um content str ou multimodal (lista de partes)."""
     if isinstance(content, str):
@@ -39,6 +43,7 @@ class InMemorySessionStore:
     def __init__(self):
         self._data: dict[str,list[dict]] = {}
         self._narr: dict[str,list[dict]] = {}
+        self._meta: dict[str,dict] = {}
     
     async def create(self) -> str:
         sid = uuid.uuid4().hex
@@ -55,8 +60,18 @@ class InMemorySessionStore:
         self._data.setdefault(session_id, []).append(message)
 
     async def list_sessions(self) -> list[dict]:
-        return [{"session_id": sid, **_resumo(h), "created_at": 0.0, "updated_at": 0.0}
+        return [{"session_id": sid, **_resumo(h), **await self.get_meta(sid), "created_at": 0.0, "updated_at": 0.0}
                 for sid, h in self._data.items()]
+
+    async def get_meta(self, session_id: str) -> dict:
+        return {"titulo": None, "tags": [], "modo": "chat", **self._meta.get(session_id, {})}
+
+    async def set_meta(self, session_id: str, *, titulo: str | None = None, tags: list[str] | None = None,
+                       modo: str | None = None) -> None:
+        m = self._meta.setdefault(session_id, {})
+        for k, v in (("titulo", titulo), ("tags", tags), ("modo", modo)):
+            if v is not None:
+                m[k] = v
 
     async def get_narrative(self, session_id: str) -> list[dict]:
         return self._narr.get(session_id, [])
@@ -80,6 +95,10 @@ class SqlLiteSessionStore:
     async def init(self) -> None:
         async with self._connect() as db:
             await db.executescript(_SESSION_SCHEMA)
+            cols = {r[1] for r in await db.execute_fetchall("PRAGMA table_info(sessions)")}
+            for col, ddl in _META_COLS:                     # bancos antigos: acrescenta as colunas de metadado
+                if col not in cols:
+                    await db.execute(f"ALTER TABLE sessions ADD COLUMN {ddl}")
             await db.commit()
        
     
@@ -126,11 +145,35 @@ class SqlLiteSessionStore:
         """Todas as sessões, da mais recente p/ a mais antiga (por updated_at)."""
         async with self._connect() as db:
             cur = await db.execute(
-                "SELECT session_id, history, created_at, updated_at FROM sessions ORDER BY updated_at DESC"
+                "SELECT session_id, history, created_at, updated_at, titulo, tags, modo FROM sessions ORDER BY updated_at DESC"
             )
             rows = await cur.fetchall()
-        return [{"session_id": sid, **_resumo(orjson.loads(h)), "created_at": c, "updated_at": u}
-                for sid, h, c, u in rows]
+        return [{"session_id": sid, **_resumo(orjson.loads(h)), "created_at": c, "updated_at": u,
+                 "titulo": t, "tags": orjson.loads(tg or "[]"), "modo": md or "chat"}
+                for sid, h, c, u, t, tg, md in rows]
+
+    async def get_meta(self, session_id: str) -> dict:
+        """Metadados da sessão: titulo (nome dado na criação), tags (ex.: ["replica"]) e modo (chat|tutor)."""
+        async with self._connect() as db:
+            cur = await db.execute("SELECT titulo, tags, modo FROM sessions WHERE session_id = ?", (session_id,))
+            row = await cur.fetchone()
+        if row is None:
+            return {"titulo": None, "tags": [], "modo": "chat"}
+        return {"titulo": row[0], "tags": orjson.loads(row[1] or "[]"), "modo": row[2] or "chat"}
+
+    async def set_meta(self, session_id: str, *, titulo: str | None = None, tags: list[str] | None = None,
+                       modo: str | None = None) -> None:
+        """Grava só o que veio (None = mantém). Cria a linha se a sessão ainda não existir."""
+        now = time.time()
+        campos = {k: v for k, v in (("titulo", titulo), ("tags", orjson.dumps(tags).decode() if tags is not None else None),
+                                      ("modo", modo)) if v is not None}
+        async with self._connect() as db:
+            await db.execute("INSERT OR IGNORE INTO sessions (session_id, history, created_at, updated_at) VALUES (?, '[]', ?, ?)",
+                             (session_id, now, now))
+            if campos:
+                sets = ", ".join(f"{k} = ?" for k in campos)
+                await db.execute(f"UPDATE sessions SET {sets} WHERE session_id = ?", (*campos.values(), session_id))
+            await db.commit()
 
     async def get_narrative(self, session_id: str) -> list[dict]:
         async with self._connect() as db:
