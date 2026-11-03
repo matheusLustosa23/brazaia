@@ -7,6 +7,7 @@ Uso:
   python -m companion connect [--fg|status|stop|--watch]
                                              só o device, sem chat (= python -m companion.connect)
   python -m companion voz [stream|wake|once] voz no terminal sem painel (= python -m companion.voice)
+  python -m companion replica …              réplica no tutor: o pedido de estudo vai pro agente em modo tutor
 
 O companion de FUNDO do server sobe com `python -m companion.connect --fg` (ops/subir_companion.sh): o braza
 procura esse nome na linha de comando, então ele continua com o módulo explícito.
@@ -22,8 +23,8 @@ def main() -> None:
     args = sys.argv[1:]
     if args and args[0] in ("-h", "--help"):
         _uso(); return
-    if args and args[0] in ("connect", "voz"):                     # delega pro módulo de sempre, com os args dele
-        modulo = {"connect": "companion.connect", "voz": "companion.voice"}[args[0]]
+    if args and args[0] in ("connect", "voz", "replica"):          # delega pro módulo de sempre, com os args dele
+        modulo = {"connect": "companion.connect", "voz": "companion.voice", "replica": "companion.replica"}[args[0]]
         sys.argv = [modulo] + args[1:]
         runpy.run_module(modulo, run_name="__main__", alter_sys=True)
         return

@@ -19,7 +19,7 @@ from rich.cells import cell_len
 
 from companion.render import md_ansi, SPIN, decode
 from companion.config import load_config, CompanionConfig
-from companion.chat_client import chat_stream, listar_sessoes, carregar_sessao
+from companion.chat_client import chat_stream, listar_sessoes, carregar_sessao, listar_arquivos, baixar_arquivo
 from companion.connect import conectar                 # loop de device REAL (handshake + RPC + reconexão)
 from companion.state import estado                    # estado.device_online (status no footer)
 from companion.plataform import _IS_TERMUX             # adapta o CLI ao Termux (voz AAC, sem anexo/clipboard)
@@ -34,6 +34,10 @@ pending_image = None  # data URL da imagem anexada (vai na próxima mensagem)
 pending_name = None   # nome do arquivo anexado (só p/ exibir no card)
 ultima_resposta = ""  # último reply do LLM (limpo, sem barras) — pra /copiar
 sessoes_cache: list = []  # última listagem de /chat/sessions (mais recente 1º) → /sessao N e o autocomplete
+sessoes_tag: str | None = None   # filtro da última listagem (ex.: "replica") — o /sessao N numera NESSA lista
+arquivos_cache: list = []  # artefatos da sessão atual (último /arquivos) → /abrir N
+modo_sessao = "chat"       # modo da sessão atual: chat | tutor (vem do server ao retomar; /modo troca)
+modo_pendente: str | None = None   # /modo escolhido e ainda não enviado (vai na próxima mensagem e fica gravado)
 stream_tail = ""      # "rabo" do bloco sendo DIGITADO (typewriter na região viva do prompt)
 tail_think = False    # True quando o rabo é RACIOCÍNIO (<think>), p/ estilo diferente da resposta
 tool_build: dict = {} # tool_calls sendo MONTADAS ao vivo: index -> {"tool", "args" (JSON cru), "t0"}
@@ -271,6 +275,8 @@ def _toolbar() -> StyleAndTextTuples:
     sid = (session_id or "nova")[:8]
     dev = (cfg.device_id if cfg else "device")
     th = {"off": "💭off", "full": "💭full", "colap": "💭colap"}.get(think_mode, "💭off")
+    if modo_sessao == "tutor":
+        th = "🎓tutor · " + th
     # tela estreita (celular): vai largando o MENOS importante até caber — modelo, thinking, "sessão", ctx curto
     caber = w - 5                                                            # ╰─ ● … ─╯ ocupam 5 colunas
     opcoes = [f" {status} · {dev} · sessão {sid}{ctx}{out} · {th} · {modelo} ",
@@ -352,7 +358,7 @@ def _fecha_escrita(pensamento: str, buf: str, blk_toks: int, think_secs: float, 
 async def _responder(msg: str):
     """Consome o stream do backend (chat_stream): session_id + deltas de texto + eventos
     (contexto → rodapé · etapa/passo → checklist das tools · fim → motivo) + erro."""
-    global ctx_usado, ctx_total, ctx_model, ctx_reservado, checklist_base
+    global ctx_usado, ctx_total, ctx_model, ctx_reservado, checklist_base, modo_pendente
     global respondendo, session_id, pending_image, pending_name, stream_tail, tail_think, tok_count, tool_build, ultima_resposta, aguardando, pensando, think_t0, turno_t0, last_delta_t
     respondendo = True; aguardando = True                            # aguardando = TTFT (mostra "processando…")
     tok_count = 0; full = []; erro = None                            # contador total + reply + erro
@@ -370,7 +376,8 @@ async def _responder(msg: str):
     buf = ""; topo_feito = False
     pensamento = ""   # raciocínio do bloco ATUAL (o server etiqueta think/reply por-chamada; multi-caixa por transição)
     try:
-        async for ev in chat_stream(msg, session_id, cfg, image=img, think=(think_mode != "off")):
+        modo_envio, modo_pendente = modo_pendente, None          # /modo escolhido vai UMA vez; o server grava na sessão
+        async for ev in chat_stream(msg, session_id, cfg, image=img, think=(think_mode != "off"), modo=modo_envio):
             if "session_id" in ev:
                 session_id = ev["session_id"]                        # lembra a sessão
             elif ev.get("evento") == "contexto":                     # rodapé: prompt real / janela + teto de saída
@@ -463,6 +470,7 @@ async def _responder(msg: str):
         _p(_corpo(f" \033[38;2;255;90;90m⚠ falha no stream: {e}",
                   cell_len(f" ⚠ falha no stream: {e}"), W, None) + "\n")
     ultima_resposta = "".join(full)                                  # guarda p/ /copiar
+    asyncio.create_task(_atualizar_arquivos())                       # o /abrir já sugere o que este turno gerou
     _p("\n")
     respondendo = False; aguardando = False; pensando = False
 
@@ -502,7 +510,7 @@ async def _transcrever(audio: bytes) -> str:
 
 async def _iniciar_voz(app) -> None:                   # /voz — começa a gravar LIVRE (sem suspender o TUI); Enter pára
     global gravando, voz_prep, _grav
-    if gravando or voz_prep or respondendo:
+    if gravando or voz_prep:
         return
     from companion.audio import GravacaoLivre
     voz_prep = True; app.invalidate()                  # rodapé: "preparando microfone…"
@@ -663,11 +671,12 @@ def _quando(ts: float) -> str:
         return time.strftime("ontem %H:%M", lt)
     return time.strftime("%d/%m %H:%M", lt)
 
-async def _atualizar_sessoes() -> bool:
-    """Busca a lista no server (fica em sessoes_cache). False se o server não respondeu."""
-    global sessoes_cache
+async def _atualizar_sessoes(tag: str | None = None) -> bool:
+    """Busca a lista no server (fica em sessoes_cache). tag filtra (ex.: "replica"). False se o server não respondeu."""
+    global sessoes_cache, sessoes_tag
     try:
-        sessoes_cache = await listar_sessoes(cfg)
+        sessoes_cache = await listar_sessoes(cfg, tag)
+        sessoes_tag = tag
         return True
     except Exception as e:
         _p(f"{DIM_A}   ⚠ não consegui listar as sessões: {e}{R}\n")
@@ -681,12 +690,15 @@ def _mostrar_sessoes(page: int = 1) -> None:
     tot = (len(sessoes_cache) + por - 1) // por
     page = max(1, min(page, tot))
     ini = (page - 1) * por
-    _p(f"{DIM_A}   ── sessões {ini + 1}–{min(ini + por, len(sessoes_cache))} de {len(sessoes_cache)} · pág {page}/{tot} ──{R}\n")
+    filtro = f" · etiqueta {sessoes_tag}" if sessoes_tag else ""
+    _p(f"{DIM_A}   ── sessões {ini + 1}–{min(ini + por, len(sessoes_cache))} de {len(sessoes_cache)}{filtro} · pág {page}/{tot} ──{R}\n")
     for i in range(ini, min(ini + por, len(sessoes_cache))):
         s = sessoes_cache[i]
         atual = f"{VERDE_A}●{DIM_A}" if s["session_id"] == session_id else " "
+        icone = "🎓 " if s.get("modo") == "tutor" else ""
+        nome = s.get("titulo") or s.get("preview", "")              # título (réplicas) ou a 1ª fala
         _p(f"{DIM_A}  {atual}{i + 1:>3}. {_quando(s.get('updated_at', 0)):>12} · {s.get('turnos', 0):>2} turnos · "
-           f"{s.get('preview', '')[:60]}{R}\n")
+           f"{icone}{nome[:60]}{R}\n")
     prox = f"/sessoes {page + 1} → próxima · " if page < tot else ""
     _p(f"{DIM_A}   ({prox}/sessao N retoma · /sessao <busca> + Tab · /nova começa outra){R}\n")
 
@@ -749,14 +761,17 @@ def _render_historico(history: list) -> None:
 
 async def _retomar(sid: str) -> None:
     """Troca pra sessão sid: replay do que já foi conversado + rodapé com o contexto dela."""
-    global session_id, ctx_usado, ctx_total, ctx_model, ctx_reservado, ultima_resposta
+    global session_id, ctx_usado, ctx_total, ctx_model, ctx_reservado, ultima_resposta, modo_sessao, arquivos_cache
     try:
         data = await carregar_sessao(cfg, sid)
     except Exception as e:
         _p(f"{DIM_A}   ⚠ não consegui abrir a sessão: {e}{R}\n"); return
-    session_id = sid
+    session_id = sid; arquivos_cache = []
+    meta = data.get("meta") or {}
+    modo_sessao = meta.get("modo") or "chat"
     hist, narr = data.get("history", []), data.get("narrative", [])
-    _p(f"\n{VERDE_A}   ↺ sessão {sid[:8]} retomada{R}\n")
+    nome = f" · {meta['titulo']}" if meta.get("titulo") else ""
+    _p(f"\n{VERDE_A}   ↺ sessão {sid[:8]} retomada{nome}{' · 🎓 modo tutor' if modo_sessao == 'tutor' else ''}{R}\n")
     turnos = sum(1 for m in hist if m.get("role") == "user")
     if narr and len(narr) == turnos:                          # narrativa cobre TODOS os turnos → replay fiel
         _render_narrativa(narr)
@@ -771,6 +786,7 @@ async def _retomar(sid: str) -> None:
         ctx_usado, ctx_total = c.get("usado", 0), c.get("total", 0)
         ctx_reservado = c.get("reservado", ctx_reservado); ctx_model = c.get("model", "") or ctx_model
     _p(f"\n{DIM_A}   — fim do histórico · continue de onde parou —{R}\n\n")
+    await _atualizar_arquivos()
 
 async def _cmd_sessao(arg: str) -> None:
     """/sessao N (posição na lista) ou /sessao <início do id>."""
@@ -828,42 +844,175 @@ async def _cmd_live(fone: bool, modo: str = "continuo") -> None:
         ctx_reservado = c.get("reservado", ctx_reservado); ctx_model = c.get("model", "") or ctx_model
     _p("\n")
 
-async def _cmd_sessoes(page: int) -> None:
-    if await _atualizar_sessoes():
+async def _cmd_sessoes(page: int, tag: str | None = None) -> None:
+    if await _atualizar_sessoes(tag):
         _mostrar_sessoes(page)
 
+async def _cmd_pesquisar(termo: str) -> None:
+    """/sessoes <termo> — filtra por título, 1ª fala ou etiqueta (sem acento). /sessao N usa ESSA lista."""
+    global sessoes_cache, sessoes_tag
+    if not await _atualizar_sessoes():
+        return
+    sessoes_cache = _sessoes_filtradas(termo); sessoes_tag = f'filtro "{termo}"'
+    if not sessoes_cache:
+        _p(f"{DIM_A}   nenhuma sessão com \"{termo}\"{R}\n"); return
+    _mostrar_sessoes(1)
+
+async def _atualizar_arquivos() -> None:
+    """Recarrega em silêncio os arquivos da sessão atual (alimenta o menu do /abrir)."""
+    global arquivos_cache
+    if not session_id:
+        arquivos_cache = []; return
+    try:
+        arquivos_cache = await listar_arquivos(cfg, session_id)
+    except Exception:
+        pass
+
+async def _cmd_arquivos() -> None:
+    """/arquivos — o que o agente gerou NESTA sessão (HTML, imagens…), numerado pro /abrir."""
+    global arquivos_cache
+    if not session_id:
+        _p(f"{DIM_A}   nenhuma sessão aberta (/sessoes · /sessao N){R}\n"); return
+    try:
+        arquivos_cache = await listar_arquivos(cfg, session_id)
+    except Exception as e:
+        _p(f"{DIM_A}   ⚠ não consegui listar: {e}{R}\n"); return
+    if not arquivos_cache:
+        _p(f"{DIM_A}   (esta sessão não gerou arquivos){R}\n"); return
+    _p(f"{DIM_A}   ── arquivos da sessão {session_id[:8]} ──{R}\n")
+    for i, a in enumerate(arquivos_cache, 1):
+        nome = a.get("title") or a["file_id"]
+        desc = f" — {a['desc']}" if a.get("desc") else ""
+        _p(f"{DIM_A}   {i:>3}. {a.get('ts', ''):>11} · {a.get('ext', ''):>4} · {nome[:50]}{desc[:40]}{R}\n")
+    _p(f"{DIM_A}   (/abrir N abre aqui neste device){R}\n")
+
+def _abrir_local(caminho: str) -> None:
+    """Abre um arquivo baixado com o app padrão do device (navegador pro HTML, visualizador pra imagem)."""
+    import subprocess
+    if _IS_TERMUX:
+        subprocess.Popen(["termux-open", caminho], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    elif sys.platform == "win32":
+        os.startfile(caminho)  # type: ignore[attr-defined]
+    else:
+        subprocess.Popen(["xdg-open", caminho], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+
+async def _cmd_abrir(arg: str) -> None:
+    """/abrir N (da lista do /arquivos) ou /abrir <file_id> — baixa do server e abre neste device."""
+    if arg.isdigit() and arquivos_cache and 1 <= int(arg) <= len(arquivos_cache):
+        fid = arquivos_cache[int(arg) - 1]["file_id"]
+    elif arg:
+        fid = arg.strip("[]").removeprefix("file_id=")
+    else:
+        _p(f"{DIM_A}   uso: /abrir N (veja /arquivos) ou /abrir <file_id>{R}\n"); return
+    try:
+        dados, nome = await baixar_arquivo(cfg, fid)
+    except Exception as e:
+        _p(f"{DIM_A}   ⚠ não consegui baixar {fid}: {e}{R}\n"); return
+    pasta = os.path.expanduser("~/brazaia-arquivos")             # no celular ~/brazaia é o repo → outra pasta
+    os.makedirs(pasta, exist_ok=True)
+    caminho = os.path.join(pasta, nome)
+    with open(caminho, "wb") as f:
+        f.write(dados)
+    try:
+        _abrir_local(caminho)
+        _p(f"{VERDE_A}   ↗ abrindo {nome} ({len(dados) // 1024} KB) · salvo em {caminho}{R}\n")
+    except Exception as e:
+        _p(f"{DIM_A}   salvo em {caminho}, mas não consegui abrir: {e}{R}\n")
+
+def _sem_acento(t: str) -> str:
+    """minúsculas e sem acento — a busca acha "replica" em "réplica"."""
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFD", (t or "").lower()) if unicodedata.category(c) != "Mn")
+
+# comandos com OPÇÕES em níveis: escolheu o comando → abre o 1º nível; escolheu → abre o próximo.
+# Cada nível = [(opção, descrição)]. Enter num comando com nível faltando EXPANDE em vez de executar.
+_NIVEIS: dict[str, list[list[tuple[str, str]]]] = {
+    "/live": ([[("continuo", "por turnos: Enter envia"), ("once", "um turno e volta")]] if _IS_TERMUX else
+              [[("alto-falante", "mic mudo enquanto ele fala"), ("fone", "pode interromper falando")],
+               [("continuo", "sempre ouvindo"), ("wake", 'espera "braza"'), ("once", "um turno e volta")]]),
+    "/think": [[("off", "desliga"), ("full", "caixa completa"), ("colap", "só o resumo")]],
+    "/modo": [[("tutor", "sessão de estudo (metodologia)"), ("chat", "assistente geral")]],
+}
+_DESC = {"/voz": "fala vira texto no input", "/live": "conversa falada", "/anexo": "imagem", "/think": "raciocínio",
+         "/sessoes": "lista; digite pra filtrar", "/sessao": "retomar uma", "/nova": "começar outra", "/modo": "chat ou tutor",
+         "/arquivos": "o que a sessão gerou", "/abrir": "abrir um arquivo gerado", "/limpar": "apaga o input",
+         "/ajuda": "", "/sair": ""}
+_INLINE = ("/voz", "/limpar")        # funcionam no MEIO do texto (ex.: ditar a 2ª parte depois de editar a 1ª)
+
+def _tarefa(coro) -> None:
+    """Roda um comando em segundo plano MOSTRANDO o erro se ele quebrar (asyncio.create_task engole a exceção:
+    o comando simplesmente não fazia nada, sem aviso)."""
+    def _fim(t: asyncio.Task) -> None:
+        if not t.cancelled() and t.exception():
+            e = t.exception()
+            _p(f"\033[38;2;255;90;90m   ⚠ {type(e).__name__}: {e}{R}\n")
+    asyncio.create_task(coro).add_done_callback(_fim)
+
+def _sessoes_filtradas(termo: str) -> list:
+    t = _sem_acento(termo)
+    return [s for s in sessoes_cache if not t or t in _sem_acento(
+        f"{s.get('titulo') or ''} {s.get('preview', '')} {' '.join(s.get('tags') or [])} {s['session_id']}")]
+
 class _Comp(Completer):
-    """Autocomplete dos slash-commands."""
-    CMDS = (["/voz", "/live", "/think", "/sessoes", "/sessao", "/nova", "/ajuda", "/sair"] if _IS_TERMUX
-            else ["/voz", "/live", "/anexo", "/think", "/sessoes", "/sessao", "/nova", "/ajuda", "/sair"])
+    """Autocomplete em NÍVEIS: só os comandos na raiz; escolheu um → mostra as opções dele, e assim por diante.
+    No meio do texto, só os comandos de edição (/voz, /limpar)."""
+    CMDS = (["/voz", "/live", "/think", "/sessoes", "/sessao", "/nova", "/modo", "/arquivos", "/abrir", "/limpar", "/ajuda", "/sair"] if _IS_TERMUX
+            else ["/voz", "/live", "/anexo", "/think", "/sessoes", "/sessao", "/nova", "/modo", "/arquivos", "/abrir", "/limpar", "/ajuda", "/sair"])
+
     def get_completions(self, document, complete_event):
         txt = document.text_before_cursor
-        if not txt.startswith("/"):
+        if not txt.startswith("/"):                             # texto normal: só /voz e /limpar, no fim do que já tem
+            ult = txt.split(" ")[-1]
+            if ult.startswith("/"):
+                for c in _INLINE:
+                    if c.startswith(ult):
+                        yield Completion(c, start_position=-len(ult), display=f"{c}  ({_DESC[c]})")
             return
-        if txt.startswith("/sessao "):                         # busca nas sessões: nº, id ou trecho da 1ª fala
-            frag = txt[len("/sessao "):].lower()
-            for i, s in enumerate(sessoes_cache, 1):
-                if not frag or frag in f"{i} {s['session_id']} {s.get('preview', '')}".lower():
-                    yield Completion(str(i), start_position=-len(frag),
-                                     display=f"{i}. {_quando(s.get('updated_at', 0))} · {s.get('preview', '')[:45]}")
+        partes = txt.split(" ")
+        cmd, frag = partes[0], partes[-1]
+        if len(partes) == 1:                                    # raiz: cada comando UMA vez
+            for c in self.CMDS:
+                if c.startswith(cmd):
+                    seta = " ›" if c in _NIVEIS else ""
+                    yield Completion(c, start_position=-len(cmd), display=f"{c}{seta}" + (f"  ({_DESC[c]})" if _DESC.get(c) else ""))
             return
-        # /think já aparece EXPANDIDO nas 3 opções (off|full|colap) no dropdown — é o "toggle com opções"
-        opts: list[tuple[str, str]] = []
-        for c in self.CMDS:
-            if c == "/think":
-                opts += [("/think off", "desliga"), ("/think full", "caixa"), ("/think colap", "só resumo")]
-            elif c == "/live":
-                opts += ([("/live", "por turnos: Enter envia"), ("/live once", "um turno e volta")] if _IS_TERMUX else
-                         [("/live", "sempre ouvindo"), ("/live wake", "espera \"braza\""), ("/live once", "um turno e volta"),
-                          ("/live fone", "fone: pode interromper"), ("/live wake fone", ""), ("/live once fone", "")])
-            else:
-                opts.append((c, ""))
-        for c, d in opts:
-            if c.startswith(txt):
-                yield Completion(c, start_position=-len(txt), display=(c + (f"  ({d})" if d else "")))
+        if cmd in ("/sessao", "/sessoes"):                     # o que vem depois FILTRA (título, fala, etiqueta, sem acento)
+            termo = " ".join(partes[1:])
+            for s in _sessoes_filtradas(termo)[:50]:
+                i = sessoes_cache.index(s) + 1
+                nome = s.get("titulo") or s.get("preview", "")
+                disp = f"{i}. {_quando(s.get('updated_at', 0))} · {'🎓 ' if s.get('modo') == 'tutor' else ''}{nome[:45]}"
+                if cmd == "/sessao":
+                    yield Completion(str(i), start_position=-len(termo), display=disp)
+                else:                                           # escolheu no /sessoes → vira "/sessao N" (Enter retoma)
+                    yield Completion(f"/sessao {i}", start_position=-len(txt), display=disp)
+            return
+        if cmd == "/abrir":                                    # os arquivos da sessão (filtra pelo título)
+            termo = _sem_acento(" ".join(partes[1:]))
+            for i, a in enumerate(arquivos_cache, 1):
+                nome = a.get("title") or a["file_id"]
+                if not termo or termo in _sem_acento(f"{i} {nome} {a.get('desc', '')} {a['file_id']}"):
+                    yield Completion(str(i), start_position=-len(" ".join(partes[1:])),
+                                     display=f"{i}. {a.get('ts', '')} · {a.get('ext', '')} · {nome[:50]}")
+            return
+        niveis = _NIVEIS.get(cmd)
+        nivel = len(partes) - 2                                  # 0 = 1º nível de opções
+        if niveis and nivel < len(niveis):
+            for op, d in niveis[nivel]:
+                if op.startswith(frag):
+                    yield Completion(op, start_position=-len(frag), display=f"{op}{' ›' if nivel + 1 < len(niveis) else ''}  ({d})")
+
+def _faltam_opcoes(msg: str) -> bool:
+    """Comando com níveis e opção faltando (ex.: "/live" ou "/live fone")? → o Enter EXPANDE em vez de executar."""
+    partes = msg.split()
+    niveis = _NIVEIS.get(partes[0])
+    if not niveis:
+        return False
+    return len(partes) - 1 < len(niveis)
 
 def _dispatch(msg: str, app) -> None:
-    global session_id, think_mode
+    global session_id, think_mode, modo_sessao, modo_pendente, arquivos_cache
     partes = msg.split()
     cmd = partes[0]
     if cmd in ("/sair", "sair"):
@@ -872,9 +1021,9 @@ def _dispatch(msg: str, app) -> None:
         if _IS_TERMUX:
             _p(f"{DIM_A}   /anexo não disponível no Termux (sem zenity/clipboard){R}\n")
         else:
-            asyncio.create_task(_anexar())
+            _tarefa(_anexar())
     elif cmd == "/voz":
-        asyncio.create_task(_iniciar_voz(app))
+        _tarefa(_iniciar_voz(app))
     elif cmd == "/think":
         modos = ["off", "full", "colap"]
         if len(partes) > 1 and partes[1] in modos:
@@ -883,24 +1032,44 @@ def _dispatch(msg: str, app) -> None:
             think_mode = modos[(modos.index(think_mode) + 1) % 3]    # cicla off → full → colap
         desc = {"off": "desligado", "full": "completo (caixa)", "colap": "colapsado (só resumo)"}[think_mode]
         _p(f"{VERDE_A}   💭 thinking: {think_mode} — {desc}{R}\n")
-    elif cmd == "/sessoes":
-        asyncio.create_task(_cmd_sessoes(int(partes[1]) if len(partes) > 1 and partes[1].isdigit() else 1))
+    elif cmd == "/sessoes":                            # /sessoes [pág] · /sessoes <termo> (filtra: título, fala, etiqueta)
+        resto = " ".join(partes[1:])
+        if not resto or resto.isdigit():
+            _tarefa(_cmd_sessoes(int(resto) if resto else 1))
+        else:
+            _tarefa(_cmd_pesquisar(resto))
+    elif cmd == "/arquivos":
+        _tarefa(_cmd_arquivos())
+    elif cmd == "/abrir":
+        _tarefa(_cmd_abrir(partes[1] if len(partes) > 1 else ""))
+    elif cmd == "/modo":                               # chat | tutor — vai na próxima mensagem e fica gravado na sessão
+        if len(partes) > 1 and partes[1] in ("chat", "tutor"):
+            modo_sessao = modo_pendente = partes[1]
+            _p(f"{VERDE_A}   modo {'🎓 tutor (metodologia de estudo)' if modo_sessao == 'tutor' else 'chat'} — vale a partir da próxima mensagem{R}\n")
+        else:
+            _p(f"{DIM_A}   modo atual: {modo_sessao} · uso: /modo tutor | /modo chat{R}\n")
     elif cmd == "/sessao":
-        asyncio.create_task(_cmd_sessao(partes[1] if len(partes) > 1 else ""))
+        _tarefa(_cmd_sessao(partes[1] if len(partes) > 1 else ""))
     elif cmd == "/live":                               # painel de voz na mesma sessão (q/Esc volta)
         if respondendo:
             _p(f"{DIM_A}   espere a resposta terminar pra entrar no live{R}\n")
         else:
             args = partes[1:]
             modo = "wake" if "wake" in args else ("once" if "once" in args else "continuo")
-            asyncio.create_task(_cmd_live(fone="fone" in args, modo=modo))
+            _tarefa(_cmd_live(fone="fone" in args, modo=modo))
     elif cmd == "/nova":                               # próxima mensagem abre sessão nova (o server cria)
         session_id = None
+        arquivos_cache = []
+        if modo_sessao != "chat" and modo_pendente is None:          # nova sessão volta pro chat (a não ser que /modo antes)
+            modo_sessao = "chat"
         _p(f"{VERDE_A}   ✚ nova sessão — a próxima mensagem começa do zero{R}\n")
+    elif cmd == "/limpar":                             # o Enter já esvaziou o input
+        pass
     elif cmd in ("/ajuda", "/help"):
         extra = "" if _IS_TERMUX else " · /anexo · Ctrl+V cola imagem"
-        _p(f"{DIM_A}   comandos: /voz (voz→texto) · /live [wake|once] [fone] (conversa falada; q volta) · /think [off|full|colap] (cicla se sem arg) · /sessoes [pág] · "
-           f"/sessao N|id · /nova{extra} · /sair{R}\n")
+        _p(f"{DIM_A}   comandos: /voz (voz→texto) · /live [wake|once] [fone] (conversa falada; q volta) · /think [off|full|colap] (cicla se sem arg) · /sessoes [filtro] · "
+           f"/sessao N|id · /nova · /modo tutor|chat · /arquivos · /abrir N · /limpar (ou Ctrl+U){extra} · /sair{R}\n"
+           f"{DIM_A}   comandos com › abrem opções: escolha e o próximo nível aparece. /voz e /limpar valem no fim de um texto já escrito.{R}\n")
     else:
         _p(f"{DIM_A}   comando desconhecido: {cmd} (tente /ajuda){R}\n")
 
@@ -922,6 +1091,8 @@ async def main() -> None:
     @kb.add("c-c")
     @kb.add("c-d")
     def _(e): e.app.exit()
+    @kb.add("c-u")                                              # Ctrl+U = apaga o input inteiro
+    def _(e): e.app.current_buffer.text = ""
     @kb.add("c-v")                                              # Ctrl+V = cola imagem do clipboard (ou texto)
     def _(e): asyncio.create_task(_colar(e.app))
     @kb.add("enter")
@@ -931,10 +1102,28 @@ async def main() -> None:
                 asyncio.create_task(_parar_voz(e.app))
             return
         global pending_image, pending_name
-        msg = e.app.current_buffer.text.strip()
-        e.app.current_buffer.text = ""
-        if not msg or respondendo:                             # ignora vazio / enquanto responde
+        buf = e.app.current_buffer
+        msg = buf.text.strip()
+        if not msg:
             return
+        if msg == "/abrir" and arquivos_cache:                  # /abrir sem número → mostra os arquivos pra escolher
+            buf.text = "/abrir "; buf.cursor_position = len(buf.text)
+            buf.start_completion(select_first=False); return
+        if msg.startswith("/") and _faltam_opcoes(msg):        # comando com opções faltando → abre o próximo nível
+            buf.text = msg + " "; buf.cursor_position = len(buf.text)
+            buf.start_completion(select_first=False); return
+        ult = msg.split(" ")[-1]
+        if not msg.startswith("/") and ult in _INLINE:          # /voz ou /limpar no FIM de um texto já escrito
+            resto = msg[: -len(ult)].rstrip()
+            if ult == "/limpar":
+                buf.text = ""
+            else:                                               # dita mais um pedaço: mantém o texto, a fala entra depois
+                buf.text = resto + " "; buf.cursor_position = len(buf.text)
+                asyncio.create_task(_iniciar_voz(e.app))
+            return
+        if respondendo:                                         # respondendo: segura o texto na caixa (não perde)
+            return
+        buf.text = ""
         got, resto = _extrai_img_do_texto(msg)                 # caminho de imagem (colado como texto) → anexa
         if got:                                                # ANTES do check de comando: paths começam com '/'
             data, mime, nome = got
