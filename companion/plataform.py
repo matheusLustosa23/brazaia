@@ -17,6 +17,7 @@ _seq = 0
 _SERVE_PORT = 8765
 _conteudo: dict[str, tuple[str, bytes]] = {}     # rota -> (content-type, bytes)
 _servidor_no_ar = False
+_porta = _SERVE_PORT
 
 
 def _asset(nome: str) -> str:
@@ -59,7 +60,7 @@ def _servir(rota: str, tipo: str, dados: bytes) -> str:
     Em memória (sem arquivo em disco): zero content://, zero limpeza. Bind em
     127.0.0.1 → nada sai do aparelho. Sobe uma vez, na 1ª chamada (lazy).
     """
-    global _servidor_no_ar, _seq
+    global _servidor_no_ar, _seq, _porta
     _conteudo[rota] = (tipo, dados)
     if not _servidor_no_ar:
         import threading
@@ -84,12 +85,19 @@ def _servir(rota: str, tipo: str, dados: bytes) -> str:
             def log_message(self, format, *args):
                 pass
             
-        srv = ThreadingHTTPServer(("127.0.0.1", _SERVE_PORT), _H)
+        srv = None
+        for _porta in range(_SERVE_PORT, _SERVE_PORT + 10):   # o companion de FUNDO pode já estar na 8765 (outro processo)
+            try:
+                srv = ThreadingHTTPServer(("127.0.0.1", _porta), _H); break
+            except OSError:
+                continue
+        if srv is None:
+            raise OSError(f"nenhuma porta livre entre {_SERVE_PORT} e {_SERVE_PORT + 9}")
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         _servidor_no_ar = True
         
     _seq += 1
-    return f"http://localhost:{_SERVE_PORT}/{rota}?v={_seq}"
+    return f"http://localhost:{_porta}/{rota}?v={_seq}"
 
 async def show_html(html: str) -> str:
     """Abre uma página no navegador do device. Termux → localhost; desktop → arquivo tmp."""

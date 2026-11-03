@@ -915,7 +915,14 @@ async def _cmd_abrir(arg: str) -> None:
     with open(caminho, "wb") as f:
         f.write(dados)
     try:
-        _abrir_local(caminho)
+        if _IS_TERMUX:                                          # o navegador do Android NÃO lê arquivo do Termux
+            from companion.plataform import show_html, show_image   # (content:// → "não foi possível acessar")
+            ext = os.path.splitext(nome)[1].lower()
+            r = await (show_html(dados.decode("utf-8", "replace")) if ext in (".html", ".htm") else show_image(dados))
+            if r.startswith("[erro"):
+                raise RuntimeError(r)
+        else:
+            _abrir_local(caminho)
         _p(f"{VERDE_A}   ↗ abrindo {nome} ({len(dados) // 1024} KB) · salvo em {caminho}{R}\n")
     except Exception as e:
         _p(f"{DIM_A}   salvo em {caminho}, mas não consegui abrir: {e}{R}\n")
@@ -938,7 +945,6 @@ _DESC = {"/voz": "fala vira texto no input", "/live": "conversa falada", "/anexo
          "/sessoes": "lista; digite pra filtrar", "/sessao": "retomar uma", "/nova": "começar outra", "/modo": "chat ou tutor",
          "/arquivos": "o que a sessão gerou", "/abrir": "abrir um arquivo gerado", "/limpar": "apaga o input",
          "/ajuda": "", "/sair": ""}
-_INLINE = ("/voz", "/limpar")        # funcionam no MEIO do texto (ex.: ditar a 2ª parte depois de editar a 1ª)
 
 def _tarefa(coro) -> None:
     """Roda um comando em segundo plano MOSTRANDO o erro se ele quebrar (asyncio.create_task engole a exceção:
@@ -961,13 +967,8 @@ class _Comp(Completer):
             else ["/voz", "/live", "/anexo", "/think", "/sessoes", "/sessao", "/nova", "/modo", "/arquivos", "/abrir", "/limpar", "/ajuda", "/sair"])
 
     def get_completions(self, document, complete_event):
-        txt = document.text_before_cursor
-        if not txt.startswith("/"):                             # texto normal: só /voz e /limpar, no fim do que já tem
-            ult = txt.split(" ")[-1]
-            if ult.startswith("/"):
-                for c in _INLINE:
-                    if c.startswith(ult):
-                        yield Completion(c, start_position=-len(ult), display=f"{c}  ({_DESC[c]})")
+        txt = _segmento_comando(document.text_before_cursor)   # comando no INÍCIO ou no FIM de um texto já escrito
+        if txt is None:
             return
         partes = txt.split(" ")
         cmd, frag = partes[0], partes[-1]
@@ -1002,6 +1003,20 @@ class _Comp(Completer):
             for op, d in niveis[nivel]:
                 if op.startswith(frag):
                     yield Completion(op, start_position=-len(frag), display=f"{op}{' ›' if nivel + 1 < len(niveis) else ''}  ({d})")
+
+def _segmento_comando(txt: str) -> str | None:
+    """O pedaço que é COMANDO: o texto todo se começa com "/", ou o trecho do último " /<comando>" até o fim
+    (ex.: "me explica isso /voz" → "/voz"; "anotei /live fone" → "/live fone"). None = não tem comando."""
+    if txt.startswith("/"):
+        return txt
+    i = txt.rfind(" /")
+    while i != -1:
+        seg = txt[i + 1:]
+        cmd = seg.split(" ")[0]
+        if any(c.startswith(cmd) for c in _Comp.CMDS):         # ainda digitando o comando também vale
+            return seg
+        i = txt.rfind(" /", 0, i)
+    return None
 
 def _faltam_opcoes(msg: str) -> bool:
     """Comando com níveis e opção faltando (ex.: "/live" ou "/live fone")? → o Enter EXPANDE em vez de executar."""
@@ -1112,14 +1127,20 @@ async def main() -> None:
         if msg.startswith("/") and _faltam_opcoes(msg):        # comando com opções faltando → abre o próximo nível
             buf.text = msg + " "; buf.cursor_position = len(buf.text)
             buf.start_completion(select_first=False); return
-        ult = msg.split(" ")[-1]
-        if not msg.startswith("/") and ult in _INLINE:          # /voz ou /limpar no FIM de um texto já escrito
-            resto = msg[: -len(ult)].rstrip()
-            if ult == "/limpar":
-                buf.text = ""
-            else:                                               # dita mais um pedaço: mantém o texto, a fala entra depois
-                buf.text = resto + " "; buf.cursor_position = len(buf.text)
-                asyncio.create_task(_iniciar_voz(e.app))
+        seg = None if msg.startswith("/") else _segmento_comando(msg)
+        if seg and seg.split(" ")[0] in _Comp.CMDS:            # comando no FIM de um texto já escrito: executa e MANTÉM o texto
+            resto = msg[: len(msg) - len(seg)].rstrip()
+            cmd = seg.split(" ")[0]
+            if cmd == "/limpar":
+                buf.text = ""; return
+            if _faltam_opcoes(seg):                             # ainda falta opção → abre o próximo nível ali mesmo
+                buf.text = f"{resto} {seg} "; buf.cursor_position = len(buf.text)
+                buf.start_completion(select_first=False); return
+            buf.text = resto + " "; buf.cursor_position = len(buf.text)
+            if cmd == "/voz":                                   # dita mais um pedaço: a fala entra depois do texto
+                _tarefa(_iniciar_voz(e.app))
+            else:
+                _dispatch(seg, e.app)
             return
         if respondendo:                                         # respondendo: segura o texto na caixa (não perde)
             return
