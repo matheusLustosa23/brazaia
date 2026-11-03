@@ -69,13 +69,43 @@ class Player:
         except Exception: pass
 
 
-async def rodar_live(cfg, session_id: str | None, *, fone: bool = False, info: dict | None = None) -> str | None:
-    """Abre o painel e conversa por voz na sessão até q/Esc. Devolve o session_id usado (o server cria se None)."""
+IDLE_WAKE_S = 30.0                      # wake: 30 s sem ninguém falar → volta pro STANDBY
+
+
+def _modelos_wake() -> None:
+    """O openwakeword precisa de 2 modelos-BASE (melspectrogram + embedding) que o pip NÃO traz — sem eles o
+    WakeWord quebra com NO_SUCHFILE. Baixa só esses (+ VAD) na 1ª vez; os wake words prontos de outras
+    palavras ficam de fora (o nosso é o companion/models/braza.onnx)."""
+    import openwakeword, openwakeword.utils
+    base = getattr(openwakeword, "FEATURE_MODELS")["melspectrogram"]["model_path"].replace(".tflite", ".onnx")
+    if not os.path.exists(base):
+        getattr(openwakeword.utils, "download_models")(model_names=["__so_os_modelos_base__"])
+
+
+def _saudacao(voz: str) -> bytes:
+    """PCM 24k de uma saudação gravada (companion/assets/greeting_<voz>_N.wav) — b"" se não houver."""
+    import glob, random, wave
+    arqs = glob.glob(f"companion/assets/greeting_{voz}_*.wav")
+    if not arqs:
+        return b""
+    with wave.open(random.choice(arqs), "rb") as w:
+        return w.readframes(w.getnframes())
+
+
+async def rodar_live(cfg, session_id: str | None, *, fone: bool = False, modo: str = "continuo",
+                     info: dict | None = None) -> str | None:
+    """Abre o painel e conversa por voz na sessão. Devolve o session_id usado (o server cria se None).
+
+    modo: continuo — sempre ouvindo, até q/Esc.
+          wake     — STANDBY até ouvir "braza" (detecção LOCAL, openwakeword) → saudação → conversa;
+                     30 s de silêncio → volta pro STANDBY. q/Esc sai.
+          once     — um turno (você fala, ele responde) e volta sozinho pro chat."""
     import sounddevice as sd
     import websockets
 
     ev = hud.EstadoVoz()
-    ev.info = {"sessao": (session_id or "nova")[:8], "audio": "fone" if fone else "alto-falante", **(info or {})}
+    ev.info = {"sessao": (session_id or "nova")[:8],
+               "audio": ("fone" if fone else "alto-falante") + ("" if modo == "continuo" else f" · {modo}"), **(info or {})}
     ev.set("aguardando", "conectando no server…")
     sid = session_id
     loop = asyncio.get_running_loop()
@@ -83,6 +113,8 @@ async def rodar_live(cfg, session_id: str | None, *, fone: bool = False, info: d
     player = Player()
     respondendo = False                   # entre o final e o fim do áudio da resposta
     mudo = False                          # depois de um barge-in: ignora o resto do áudio da resposta cortada
+    turnos = 0                            # respostas completas nesta conversa (o once sai depois da 1ª)
+    atividade = time.monotonic()          # última vez que alguém falou (wake: base do "30 s de silêncio")
 
     def on_mic(indata, frames, t, status) -> None:
         b = bytes(indata)
@@ -95,7 +127,6 @@ async def rodar_live(cfg, session_id: str | None, *, fone: bool = False, info: d
     except Exception:
         player.close()                    # sem mic → não deixa o alto-falante aberto
         raise
-    url = f"{cfg.server_ws_url}/ws/voice" + (f"?session_id={session_id}" if session_id else "")
 
     async def enviar(ws) -> None:
         nonlocal mudo, respondendo
@@ -120,12 +151,12 @@ async def rodar_live(cfg, session_id: str | None, *, fone: bool = False, info: d
             await ws.send(b)
 
     async def receber(ws) -> None:
-        nonlocal sid, mudo, respondendo
+        nonlocal sid, mudo, respondendo, turnos, atividade
         async for msg in ws:
             if isinstance(msg, (bytes, bytearray)):
                 if mudo:
                     continue
-                player.feed(bytes(msg)); ev.nivel = hud.rms(bytes(msg))
+                player.feed(bytes(msg)); ev.nivel = hud.rms(bytes(msg)); atividade = time.monotonic()
                 if ev.estado != "falando":
                     ev.set("falando", "falando…")
                 continue
@@ -136,11 +167,12 @@ async def rodar_live(cfg, session_id: str | None, *, fone: bool = False, info: d
                 if not respondendo:
                     ev.set("detectando", "pode falar")
             elif ty == "partial":
+                atividade = time.monotonic()
                 if not respondendo:
                     ev.texto = m.get("text", ""); ev.set("captando", "ouvindo… (o silêncio encerra)")
             elif ty == "final":
                 ev.texto = m.get("text", ""); ev.reply = ""; respondendo = True; mudo = False
-                ev.set("pensando", "pensando…")
+                atividade = time.monotonic(); ev.set("pensando", "pensando…")
             elif ty == "reply_start":
                 mudo = False
             elif ty == "reply_delta":
@@ -153,7 +185,7 @@ async def rodar_live(cfg, session_id: str | None, *, fone: bool = False, info: d
                     marca = "✔" if m.get("estado") == "ok" else "✗"
                     ev.log = f"{marca} {desc} → {m.get('detalhe', '')}"
             elif ty == "reply_end":
-                respondendo = False
+                respondendo = False; turnos += 1; atividade = time.monotonic()
             elif ty == "error":
                 ev.log = f"⚠ {m.get('text', '')}"
 
@@ -164,27 +196,87 @@ async def rodar_live(cfg, session_id: str | None, *, fone: bool = False, info: d
             if not respondendo and not player.busy() and ev.estado in ("falando", "pensando"):
                 ev.nivel = 0.0; ev.set("detectando", "pode falar")
 
-    tarefas: list[asyncio.Task] = []
-    render = asyncio.create_task(hud.render_loop(ev))
-    try:
+    async def vigia() -> None:
+        """Encerra ESTA conversa: once → depois da 1ª resposta tocada · wake → 30 s sem ninguém falar."""
+        while not ev.quit:
+            await asyncio.sleep(0.2)
+            ocioso = not respondendo and not player.busy()
+            if modo == "once" and turnos >= 1 and ocioso:
+                return
+            if modo == "wake" and ocioso and time.monotonic() - atividade >= IDLE_WAKE_S:
+                return
+        return
+
+    async def conversa() -> None:
+        """Uma conexão com o /ws/voice na sessão atual, até q/Esc ou a vigia encerrar."""
+        nonlocal respondendo, mudo, turnos, atividade
+        respondendo = mudo = False; turnos = 0; atividade = time.monotonic()
+        while not mic_q.empty():                                      # descarta o áudio velho (o "braza", a saudação)
+            mic_q.get_nowait()
+        url = f"{cfg.server_ws_url}/ws/voice" + (f"?session_id={sid}" if sid else "")
         async with websockets.connect(url, max_size=None, ping_interval=None,
                                       proxy=os.getenv("SOCKS_PROXY") or None) as ws:
-            mic.start()
             ev.set("detectando", "conectado ✓ — pode falar")
-            tarefas = [asyncio.create_task(enviar(ws)), asyncio.create_task(receber(ws)),
-                       asyncio.create_task(volta_a_ouvir())]
-            await asyncio.wait({render, *tarefas}, return_when=asyncio.FIRST_COMPLETED)   # q/Esc ou a conexão caiu
-            ev.quit = True
-            try: await ws.send(dumps({"type": "bye"}))
-            except Exception: pass
-    except Exception as e:                                            # não derruba o CLI: mostra no painel e sai
-        ev.set("aguardando", f"⚠ {type(e).__name__}: {e}")
-        await asyncio.sleep(2.5)
-        raise
+            tarefas = [asyncio.create_task(f(ws)) for f in (enviar, receber)] + \
+                      [asyncio.create_task(volta_a_ouvir()), asyncio.create_task(vigia())]
+            try:
+                await asyncio.wait(tarefas, return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                for t in tarefas: t.cancel()
+                try: await ws.send(dumps({"type": "bye"}))
+                except Exception: pass
+
+    async def standby(wake) -> bool:
+        """wake: espera o "braza" no mic (local) e toca a saudação. False = saiu (q/Esc) no STANDBY."""
+        ev.texto = ev.reply = ""; ev.nivel = 0.0
+        while not mic_q.empty():                                      # descarta o que acumulou (carregando/conversa)
+            mic_q.get_nowait()
+        ev.set("aguardando", "diga \"braza\" pra acordar")
+        async def blocos_80ms():                                      # o openwakeword quer blocos de 80 ms
+            junto = b""
+            while not ev.quit:
+                junto += await mic_q.get()
+                if len(junto) >= SR * 80 // 1000 * 2:
+                    ev.nivel = hud.rms(junto) * 0.6
+                    yield junto; junto = b""
+        espera = asyncio.create_task(wake.wait_for_trigger(blocos_80ms()))
+        while not espera.done():
+            if ev.quit:
+                espera.cancel(); return False
+            await asyncio.sleep(0.1)
+        if getattr(cfg, "greeting_enabled", True):
+            pcm = _saudacao(getattr(cfg, "greeting_voice", "pm_santa"))
+            if pcm:
+                ev.set("falando", "acordei!"); player.feed(pcm)
+                while player.busy() and not ev.quit:
+                    ev.nivel = 0.5; await asyncio.sleep(0.05)
+        return not ev.quit
+
+    async def fluxo() -> None:
+        if modo != "wake":
+            await conversa(); return
+        ev.set("aguardando", "carregando o wake word…")
+        await asyncio.to_thread(_modelos_wake)                   # 1ª vez nesta máquina: baixa os modelos-base
+        from companion.wake import WakeWord
+        wake = await asyncio.to_thread(WakeWord, cfg.wake_models, cfg.wake_threshold)
+        while not ev.quit:
+            if not await standby(wake):
+                return
+            await conversa()
+
+    render = asyncio.create_task(hud.render_loop(ev))
+    principal = asyncio.create_task(fluxo())
+    try:
+        mic.start()
+        await asyncio.wait({render, principal}, return_when=asyncio.FIRST_COMPLETED)   # q/Esc, once acabou ou erro
+        if principal.done() and principal.exception():               # não derruba o CLI: mostra no painel e sai
+            e = principal.exception()
+            ev.set("aguardando", f"⚠ {type(e).__name__}: {e}"); await asyncio.sleep(2.5)
+            raise e  # type: ignore[misc]
     finally:
         ev.quit = True
-        for t in tarefas: t.cancel()
-        await asyncio.gather(render, return_exceptions=True)        # restaura o terminal antes de voltar pro CLI
+        principal.cancel()
+        await asyncio.gather(render, principal, return_exceptions=True)   # restaura o terminal antes de voltar
         try: mic.stop(); mic.close()
         except Exception: pass
         player.close()
@@ -219,15 +311,17 @@ async def _tocar_termux(pcm: bytes, rate: int) -> None:
         await asyncio.sleep(0.4)
 
 
-async def rodar_live_termux(cfg, session_id: str | None, *, info: dict | None = None) -> str | None:
+async def rodar_live_termux(cfg, session_id: str | None, *, modo: str = "continuo",
+                            info: dict | None = None) -> str | None:
     """LIVE no celular (Termux): mesmo painel e mesma sessão, mas por TURNOS — o Termux não dá áudio contínuo
     (termux-microphone-record grava em arquivo). Ciclo: grava → Enter envia (AAC cru; o server decodifica,
-    caminho já validado na voz do celular) → resposta falada → volta a gravar sozinho. q sai."""
+    caminho já validado na voz do celular) → resposta falada → volta a gravar sozinho. q sai.
+    modo once: um ciclo só e volta pro chat. (wake não existe aqui: sem áudio contínuo não dá pra escutar o "braza".)"""
     import websockets
     from companion.audio import GravacaoLivre
 
     ev = hud.EstadoVoz()
-    ev.info = {"sessao": (session_id or "nova")[:8], "audio": "por turno",
+    ev.info = {"sessao": (session_id or "nova")[:8], "audio": "por turno" + (" · once" if modo == "once" else ""),
                "dica": "Enter envia · q volta pro chat", **(info or {})}
     ev.set("aguardando", "conectando no server…")
     sid = session_id
@@ -301,7 +395,7 @@ async def rodar_live_termux(cfg, session_id: str | None, *, info: dict | None = 
             m = loads(await asyncio.wait_for(ws.recv(), timeout=15))   # 1º evento = a sessão em uso
             if m.get("type") == "session":
                 sid = m.get("session_id") or sid; ev.info["sessao"] = (sid or "nova")[:8]
-            while await turno(ws):
+            while await turno(ws) and modo != "once":
                 pass
             try: await ws.send(dumps({"type": "bye"}))
             except Exception: pass

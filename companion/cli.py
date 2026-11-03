@@ -787,9 +787,11 @@ async def _cmd_sessao(arg: str) -> None:
     else:
         _p(f"{DIM_A}   uso: /sessao N  ou  /sessao <início do id>  (veja /sessoes){R}\n")
 
-async def _cmd_live(fone: bool) -> None:
-    """/live — sai do chat pro PAINEL de voz na MESMA sessão; ao voltar (q/Esc), mostra os turnos falados."""
+async def _cmd_live(fone: bool, modo: str = "continuo") -> None:
+    """/live [wake|once] [fone] — sai do chat pro PAINEL de voz na MESMA sessão; ao voltar, mostra os turnos falados."""
     global session_id, ctx_usado, ctx_total, ctx_model, ctx_reservado, ultima_resposta
+    if modo == "wake" and _IS_TERMUX:
+        _p(f"{DIM_A}   /live wake não existe no celular (sem áudio contínuo pra escutar o \"braza\") — use /live ou /live once{R}\n"); return
     antes = 0
     if session_id:                                            # quantos turnos já tinha → depois mostra só os novos
         try:
@@ -801,9 +803,9 @@ async def _cmd_live(fone: bool) -> None:
         info = {"device": cfg.device_id, "modelo": (ctx_model or "—").split("/")[-1]}
         async with in_terminal():                             # suspende o prompt_toolkit; o painel usa a tela inteira
             if _IS_TERMUX:                                    # celular: por turnos (Enter envia), sem áudio contínuo
-                sid = await rodar_live_termux(cfg, session_id, info=info)
+                sid = await rodar_live_termux(cfg, session_id, modo=modo, info=info)
             else:
-                sid = await rodar_live(cfg, session_id, fone=fone, info=info)
+                sid = await rodar_live(cfg, session_id, fone=fone, modo=modo, info=info)
     except ModuleNotFoundError as e:                          # ex.: WSL (venv leve, sem áudio)
         _p(f"{DIM_A}   ⚠ live precisa de áudio ({e.name} não instalado aqui) — use no note ou no Windows (braza cli){R}\n"); return
     except Exception as e:
@@ -851,8 +853,9 @@ class _Comp(Completer):
             if c == "/think":
                 opts += [("/think off", "desliga"), ("/think full", "caixa"), ("/think colap", "só resumo")]
             elif c == "/live":
-                opts += ([("/live", "por turnos: Enter envia")] if _IS_TERMUX else
-                         [("/live", "alto-falante: mic mudo enquanto ele fala"), ("/live fone", "fone: pode interromper")])
+                opts += ([("/live", "por turnos: Enter envia"), ("/live once", "um turno e volta")] if _IS_TERMUX else
+                         [("/live", "sempre ouvindo"), ("/live wake", "espera \"braza\""), ("/live once", "um turno e volta"),
+                          ("/live fone", "fone: pode interromper"), ("/live wake fone", ""), ("/live once fone", "")])
             else:
                 opts.append((c, ""))
         for c, d in opts:
@@ -888,13 +891,15 @@ def _dispatch(msg: str, app) -> None:
         if respondendo:
             _p(f"{DIM_A}   espere a resposta terminar pra entrar no live{R}\n")
         else:
-            asyncio.create_task(_cmd_live(fone=len(partes) > 1 and partes[1] == "fone"))
+            args = partes[1:]
+            modo = "wake" if "wake" in args else ("once" if "once" in args else "continuo")
+            asyncio.create_task(_cmd_live(fone="fone" in args, modo=modo))
     elif cmd == "/nova":                               # próxima mensagem abre sessão nova (o server cria)
         session_id = None
         _p(f"{VERDE_A}   ✚ nova sessão — a próxima mensagem começa do zero{R}\n")
     elif cmd in ("/ajuda", "/help"):
         extra = "" if _IS_TERMUX else " · /anexo · Ctrl+V cola imagem"
-        _p(f"{DIM_A}   comandos: /voz (voz→texto) · /live [fone] (conversa falada; q volta) · /think [off|full|colap] (cicla se sem arg) · /sessoes [pág] · "
+        _p(f"{DIM_A}   comandos: /voz (voz→texto) · /live [wake|once] [fone] (conversa falada; q volta) · /think [off|full|colap] (cicla se sem arg) · /sessoes [pág] · "
            f"/sessao N|id · /nova{extra} · /sair{R}\n")
     else:
         _p(f"{DIM_A}   comando desconhecido: {cmd} (tente /ajuda){R}\n")
