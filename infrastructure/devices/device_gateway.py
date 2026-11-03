@@ -19,6 +19,17 @@ class DeviceGateway:
         self.rpc = rpc_manager
         self.service = device_service
     
+    async def listar_status(self) -> list[dict]:
+        """Todos os devices já registrados: conectado agora (e desde quando) e a última vez visto.
+        Conectados primeiro; depois do visto mais recente pro mais antigo."""
+        itens = []
+        for d in await self.service.list_all_devices():
+            desde = self.connections.desde(d.id)
+            itens.append({"id": d.id, "nome": d.name, "status": d.status, "conectado": desde is not None,
+                          "conectado_desde": desde, "ultima_vez": d.last_seen, "registrado_em": d.created_at})
+        itens.sort(key=lambda x: (not x["conectado"], -(x["ultima_vez"] or 0)))
+        return itens
+
     async def request(self, device_id: str | None, name: str, arguments: dict) -> str:
         if not device_id:
             return "[erro] device_id não fornecido"

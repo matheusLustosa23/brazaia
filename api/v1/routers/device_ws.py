@@ -22,6 +22,7 @@ async def device_ws(
     try:
         all_tools = container.ai.tools.get_all_tool_names()
         meta = await container.device.handshake.execute(ws, device_id, all_tools)
+        await container.device.service.update_heartbeat(device_id)   # "visto por último" = ao CONECTAR também
         cameras = meta.get("cameras") or [None]
         for cam in cameras:
             name = device_id if cam is None else f"{device_id}_{CAM_LABEL.get(cam, cam)}"
@@ -47,5 +48,9 @@ async def device_ws(
         # SEMPRE limpa (qualquer saida): sem isso, WinError 121 deixava device/cameras registrados
         # como fantasmas e, acumulando, travava o agente (API indisponivel com o processo vivo).
         container.device.gateway.connections.unregister(device_id)
+        try:                                            # e ao CAIR (antes só ao mandar mensagem — quase nunca)
+            await container.device.service.update_heartbeat(device_id)
+        except Exception:
+            pass
         for name in cam_sources:
             ws.app.state.vision.unregister(name)

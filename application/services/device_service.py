@@ -52,6 +52,9 @@ class DeviceService:
             return set()
         return set(device.allowed_tools)
     
+    async def list_all_devices(self) -> list[Device]:
+        return await self._registry.list_all()
+
     async def list_active_devices(self) -> list[Device]:
         devices = await self._registry.list_all()
         return [d for d in devices if d.status == "active"]
