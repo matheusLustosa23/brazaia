@@ -65,7 +65,8 @@ class Player:
             return len(self.buf) > 0 or time.monotonic() < self._fim
 
     def close(self) -> None:
-        try: self.stream.stop(); self.stream.close()
+        self.clear()                                      # sair (q) corta na hora: abort descarta o que o
+        try: self.stream.abort(); self.stream.close()     # dispositivo ainda segura (stop esperaria tocar tudo)
         except Exception: pass
 
 
@@ -173,8 +174,9 @@ async def rodar_live(cfg, session_id: str | None, *, fone: bool = False, modo: s
                     ev.set("detectando", "pode falar")
             elif ty == "partial":
                 atividade = time.monotonic()
-                if not respondendo:
-                    ev.texto = m.get("text", ""); ev.set("captando", "ouvindo… (o silêncio encerra)")
+                if not respondendo:                                   # você começou a falar de novo: a caixa mostra
+                    ev.texto = m.get("text", ""); ev.reply = ""       # só a fala nova (a resposta anterior sai)
+                    ev.set("captando", "ouvindo… (o silêncio encerra)")
             elif ty == "final":
                 ev.texto = m.get("text", ""); ev.reply = ""; respondendo = True; mudo = False
                 atividade = time.monotonic(); ev.set("pensando", "pensando…")
@@ -288,7 +290,9 @@ async def rodar_live(cfg, session_id: str | None, *, fone: bool = False, modo: s
     return sid
 
 
-async def _tocar_termux(pcm: bytes, rate: int) -> None:
+_n_wav = 0
+
+async def _tocar_termux(pcm: bytes, rate: int, parar=None) -> None:
     """Toca no termux-media-player e só volta quando ELE parar de tocar. O `tocar` do audio.py espera só a
     duração calculada; o player do Android demora a começar → o painel voltava pro radar (e o mic regravava)
     com a fala ainda tocando. Aqui pergunta ao player (`info`) até sair do 'Playing'."""
@@ -296,13 +300,17 @@ async def _tocar_termux(pcm: bytes, rate: int) -> None:
     from companion.audio import _DIR
     from companion.plataform import _run_sync
     os.makedirs(_DIR, exist_ok=True)
-    wav = f"{_DIR}/resposta_live.wav"
+    global _n_wav
+    _n_wav = (_n_wav + 1) % 4                                     # alterna arquivos: o próximo trecho não sobrescreve o que toca
+    wav = f"{_DIR}/resposta_live_{_n_wav}.wav"
     with wave.open(wav, "wb") as w:
         w.setnchannels(1); w.setsampwidth(2); w.setframerate(rate); w.writeframes(pcm)
     await _run_sync(["termux-media-player", "play", wav])
     dur = len(pcm) / 2 / rate
     t0 = time.monotonic(); tocou = False
     while time.monotonic() - t0 < dur + 20:                       # teto: a duração + folga p/ a demora do player
+        if parar is not None and parar():                         # q → para o player na hora
+            await _run_sync(["termux-media-player", "stop"]); return
         try:
             p = await asyncio.create_subprocess_exec("termux-media-player", "info",
                                                      stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
@@ -354,7 +362,7 @@ async def rodar_live_termux(cfg, session_id: str | None, *, modo: str = "continu
         nonlocal sid
         grav = GravacaoLivre()
         await grav.iniciar()
-        ev.texto = ""; ev.set("captando", "🎙 gravando — fale e aperte Enter")
+        ev.texto = ev.reply = ""; ev.set("captando", "🎙 gravando — fale e aperte Enter")
         fim = asyncio.Event(); asyncio.create_task(anima(fim, 0.25))
         enviar = await esperar_enter()
         fim.set()
@@ -364,11 +372,34 @@ async def rodar_live_termux(cfg, session_id: str | None, *, modo: str = "continu
         ev.set("pensando", f"enviando {len(aac) // 1024} KB…")
         await ws.send(dumps({"type": "audio_turn", "fmt": "aac"}))
         await ws.send(aac)
-        audio = bytearray()
+        fila: asyncio.Queue = asyncio.Queue()                     # trechos de áudio (1 por frase) na ordem
+        async def tocador() -> None:
+            """Toca cada frase assim que chega (não espera a resposta inteira). Junta o que acumulou enquanto a
+            anterior tocava → menos pausas (o player do Android demora a começar cada arquivo)."""
+            anim = asyncio.Event()
+            while True:
+                pcm = await fila.get()
+                acabou = pcm is None
+                pcm = pcm or b""
+                while not fila.empty():
+                    nxt = fila.get_nowait()
+                    if nxt is None:
+                        acabou = True; break
+                    pcm += nxt
+                if pcm and not ev.quit:
+                    if ev.estado != "falando":
+                        ev.set("falando", "falando…"); asyncio.create_task(anima(anim, 0.35))
+                    await _tocar_termux(pcm, TTS_SR, parar=lambda: ev.quit)
+                if acabou or ev.quit:
+                    anim.set(); return
+        tocando: asyncio.Task | None = None
         while True:
             msg = await asyncio.wait_for(ws.recv(), timeout=90)
             if isinstance(msg, (bytes, bytearray)):
-                audio += msg; continue
+                fila.put_nowait(bytes(msg))
+                if tocando is None:
+                    tocando = asyncio.create_task(tocador())
+                continue
             m = loads(msg); ty = m.get("type")
             if ty == "session":
                 sid = m.get("session_id") or sid; ev.info["sessao"] = (sid or "nova")[:8]
@@ -386,11 +417,9 @@ async def rodar_live_termux(cfg, session_id: str | None, *, modo: str = "continu
                 ev.log = f"⚠ {m.get('text', '')}"
             elif ty == "reply_end":
                 break
-        if audio and not ev.quit:
-            ev.set("falando", "falando…")
-            fim = asyncio.Event(); asyncio.create_task(anima(fim, 0.35))
-            await _tocar_termux(bytes(audio), TTS_SR)             # espera o PLAYER terminar (não só a duração)
-            fim.set()
+        if tocando is not None:                                   # resposta completa: espera a fila terminar de tocar
+            fila.put_nowait(None)
+            await tocando
         return not ev.quit
 
     async def conversa() -> None:
@@ -421,4 +450,6 @@ async def rodar_live_termux(cfg, session_id: str | None, *, modo: str = "continu
             pass
         tarefa.cancel()
         await asyncio.gather(render, tarefa, return_exceptions=True)
+        from companion.plataform import _run_sync              # q no meio da fala: o termux-media-player seguia tocando
+        await _run_sync(["termux-media-player", "stop"])
     return sid

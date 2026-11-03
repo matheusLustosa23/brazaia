@@ -234,13 +234,45 @@ def desenha_hud(tela, estado, nivel, t, W, H, reveal=1.0, log="", texto="", repl
             ("sessão",str(info.get("sessao","nova"))[:8], c),("áudio",str(info.get("audio","—"))[:10], c)]
     for i,(k,v,vc) in enumerate(linhas):
         tela.texto(W-26,4+i,k,CYAN_DIM); tela.texto(W-6-len(v),4+i,v,vc)
-    # rodapé — LOG ao vivo + você/braza (pra não ficar perdido) + dica
+    # rodapé — status + CAIXA da conversa (sua última fala + a resposta dela) + dica
     def _corta(s, w): return (s[:w-1]+"…") if len(s)>w else s
-    lw=W-4
-    if log:   tela.texto(2, H-4, _corta(f"▸ {log}", lw), c)
-    if texto: tela.texto(2, H-3, _corta(f"🫵 você:  {texto}", lw), CYAN_DIM)
-    if reply: tela.texto(2, H-2, _corta(f"🤖 braza: {reply}", lw), scale(CYAN,1.0))
+    hc = max(4, min(9, H // 4))                                 # altura da caixa
+    if log: tela.texto(2, H-2-hc, _corta(f"▸ {log}", W-4), c)
+    if texto or reply:
+        caixa_conversa(tela, 2, H-1-hc, W-4, hc, texto, reply, c)
     tela.texto(2, H-1, info.get("dica","q / Esc volta pro chat"), CYAN_DIM)
+
+def _quebra(texto: str, largura: int) -> list[str]:
+    """Quebra por PALAVRA respeitando a largura em colunas (emoji/CJK = 2)."""
+    linhas: list[str] = []
+    for para in (texto or "").split("\n"):
+        atual, larg = "", 0
+        for palavra in para.split(" "):
+            lp = sum(2 if _largo(ch) else 1 for ch in palavra)
+            if atual and larg + 1 + lp > largura:
+                linhas.append(atual); atual, larg = "", 0
+            while lp > largura:                                  # palavra maior que a linha: corta
+                linhas.append(palavra[:largura]); palavra = palavra[largura:]
+                lp = sum(2 if _largo(ch) else 1 for ch in palavra)
+            atual, larg = (f"{atual} {palavra}", larg + 1 + lp) if atual else (palavra, lp)
+        linhas.append(atual)
+    return linhas
+
+def caixa_conversa(tela, x, y, w, h, texto, reply, cor):
+    """Caixa "CONVERSA": a SUA última fala e a resposta dele a ELA (nada de turnos anteriores misturados).
+    Quebra por palavra; se não couber, mostra o FIM (a resposta chegando), mantendo a 1ª linha da sua fala."""
+    painel(tela, x, y, w, h, "CONVERSA", scale(CYAN, 0.8))
+    lw, alto = w - 4, h - 2
+    voce = _quebra(f"🫵 {texto}", lw) if texto else []
+    braza = _quebra(f"🤖 {reply}", lw) if reply else []
+    if len(voce) + len(braza) > alto:                           # não cabe: SUA fala inteira (até 3 linhas) + o FIM da resposta
+        voce = voce[:3] if len(voce) <= 3 else voce[:2] + ["…"]
+        sobra = alto - len(voce) - (1 if braza else 0)
+        braza = (["…"] + braza[-sobra:]) if braza and sobra > 0 else braza[-max(0, alto - len(voce)):]
+    corpo = [(l, CYAN_DIM) for l in voce] + [(l, scale(CYAN, 1.05)) for l in braza]
+    corpo = corpo[-alto:]
+    for i, (linha, c) in enumerate(corpo):
+        tela.texto(x + 2, y + 1 + i, linha, c)
 
 def _hud_compacto(tela, estado, nivel, W, H, reveal, log, texto, reply, info, acc, c):
     """Celular em pé: cabeçalho + estado/sinal numa linha + rodapé com quebra (o texto não cabe numa linha só)."""
@@ -252,20 +284,14 @@ def _hud_compacto(tela, estado, nivel, W, H, reveal, log, texto, reply, info, ac
     for i in range(bw): tela.put(x0+i,1,"▮" if i<fill else "·", acc if i<fill else GRID)
     tela.put(x0+bw,1,"]",CYAN_DIM)
     lw=W-2
-    def _linhas(s, n):                                   # quebra em até n linhas (mostra o FIM se não couber)
-        out=[s[i:i+lw] for i in range(0, len(s), lw)] or [""]
-        return out[-n:]
-    y=H-1
-    for i in range(W): tela.put(i,y," ",(0,0,0))
-    tela.texto(1, y, info.get("dica","q volta pro chat")[:lw], CYAN_DIM); y-=1
-    for txt,cor,n in ((f"🤖 {reply}",scale(CYAN,1.0),4) if reply else (None,None,0),
-                      (f"🫵 {texto}",CYAN_DIM,2) if texto else (None,None,0),
-                      (f"▸ {log}",c,1) if log else (None,None,0)):
-        if not txt: continue
-        for ln in reversed(_linhas(txt, n)):
-            if y < 3: break
-            for i in range(W): tela.put(i,y," ",(0,0,0)) # limpa a LINHA TODA (cor ≠ None: a chuva não redesenha por cima)
-            tela.texto(1,y,ln,cor); y-=1
+    for i in range(W): tela.put(i,H-1," ",(0,0,0))
+    tela.texto(1, H-1, info.get("dica","q volta pro chat")[:lw], CYAN_DIM)
+    hc = max(5, min(14, H // 3))                                # caixa da conversa: ~1/3 da tela em pé
+    if texto or reply:
+        caixa_conversa(tela, 0, H-1-hc, W, hc, texto, reply, c)
+    if log:
+        for i in range(W): tela.put(i,H-2-hc," ",(0,0,0))
+        tela.texto(1, H-2-hc, (f"▸ {log}")[:lw], c)
 
 # ───────────── chama Brasil (centro, ao FALAR) ─────────────
 FLAME_CH=".:!*^vw/|"
