@@ -12,7 +12,7 @@ from prompt_toolkit import PromptSession, print_formatted_text as pf
 from prompt_toolkit.patch_stdout import patch_stdout
 from prompt_toolkit.formatted_text import ANSI, StyleAndTextTuples
 from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.application import get_app
+from prompt_toolkit.application import get_app, in_terminal
 from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.styles import Style
 from rich.cells import cell_len
@@ -778,14 +778,53 @@ async def _cmd_sessao(arg: str) -> None:
     else:
         _p(f"{DIM_A}   uso: /sessao N  ou  /sessao <início do id>  (veja /sessoes){R}\n")
 
+async def _cmd_live(fone: bool) -> None:
+    """/live — sai do chat pro PAINEL de voz na MESMA sessão; ao voltar (q/Esc), mostra os turnos falados."""
+    global session_id, ctx_usado, ctx_total, ctx_model, ctx_reservado, ultima_resposta
+    antes = 0
+    if session_id:                                            # quantos turnos já tinha → depois mostra só os novos
+        try:
+            antes = len((await carregar_sessao(cfg, session_id)).get("narrative", []))
+        except Exception:
+            pass
+    try:
+        from companion.live import rodar_live, rodar_live_termux
+        info = {"device": cfg.device_id, "modelo": (ctx_model or "—").split("/")[-1]}
+        async with in_terminal():                             # suspende o prompt_toolkit; o painel usa a tela inteira
+            if _IS_TERMUX:                                    # celular: por turnos (Enter envia), sem áudio contínuo
+                sid = await rodar_live_termux(cfg, session_id, info=info)
+            else:
+                sid = await rodar_live(cfg, session_id, fone=fone, info=info)
+    except ModuleNotFoundError as e:                          # ex.: WSL (venv leve, sem áudio)
+        _p(f"{DIM_A}   ⚠ live precisa de áudio ({e.name} não instalado aqui) — use no note ou no Windows (braza cli){R}\n"); return
+    except Exception as e:
+        _p(f"{DIM_A}   ⚠ live: {type(e).__name__}: {e}{R}\n"); return
+    if not sid:
+        return
+    session_id = sid
+    try:
+        data = await carregar_sessao(cfg, sid)
+    except Exception as e:
+        _p(f"{DIM_A}   ⚠ não consegui recarregar a sessão: {e}{R}\n"); return
+    novos = (data.get("narrative") or [])[antes:]
+    _p(f"\n{VERDE_A}   🎙 voltou do live · {len(novos)} turno(s) falado(s) · sessão {sid[:8]}{R}\n")
+    if novos:
+        _render_narrativa(novos)
+        ultima_resposta = novos[-1].get("reply", "") or ultima_resposta
+    c = data.get("contexto") or {}
+    if c:
+        ctx_usado, ctx_total = c.get("usado", 0), c.get("total", 0)
+        ctx_reservado = c.get("reservado", ctx_reservado); ctx_model = c.get("model", "") or ctx_model
+    _p("\n")
+
 async def _cmd_sessoes(page: int) -> None:
     if await _atualizar_sessoes():
         _mostrar_sessoes(page)
 
 class _Comp(Completer):
     """Autocomplete dos slash-commands."""
-    CMDS = (["/voz", "/think", "/sessoes", "/sessao", "/nova", "/ajuda", "/sair"] if _IS_TERMUX
-            else ["/voz", "/anexo", "/think", "/sessoes", "/sessao", "/nova", "/ajuda", "/sair"])
+    CMDS = (["/voz", "/live", "/think", "/sessoes", "/sessao", "/nova", "/ajuda", "/sair"] if _IS_TERMUX
+            else ["/voz", "/live", "/anexo", "/think", "/sessoes", "/sessao", "/nova", "/ajuda", "/sair"])
     def get_completions(self, document, complete_event):
         txt = document.text_before_cursor
         if not txt.startswith("/"):
@@ -802,6 +841,9 @@ class _Comp(Completer):
         for c in self.CMDS:
             if c == "/think":
                 opts += [("/think off", "desliga"), ("/think full", "caixa"), ("/think colap", "só resumo")]
+            elif c == "/live":
+                opts += ([("/live", "por turnos: Enter envia")] if _IS_TERMUX else
+                         [("/live", "alto-falante: mic mudo enquanto ele fala"), ("/live fone", "fone: pode interromper")])
             else:
                 opts.append((c, ""))
         for c, d in opts:
@@ -833,15 +875,33 @@ def _dispatch(msg: str, app) -> None:
         asyncio.create_task(_cmd_sessoes(int(partes[1]) if len(partes) > 1 and partes[1].isdigit() else 1))
     elif cmd == "/sessao":
         asyncio.create_task(_cmd_sessao(partes[1] if len(partes) > 1 else ""))
+    elif cmd == "/live":                               # painel de voz na mesma sessão (q/Esc volta)
+        if respondendo:
+            _p(f"{DIM_A}   espere a resposta terminar pra entrar no live{R}\n")
+        else:
+            asyncio.create_task(_cmd_live(fone=len(partes) > 1 and partes[1] == "fone"))
     elif cmd == "/nova":                               # próxima mensagem abre sessão nova (o server cria)
         session_id = None
         _p(f"{VERDE_A}   ✚ nova sessão — a próxima mensagem começa do zero{R}\n")
     elif cmd in ("/ajuda", "/help"):
         extra = "" if _IS_TERMUX else " · /anexo · Ctrl+V cola imagem"
-        _p(f"{DIM_A}   comandos: /voz (voz→texto) · /think [off|full|colap] (cicla se sem arg) · /sessoes [pág] · "
+        _p(f"{DIM_A}   comandos: /voz (voz→texto) · /live [fone] (conversa falada; q volta) · /think [off|full|colap] (cicla se sem arg) · /sessoes [pág] · "
            f"/sessao N|id · /nova{extra} · /sair{R}\n")
     else:
         _p(f"{DIM_A}   comando desconhecido: {cmd} (tente /ajuda){R}\n")
+
+def _device_de_fundo() -> bool:
+    """No celular, o supervisor (companion/boot) roda `companion.connect --fg` com o MESMO DEVICE_ID do
+    ~/.brazaia.env. Se o CLI também conectasse, tomaria o registro e, ao sair, o agente apagaria o device
+    (o de fundo ficaria sem rota). Só no Termux e só se o --device não trocou o nome."""
+    if not _IS_TERMUX or os.getenv("BRAZA_DEVICE_EXPLICITO"):
+        return False
+    try:
+        from companion.connect import _pid_salvo, _pid_vivo
+        pid = _pid_salvo()
+        return bool(pid and _pid_vivo(pid))
+    except Exception:
+        return False
 
 async def main() -> None:
     kb = KeyBindings()
@@ -886,7 +946,7 @@ async def main() -> None:
     _osc_on()
     try:
         await _banner()                                         # "brazaia" no startup (colado no fluxo)
-        _p(f"{DIM_A}   digite e Enter · /voz{'' if _IS_TERMUX else ' · /anexo · Ctrl+V cola imagem'} · /sessoes · /sair{R}\n")
+        _p(f"{DIM_A}   digite e Enter · /voz · /live{'' if _IS_TERMUX else ' · /anexo · Ctrl+V cola imagem'} · /sessoes · /sair{R}\n")
         if await _atualizar_sessoes() and sessoes_cache:             # só avisa (não despeja a lista no startup)
             ult = sessoes_cache[0]
             _p(f"{DIM_A}   {len(sessoes_cache)} sessões · última {_quando(ult.get('updated_at', 0))}: "
@@ -894,7 +954,11 @@ async def main() -> None:
         asyncio.create_task(_ticker())
         import companion.connect as _dev                        # status vai pro FOOTER, sem spam no topo
         _dev.log = lambda *a, **k: None                          # silencia o log do connect (ele seta estado.device_status)
-        asyncio.create_task(conectar(cfg))                      # tools de device REAIS (reconecta sozinho)
+        if _device_de_fundo():                                  # Termux: o supervisor já mantém ESTE device conectado
+            estado.device_online = True; estado.device_status = "online"
+            _p(f"{DIM_A}   device {cfg.device_id}: usando o companion de fundo (supervisor){R}\n")
+        else:
+            asyncio.create_task(conectar(cfg))                  # tools de device REAIS (reconecta sozinho)
         with patch_stdout():
             try:
                 await session.prompt_async(_prompt_msg, bottom_toolbar=_toolbar)   # sem refresh_interval: redraw só via _ticker quando há animação (senão a seleção do terminal some)

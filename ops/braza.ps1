@@ -146,7 +146,7 @@ function StartCli($argv) {
   $encAntes = [Console]::OutputEncoding
   [Console]::OutputEncoding = [System.Text.Encoding]::UTF8                                      # emoji/box do CLI
   Push-Location $Repo
-  try { & (Join-Path $Repo '.venv\Scripts\python.exe') -m companion.cli }
+  try { & (Join-Path $Repo '.venv\Scripts\python.exe') -m companion }
   finally {
     Pop-Location
     [Console]::OutputEncoding = $encAntes

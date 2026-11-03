@@ -56,12 +56,12 @@ if [ "$MODO" = wsl ]; then
     uv venv -q --python 3.12 "$VENV"
     uv pip install -q --python "$VENV/bin/python" -r companion/requirements-termux.txt
   fi
-  exec "$VENV/bin/python" -m companion.cli
+  exec "$VENV/bin/python" -m companion
 else
   if [ "${TERM_PROGRAM:-}" = mintty ]; then               # mintty puro não é console do Windows; via winpty o
     echo "o Git Bash (mintty) não é console do Windows → o CLI quebra o render."   # ANSI do banner vira '?[1m…'
     echo "abra o Git Bash pelo Windows Terminal, ou use o WSL:  wsl -- bash /mnt/c/workspace/brazaia/ops/cli.sh"
     exit 1
   fi
-  exec "$REPO/.venv/Scripts/python.exe" -m companion.cli   # Windows Terminal/SSH = ConPTY (console de verdade)
+  exec "$REPO/.venv/Scripts/python.exe" -m companion      # Windows Terminal/SSH = ConPTY (console de verdade)
 fi
