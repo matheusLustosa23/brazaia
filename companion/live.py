@@ -73,13 +73,18 @@ IDLE_WAKE_S = 30.0                      # wake: 30 s sem ninguém falar → volt
 
 
 def _modelos_wake() -> None:
-    """O openwakeword precisa de 2 modelos-BASE (melspectrogram + embedding) que o pip NÃO traz — sem eles o
-    WakeWord quebra com NO_SUCHFILE. Baixa só esses (+ VAD) na 1ª vez; os wake words prontos de outras
-    palavras ficam de fora (o nosso é o companion/models/braza.onnx)."""
-    import openwakeword, openwakeword.utils
-    base = getattr(openwakeword, "FEATURE_MODELS")["melspectrogram"]["model_path"].replace(".tflite", ".onnx")
-    if not os.path.exists(base):
-        getattr(openwakeword.utils, "download_models")(model_names=["__so_os_modelos_base__"])
+    """O openwakeword precisa de 2 modelos-BASE (melspectrogram + embedding). A 0.4 já traz os dois no pacote;
+    as mais novas NÃO (o pip vem sem eles → NO_SUCHFILE). Confere a pasta do pacote e, se faltar, baixa só esses
+    (+ VAD) pela função da própria lib — os wake words prontos de outras palavras ficam de fora."""
+    import openwakeword
+    pasta = os.path.join(os.path.dirname(openwakeword.__file__), "resources", "models")
+    if os.path.exists(os.path.join(pasta, "melspectrogram.onnx")):
+        return
+    import openwakeword.utils
+    baixar = getattr(openwakeword.utils, "download_models", None)
+    if baixar is None:
+        raise RuntimeError(f"faltam os modelos-base do openwakeword em {pasta} e esta versão não sabe baixar")
+    baixar(model_names=["__so_os_modelos_base__"])
 
 
 def _saudacao(voz: str) -> bytes:
