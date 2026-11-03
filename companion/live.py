@@ -11,7 +11,7 @@ Eco/barge-in:
   sem fone (padrão) — HALF-DUPLEX: o mic fica mudo enquanto o agente fala (o alto-falante não vira "fala").
   fone (/live fone) — BARGE-IN: falar por cima corta o áudio na hora e manda {"type":"barge"} pro server.
 """
-import asyncio, os, sys, threading
+import asyncio, os, sys, threading, time
 from companion._json import dumps, loads
 from companion.ui import hud
 
@@ -30,18 +30,27 @@ def _mic_device():
 
 
 class Player:
-    """Saída gapless por callback: feed() enfileira, o callback consome. clear() corta na hora (barge-in)."""
+    """Saída gapless por callback: feed() enfileira, o callback consome. clear() corta na hora (barge-in).
+
+    busy() NÃO pode olhar só o nosso buffer: o do sistema (PulseAudio no note) puxa o áudio bem antes de ele
+    SOAR — o nosso esvaziava com segundos de fala pela frente, o painel voltava pro radar e o mic reabria
+    em cima da voz. Então o callback, ao ENTREGAR cada trecho pro dispositivo, empurra um "relógio de fim":
+    o trecho começa a soar quando o anterior acabar (ou daqui a `latency`, se estava parado) e dura o que dura."""
 
     def __init__(self) -> None:
         import sounddevice as sd
         self.buf = bytearray(); self.lock = threading.Lock()
+        self._fim = 0.0                                   # monotonic() em que o último trecho termina de SOAR
         self.stream = sd.RawOutputStream(samplerate=TTS_SR, channels=1, dtype="int16", blocksize=0, callback=self._cb)
+        self._lat = float(getattr(self.stream, "latency", 0.0) or 0.0)   # o que o dispositivo segura antes de soar
         self.stream.start()
 
     def _cb(self, outdata, frames, t, status) -> None:
         need = frames * 2
         with self.lock:
             n = min(need, len(self.buf)); outdata[:n] = bytes(self.buf[:n]); del self.buf[:n]
+            if n:                                         # este trecho soa DEPOIS do que já está na fila do dispositivo
+                self._fim = max(self._fim, time.monotonic() + self._lat) + n / 2 / TTS_SR
         if n < need:
             outdata[n:] = b"\x00" * (need - n)
 
@@ -49,10 +58,11 @@ class Player:
         with self.lock: self.buf.extend(pcm)
 
     def clear(self) -> None:
-        with self.lock: self.buf.clear()
+        with self.lock: self.buf.clear(); self._fim = time.monotonic()
 
     def busy(self) -> bool:
-        with self.lock: return len(self.buf) > 0
+        with self.lock:
+            return len(self.buf) > 0 or time.monotonic() < self._fim
 
     def close(self) -> None:
         try: self.stream.stop(); self.stream.close()
@@ -181,12 +191,40 @@ async def rodar_live(cfg, session_id: str | None, *, fone: bool = False, info: d
     return sid
 
 
+async def _tocar_termux(pcm: bytes, rate: int) -> None:
+    """Toca no termux-media-player e só volta quando ELE parar de tocar. O `tocar` do audio.py espera só a
+    duração calculada; o player do Android demora a começar → o painel voltava pro radar (e o mic regravava)
+    com a fala ainda tocando. Aqui pergunta ao player (`info`) até sair do 'Playing'."""
+    import time, wave
+    from companion.audio import _DIR
+    from companion.plataform import _run_sync
+    os.makedirs(_DIR, exist_ok=True)
+    wav = f"{_DIR}/resposta_live.wav"
+    with wave.open(wav, "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(rate); w.writeframes(pcm)
+    await _run_sync(["termux-media-player", "play", wav])
+    dur = len(pcm) / 2 / rate
+    t0 = time.monotonic(); tocou = False
+    while time.monotonic() - t0 < dur + 20:                       # teto: a duração + folga p/ a demora do player
+        try:
+            p = await asyncio.create_subprocess_exec("termux-media-player", "info",
+                                                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+            out = (await asyncio.wait_for(p.communicate(), 5))[0].decode(errors="ignore")
+        except Exception:                                         # sem 'info' → volta ao jeito antigo (duração)
+            await asyncio.sleep(max(0.0, dur + 0.3 - (time.monotonic() - t0))); return
+        if "Playing" in out:
+            tocou = True
+        elif tocou or time.monotonic() - t0 > dur + 3:           # parou depois de tocar (ou nunca começou)
+            return
+        await asyncio.sleep(0.4)
+
+
 async def rodar_live_termux(cfg, session_id: str | None, *, info: dict | None = None) -> str | None:
     """LIVE no celular (Termux): mesmo painel e mesma sessão, mas por TURNOS — o Termux não dá áudio contínuo
     (termux-microphone-record grava em arquivo). Ciclo: grava → Enter envia (AAC cru; o server decodifica,
     caminho já validado na voz do celular) → resposta falada → volta a gravar sozinho. q sai."""
     import websockets
-    from companion.audio import GravacaoLivre, tocar
+    from companion.audio import GravacaoLivre
 
     ev = hud.EstadoVoz()
     ev.info = {"sessao": (session_id or "nova")[:8], "audio": "por turno",
@@ -252,7 +290,7 @@ async def rodar_live_termux(cfg, session_id: str | None, *, info: dict | None = 
         if audio and not ev.quit:
             ev.set("falando", "falando…")
             fim = asyncio.Event(); asyncio.create_task(anima(fim, 0.35))
-            await tocar(bytes(audio), TTS_SR)                     # termux-media-player (espera a duração)
+            await _tocar_termux(bytes(audio), TTS_SR)             # espera o PLAYER terminar (não só a duração)
             fim.set()
         return not ev.quit
 
