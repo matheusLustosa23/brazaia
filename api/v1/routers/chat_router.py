@@ -9,7 +9,7 @@ from api.v1.sse import sse_event
 from application.services._flowlog import flow, curto
 from schemas.chat_schema import ChatData, ChatRequest
 from schemas.shared import ApiResponse
-from application.services.orchestrator import Orchestrator
+from application.services.orchestrator import Orchestrator, card_checklist
 
 router = APIRouter(prefix="/chat", tags=["chat"], route_class=ExcludeNoneRoute)
 
@@ -29,15 +29,6 @@ async def sessao(session_id: str, orch: Orchestrator = Depends(get_orchestrator)
             "contexto": await orch.contexto_atual(session_id)}
 
 
-def _card_checklist(passos: list[dict]) -> list[dict]:
-    """Eventos 'passo' do turno → checklist da narrativa (executando abre a linha, ok/erro fecha a MESMA por id)."""
-    linhas: dict[str, dict] = {}
-    for p in passos:
-        if p.get("estado") == "executando":
-            linhas[p.get("id")] = {"desc": p.get("porque") or p.get("tool") or "", "estado": "ok", "det": ""}
-        elif p.get("id") in linhas:
-            linhas[p["id"]].update(estado="ok" if p.get("estado") == "ok" else "err", det=p.get("detalhe", ""))
-    return list(linhas.values())
 
 
 @router.post(
@@ -99,7 +90,7 @@ async def chat(
                     yield sse_event({"delta": text}, event="token")
             if finish:                            # turno COMPLETO → narrativa (o que a tela mostrou) p/ replay fiel
                 await orch.salvar_narrativa(session_id, {
-                    "user": req.message, "image": bool(req.image), "checklist": _card_checklist(passos),
+                    "user": req.message, "image": bool(req.image), "checklist": card_checklist(passos),
                     "reply": "".join(parts), "finish_reason": finish,
                 })
                 ctx = await orch.contexto_atual(session_id)   # rodapé reflete o histórico que acabou de crescer

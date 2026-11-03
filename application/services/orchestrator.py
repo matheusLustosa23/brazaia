@@ -616,6 +616,18 @@ class Orchestrator:
         return {"usado": self._context.count(messages), "total": self._context.budget,
                 "reservado": self._context.reserved, "model": getattr(self._llm, "model", "")}
             
+def card_checklist(passos: list[dict]) -> list[dict]:
+    """Eventos 'passo' de um turno → checklist da narrativa (executando abre a linha, ok/erro fecha a MESMA por id).
+    Usado pelo chat (chat_router) e pela voz (voice_service) — o replay no CLI fica igual nos dois."""
+    linhas: dict[str, dict] = {}
+    for p in passos:
+        pid = str(p.get("id") or "")
+        if p.get("estado") == "executando":
+            linhas[pid] = {"desc": p.get("porque") or p.get("tool") or "", "estado": "ok", "det": ""}
+        elif pid in linhas:
+            linhas[pid].update(estado="ok" if p.get("estado") == "ok" else "err", det=p.get("detalhe", ""))
+    return list(linhas.values())
+
 def _porque(name: str, args: dict) -> str:
     """Rótulo da linha do checklist: tool + o arg mais descritivo (ex.: 'calculate · 17*23')."""
     for k in ("title", "expression", "desc", "file_id", "device", "text", "query"):

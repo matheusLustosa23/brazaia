@@ -13,7 +13,7 @@ import time
 
 import numpy as np
 
-from application.services.orchestrator import Orchestrator
+from application.services.orchestrator import Orchestrator, card_checklist
 from application.prompts import build_system
 from infrastructure.llm.client import no_think_var
 from infrastructure.voice.asr import Stabilizer, is_hallucination, collapse_repeats
@@ -149,12 +149,31 @@ class VoiceSession:
         t0 = time.perf_counter()
         ttft_ms = ttfa_ms = None        # time-to-first-token / time-to-first-audio
         tts_ms = 0.0
+        passos: list[dict] = []         # eventos 'passo' (tools) → painel do live + checklist da narrativa
+        finish: str | None = None
         token = no_think_var.set(True)  # desliga o thinking do Qwen3 só neste turno de voz
         try:
             async for kind, ev in self.orch.run_react(session_id=self.sid, user_message=text,
                                                 extra_system=build_system("voz"), think=False):
                 if self._cancel.is_set():
                     break
+                if kind == "event":
+                    tipo = ev.get("evento")
+                    if tipo == "passo":          # tool rodando/terminou → o painel mostra
+                        passos.append(ev)
+                        await self.emit({"type": "passo", **{k: v for k, v in ev.items() if k != "evento"}})
+                    elif tipo == "etapa" and ev.get("fase") == "inicio":
+                        # vai rodar tool: fala JÁ o que ficou no buffer ("vou calcular…" sem pontuação final
+                        # ficava preso e saía GRUDADO na resposta final, depois da tool) e separa os blocos
+                        tts_ms += await self._speak(chunk.flush())
+                        if reply.strip() and not reply.endswith("\n"):
+                            reply += "\n\n"
+                            await self.emit({"type": "reply_delta", "text": "\n\n"})
+                    elif tipo == "fim":
+                        finish = ev.get("finish_reason")
+                    elif tipo == "guard":        # o reprovado já foi falado; a narrativa guarda só o válido
+                        reply = ""
+                    continue
                 if kind != "reply":              # run_react agora etiqueta: voz fala só a RESPOSTA (ignora raciocínio)
                     continue
                 if ttft_ms is None:
@@ -179,6 +198,14 @@ class VoiceSession:
             await self.emit({"type": "error", "text": f"{type(e).__name__}: {e}"})
         finally:
             no_think_var.reset(token)
+        if finish and not self._cancel.is_set():   # turno COMPLETO → narrativa: o CLI repete os turnos de voz igual aos de texto
+            try:
+                await self.orch.salvar_narrativa(self.sid, {
+                    "user": text, "image": False, "checklist": card_checklist(passos),
+                    "reply": reply, "finish_reason": finish, "via": "voz",
+                })
+            except Exception:
+                logger.exception("[voz] falha salvando a narrativa do turno")
         tempos = {
             "stt_ms": round(self._last_stt_ms),
             "ttft_ms": round(ttft_ms or 0),      # STT→1º token do LLM ("pensar")
