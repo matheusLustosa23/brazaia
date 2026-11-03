@@ -255,7 +255,7 @@ def _prompt_msg() -> StyleAndTextTuples:
         for ln in cauda.split("\n")[-STREAM_MAX:]:
             linhas.append((barra, "▌"))
             linhas.append((txtcor, " " + (ln[:lim]).ljust(lim) + "\n"))
-    linhas.append((BORDA, "\n╭─ mensagem " + "─" * (w - 12) + "╮\n"))
+    linhas.append((BORDA, "\n╭─ mensagem " + "─" * max(0, w - 13) + "╮\n"))   # 12 + traços + ╮ = w (não w+1: quebrava)
     linhas += [(BORDA, "│ "), (f"bold {AZUL}", "❯ ")]
     return linhas
 
@@ -271,8 +271,17 @@ def _toolbar() -> StyleAndTextTuples:
     sid = (session_id or "nova")[:8]
     dev = (cfg.device_id if cfg else "device")
     th = {"off": "💭off", "full": "💭full", "colap": "💭colap"}.get(think_mode, "💭off")
-    txt = f" {status} · {dev} · sessão {sid}{ctx}{out} · {th} · {modelo} "
-    fill = max(1, w - len(txt) - 6)
+    # tela estreita (celular): vai largando o MENOS importante até caber — modelo, thinking, "sessão", ctx curto
+    caber = w - 5                                                            # ╰─ ● … ─╯ ocupam 5 colunas
+    opcoes = [f" {status} · {dev} · sessão {sid}{ctx}{out} · {th} · {modelo} ",
+              f" {status} · {dev} · sessão {sid}{ctx}{out} · {th} ",
+              f" {status} · {dev} · {sid}{ctx}{out} ",
+              f" {status} · {dev}" + (f" · ctx {pct}%" if ctx_total else "") + (f" · ↑{tok_count}" if out else "") + " ",
+              f" {status} · {dev} "]
+    txt = next((o for o in opcoes if cell_len(o) <= caber), opcoes[-1])
+    while cell_len(txt) > caber and len(txt) > 1:                            # último recurso: corta
+        txt = txt[:-2] + " "
+    fill = max(1, w - cell_len(txt) - 4)
     return [(BORDA, "╰─"), (dot, "●"), (DIM, txt), (BORDA, "─" * fill + "╯")]
 
 def _ponto_flush(buf: str) -> int:

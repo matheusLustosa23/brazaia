@@ -43,7 +43,9 @@ def _poll_key():
             if msvcrt.kbhit(): return msvcrt.getwch()
         except Exception: pass
         return None
-    return sys.stdin.read(1) if select.select([sys.stdin], [], [], 0)[0] else None
+    fd=sys.stdin.fileno()                                 # os.read CRU: o sys.stdin bufferizado engolia o resto
+    if not select.select([fd], [], [], 0)[0]: return None  # das sequências (\x1b[A) e a seta virava "Esc sozinho"
+    return os.read(fd, 64).decode("utf-8", errors="ignore") or None
 
 ESTADOS = ["aguardando","detectando","captando","pensando","falando"]
 ROTULO  = {"aguardando":"STANDBY","detectando":"DETECTANDO","captando":"OUVINDO",
@@ -102,12 +104,25 @@ def desenha_bruteforce(tela,x,y,w,estado,t):
         tela.texto(x+2,y+1+i,s[:w-4],col)
 
 # ───────────── buffer de células ─────────────
+def _largo(c: str) -> bool:
+    """Ocupa 2 colunas? (east-asian wide/fullwidth + emojis). Os katakana meia-largura da chuva (ｱｲｳ) são 1."""
+    import unicodedata
+    return unicodedata.east_asian_width(c) in ("W", "F") or 0x1F300 <= ord(c) <= 0x1FAFF
+
 class Tela:
     def __init__(self,w,h): self.w,self.h=w,h; self.ch=[[" "]*w for _ in range(h)]; self.co=[[None]*w for _ in range(h)]
     def put(self,x,y,ch,cor):
         if 0<=x<self.w and 0<=y<self.h: self.ch[y][x]=ch; self.co[y][x]=cor
     def texto(self,x,y,s,cor):
-        for i,c in enumerate(s): self.put(x+i,y,c,cor)
+        """Caractere LARGO (emoji 🫵🤖, CJK) ocupa 2 colunas no terminal: a célula seguinte vira continuação ("")
+        e o frame não escreve nada nela. Sem isso a linha passava da largura, quebrava e o quadro todo descia."""
+        for c in s:
+            if x >= self.w: break
+            if _largo(c):
+                if x+1 >= self.w: break                       # não cabe inteiro na borda → corta
+                self.put(x,y,c,cor); self.put(x+1,y,"",cor); x+=2
+            else:
+                self.put(x,y,c,cor); x+=1
     def frame(self):
         out=["\033[H"]
         for y in range(self.h):
@@ -119,7 +134,7 @@ class Tela:
                     buf.append(" ")
                 else:
                     if c!=last: buf.append(f"\033[38;2;{c[0]};{c[1]};{c[2]}m"); last=c
-                    buf.append(self.ch[y][x])
+                    buf.append(self.ch[y][x])                     # continuação de largo = "" (não escreve)
             if last is not None: buf.append("\033[0m")
             out.append("".join(buf));
             if y<self.h-1: out.append("\n")
@@ -241,6 +256,7 @@ def _hud_compacto(tela, estado, nivel, W, H, reveal, log, texto, reply, info, ac
         out=[s[i:i+lw] for i in range(0, len(s), lw)] or [""]
         return out[-n:]
     y=H-1
+    for i in range(W): tela.put(i,y," ",(0,0,0))
     tela.texto(1, y, info.get("dica","q volta pro chat")[:lw], CYAN_DIM); y-=1
     for txt,cor,n in ((f"🤖 {reply}",scale(CYAN,1.0),4) if reply else (None,None,0),
                       (f"🫵 {texto}",CYAN_DIM,2) if texto else (None,None,0),
@@ -248,7 +264,7 @@ def _hud_compacto(tela, estado, nivel, W, H, reveal, log, texto, reply, info, ac
         if not txt: continue
         for ln in reversed(_linhas(txt, n)):
             if y < 3: break
-            for i in range(lw): tela.put(1+i,y," ",None)  # limpa a linha (a chuva não mistura com o texto)
+            for i in range(W): tela.put(i,y," ",(0,0,0)) # limpa a LINHA TODA (cor ≠ None: a chuva não redesenha por cima)
             tela.texto(1,y,ln,cor); y-=1
 
 # ───────────── chama Brasil (centro, ao FALAR) ─────────────
@@ -348,6 +364,23 @@ def rms(chunk: bytes) -> float:
     if not a: return 0.0
     return clamp(math.sqrt(sum(x*x for x in a)/len(a))/3000.0)
 
+try:                                                     # no celular o VOLTAR do Android manda o mesmo \x1b do Esc:
+    from companion.plataform import _IS_TERMUX as _CELULAR  # lá só o q fecha (senão o voltar derrubava o live)
+except Exception:
+    _CELULAR = False
+
+def _tecla():
+    """Teclas digitadas desde a última leitura, SEM as sequências de escape (setas, F1…: \x1b[A, \x1bOP…).
+    Esc SOZINHO volta "\x1b". No Windows (msvcrt) as setas vêm como \xe0+letra, não \x1b — nada a filtrar."""
+    k=_poll_key()
+    if not k or not k.startswith("\x1b"): return k
+    if k=="\x1b":
+        time.sleep(0.02)                                  # sequência que chegou partida: o resto vem logo
+        resto=_poll_key()
+        if not resto: return "\x1b"
+        k+=resto
+    return None                                           # \x1b + algo = sequência (seta etc.) → ignora
+
 async def render_loop(ev: EstadoVoz) -> None:
     """Desenha o painel a ~20 fps até ev.quit (ou q/Esc/Ctrl+C). Escreve no stdout REAL (sys.__stdout__):
     dentro do CLI o sys.stdout é o proxy do patch_stdout, que jogaria o quadro no scrollback."""
@@ -359,9 +392,9 @@ async def render_loop(ev: EstadoVoz) -> None:
             sz=os.get_terminal_size(); W,H=sz.columns,sz.lines
             if rain is None or rain.w!=W or rain.h!=H: rain=Rain(W,H)
             now=time.monotonic(); dt=min(0.06,now-last); last=now; t=now-t0
-            k=_poll_key()
-            if k in ("q","Q","\x1b","\x03"): ev.quit=True; break
-            if k: ev.teclas.append(k)
+            k=_tecla() or ""
+            if any(c in k for c in "qQ\x03") or (k=="\x1b" and not _CELULAR): ev.quit=True; break
+            if k!="\x1b": ev.teclas.extend(k)
             niv += (ev.nivel-niv)*min(1.0,dt*8)           # suaviza o nível -> fluido
             reveal=clamp((now-ev.t_estado)/0.7)
             out.write(compor_frame(W,H,rain,ev.estado,niv,t,reveal,dt,
