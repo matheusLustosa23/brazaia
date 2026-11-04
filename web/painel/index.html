@@ -15,6 +15,7 @@
       <a href="#devices" data-aba="devices">Devices</a>
       <a href="#mapa" data-aba="mapa">Mapa</a>
       <a href="#cerebro" data-aba="cerebro">Cérebro</a>
+      <a href="#acervo" data-aba="acervo">Acervo</a>
     </nav>
     <div class="status" id="status">—</div>
     <button type="button" class="atualizar" id="btn-atualizar" title="Atualizar agora">↻ Atualizar</button>
@@ -177,6 +178,32 @@
         </div>
       </div>
     </section>
+    <!-- ── ACERVO ─────────────────────────────────────────────────────────────────────────── -->
+    <section id="aba-acervo" class="aba" hidden>
+      <div class="cabeca">
+        <h1>Acervo</h1>
+        <p class="sub" id="ac-resumo">Documentos que o agente consulta antes de responder (search_docs / read_doc).</p>
+      </div>
+      <div class="grade-cards ac-topo">
+        <div class="card">
+          <h3>Adicionar documentos</h3>
+          <p class="meta">PDF, Word, PowerPoint, Markdown, TXT, HTML, planilha. Viram texto, são cortados em seções e
+            indexados — depois é só perguntar no chat. Mesmo nome de arquivo = substitui.</p>
+          <div class="drop" id="ac-drop" tabindex="0" role="button"><span class="drop-texto">Solte os arquivos aqui (ou toque para escolher)</span></div>
+          <input type="file" id="ac-arq" multiple hidden accept=".pdf,.docx,.pptx,.md,.markdown,.txt,.html,.htm,.csv,.json,.xlsx">
+          <label class="campo" style="margin-top:.6rem">Coleção <input type="text" id="ac-colecao" value="anexos"></label>
+          <div id="ac-envios"></div>
+        </div>
+        <div class="card">
+          <h3>Testar a busca</h3>
+          <p class="meta">O que o agente encontraria com search_docs.</p>
+          <input type="text" id="ac-busca" placeholder="ex.: pilares do scrum, multa por atraso…">
+          <div id="ac-trechos"></div>
+        </div>
+      </div>
+      <div id="ac-lista" class="ac-lista"></div>
+    </section>
+
   </main>
 
   <div class="modal" id="modal" hidden>
@@ -191,5 +218,6 @@
   <script src="/painel/static/vendor/force-graph/force-graph.min.js"></script>
   <script src="/painel/static/painel.js"></script>
   <script src="/painel/static/cerebro.js"></script>
+  <script src="/painel/static/acervo.js"></script>
 </body>
 </html>

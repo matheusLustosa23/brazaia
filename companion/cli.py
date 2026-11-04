@@ -897,6 +897,22 @@ def _abrir_local(caminho: str) -> None:
         subprocess.Popen(["xdg-open", caminho], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                          start_new_session=True)
 
+async def _cmd_documento(caminho: str) -> None:
+    """/documento — manda um arquivo (PDF, Word, PowerPoint, MD…) pro ACERVO; o agente passa a consultá-lo
+    (search_docs/read_doc) quando o assunto aparecer. Mesmo nome de arquivo = substitui."""
+    from companion.acervo import enviar_documento
+    caminho = caminho.strip().strip('"').strip("'")
+    if not caminho:
+        _p(f"{DIM_A}   uso: /documento caminho/do/arquivo.pdf  (PDF, Word, PowerPoint, MD, TXT, HTML){R}\n"); return
+    _p(f"{DIM_A}   📎 enviando {caminho}…{R}\n")
+    try:
+        r = await enviar_documento(cfg, caminho)
+    except Exception as e:
+        _p(f"{DIM_A}   ⚠ {e}{R}\n"); return
+    tam = f"{r['chars'] // 1000} mil" if r["chars"] >= 1000 else str(r["chars"])
+    _p(f"{VERDE_A}   📎 “{r['titulo']}” no acervo · {r['secoes']} seção(ões), {tam} caracteres — pode perguntar sobre ele{R}\n")
+
+
 async def _cmd_abrir(arg: str) -> None:
     """/abrir N (da lista do /arquivos) ou /abrir <file_id> — baixa do server e abre neste device."""
     if arg.isdigit() and arquivos_cache and 1 <= int(arg) <= len(arquivos_cache):
@@ -943,7 +959,8 @@ _NIVEIS: dict[str, list[list[tuple[str, str]]]] = {
 }
 _DESC = {"/voz": "fala vira texto no input", "/live": "conversa falada", "/anexo": "imagem", "/think": "raciocínio",
          "/sessoes": "lista; digite pra filtrar", "/sessao": "retomar uma", "/nova": "começar outra", "/modo": "chat ou tutor",
-         "/arquivos": "o que a sessão gerou", "/abrir": "abrir um arquivo gerado", "/limpar": "apaga o input",
+         "/arquivos": "o que a sessão gerou", "/abrir": "abrir um arquivo gerado", "/documento": "manda arquivo pro acervo",
+         "/limpar": "apaga o input",
          "/ajuda": "", "/sair": ""}
 
 def _tarefa(coro) -> None:
@@ -963,8 +980,8 @@ def _sessoes_filtradas(termo: str) -> list:
 class _Comp(Completer):
     """Autocomplete em NÍVEIS: só os comandos na raiz; escolheu um → mostra as opções dele, e assim por diante.
     No meio do texto, só os comandos de edição (/voz, /limpar)."""
-    CMDS = (["/voz", "/live", "/think", "/sessoes", "/sessao", "/nova", "/modo", "/arquivos", "/abrir", "/limpar", "/ajuda", "/sair"] if _IS_TERMUX
-            else ["/voz", "/live", "/anexo", "/think", "/sessoes", "/sessao", "/nova", "/modo", "/arquivos", "/abrir", "/limpar", "/ajuda", "/sair"])
+    CMDS = (["/voz", "/live", "/think", "/sessoes", "/sessao", "/nova", "/modo", "/arquivos", "/abrir", "/documento", "/limpar", "/ajuda", "/sair"] if _IS_TERMUX
+            else ["/voz", "/live", "/anexo", "/think", "/sessoes", "/sessao", "/nova", "/modo", "/arquivos", "/abrir", "/documento", "/limpar", "/ajuda", "/sair"])
 
     def get_completions(self, document, complete_event):
         txt = _segmento_comando(document.text_before_cursor)   # comando no INÍCIO ou no FIM de um texto já escrito
@@ -1057,6 +1074,8 @@ def _dispatch(msg: str, app) -> None:
         _tarefa(_cmd_arquivos())
     elif cmd == "/abrir":
         _tarefa(_cmd_abrir(partes[1] if len(partes) > 1 else ""))
+    elif cmd == "/documento":                          # /documento ~/Downloads/contrato.pdf → acervo
+        _tarefa(_cmd_documento(" ".join(partes[1:])))
     elif cmd == "/modo":                               # chat | tutor — vai na próxima mensagem e fica gravado na sessão
         if len(partes) > 1 and partes[1] in ("chat", "tutor"):
             modo_sessao = modo_pendente = partes[1]
@@ -1083,7 +1102,7 @@ def _dispatch(msg: str, app) -> None:
     elif cmd in ("/ajuda", "/help"):
         extra = "" if _IS_TERMUX else " · /anexo · Ctrl+V cola imagem"
         _p(f"{DIM_A}   comandos: /voz (voz→texto) · /live [wake|once] [fone] (conversa falada; q volta) · /think [off|full|colap] (cicla se sem arg) · /sessoes [filtro] · "
-           f"/sessao N|id · /nova · /modo tutor|chat · /arquivos · /abrir N · /limpar (ou Ctrl+U){extra} · /sair{R}\n"
+           f"/sessao N|id · /nova · /modo tutor|chat · /arquivos · /abrir N · /documento ARQUIVO (pro acervo) · /limpar (ou Ctrl+U){extra} · /sair{R}\n"
            f"{DIM_A}   comandos com › abrem opções: escolha e o próximo nível aparece. /voz e /limpar valem no fim de um texto já escrito.{R}\n")
     else:
         _p(f"{DIM_A}   comando desconhecido: {cmd} (tente /ajuda){R}\n")

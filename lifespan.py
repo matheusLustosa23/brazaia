@@ -20,6 +20,9 @@ from infrastructure.tools.open_file import OpenFileTool
 from infrastructure.tools.calculate import CalculateTool
 from infrastructure.tools.list_devices import ListDevicesTool
 from infrastructure.tools.get_location import GetLocationTool
+from infrastructure.tools.search_docs import SearchDocsTool
+from infrastructure.tools.read_doc import ReadDocTool
+from infrastructure.acervo.acervo import Acervo
 from infrastructure.memory.cerebro_store import SqliteCerebroStore
 from infrastructure.memory.session_store import SqlLiteSessionStore
 from application.services.context_service import ContextManager
@@ -99,6 +102,10 @@ async def lifespan(app: FastAPI):
     registry.register(CalculateTool())
     registry.register(ListDevicesTool(device_gateway))
     registry.register(GetLocationTool(device_gateway))
+    acervo = Acervo(settings.acervo_dir, settings.acervo_db_path)   # material das disciplinas e documentos
+    app.state.acervo = acervo                                        # rota /acervo (enviar pelo CLI/celular/painel)
+    registry.register(SearchDocsTool(acervo))
+    registry.register(ReadDocTool(acervo))
 
     # ── Orchestrator ──
     orchestrator = Orchestrator(
@@ -108,7 +115,8 @@ async def lifespan(app: FastAPI):
         memory=memory,
         device_gateway=device_gateway,
         session_store=_session_store,
-        file_store=store
+        file_store=store,
+        acervo=acervo,
     )
 
     # ── Sub-Containers ──

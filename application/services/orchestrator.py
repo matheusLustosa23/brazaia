@@ -101,6 +101,7 @@ class Orchestrator:
         device_gateway: DeviceGateway,
         session_store: SessionStore,
         file_store: FileStore,
+        acervo=None,
         *,
         confirm: ConfirmFn | None = None,
         audit_log: BinaryIO | None = None
@@ -115,6 +116,7 @@ class Orchestrator:
         self._session_store = session_store
         self._traces: dict[str, list[dict]] = {}
         self._file_store = file_store
+        self._acervo = acervo                                  # documentos que o dono mandou (lista curta no system)
 
     
     async def run_react(self, session_id, user_message, *, image=None, device_id=None, extra_system=None, think=True,
@@ -123,6 +125,12 @@ class Orchestrator:
         memory_block = await self._memory.render_compact(user_message)
         # extra_system (ex.: build_system("voz")) é o system COMPLETO quando vem; senão o do modo (chat|tutor).
         system = extra_system if extra_system else self._system_prompt(modo, user_message)
+        if self._acervo is not None:                        # sem isto ele não sabe que o documento existe e responde genérico
+            anexos = [d for d in self._acervo.docs() if d["colecao"] != "estacio"][-15:]
+            if anexos:
+                system += ("\n\nDocumentos que o dono te mandou (consulte com search_docs/read_doc quando a pergunta "
+                           "tocar nesses assuntos, mesmo sem ele citar o documento): "
+                           + "; ".join(f"“{d['titulo']}” (doc={d['id']})" for d in anexos) + ".")
         if device_id:                                       # o modelo não sabia de onde o dono fala → abria no "server"
             system += (f"\n\nO dono está falando com você pelo device '{device_id}'. Pediu pra abrir/mostrar sem "
                        f"dizer onde → use ESTE device.")
@@ -415,7 +423,9 @@ class Orchestrator:
             else:
                 # ids REAIS que a tool devolveu (create_file/screenshot põem o file_id no próprio retorno)
                 ids_reais.update(re.findall(r"(?:file_id|image_id)=([0-9a-f]{12})", obs))
-                tool_content =  await self._context.summarize(obs, foco=f"resultado de {name}")
+                # fonte/dado chega INTEIRO (material, memória, registros, localização): resumir a fonte é o que
+                # faz o modelo inventar. As outras só são resumidas se forem enormes (summarize decide).
+                tool_content = obs if name in _NAO_RESUMIR else await self._context.summarize(obs, foco=f"resultado de {name}")
                 trace_txt = tool_content
         
             passos.append((tc.name, trace_txt))
@@ -542,6 +552,7 @@ class Orchestrator:
         return {"usado": self._context.count(messages), "total": self._context.budget,
                 "reservado": self._context.reserved, "model": getattr(self._llm, "model", "")}
             
+_NAO_RESUMIR = {"search_docs", "read_doc", "recall", "query_log", "get_location", "list_devices"}
 _AUTORIA = {"create_file"}    # tools cujo argumento 'body' É o conteúdo autorado (ver _enxuga_autoria)
 
 
