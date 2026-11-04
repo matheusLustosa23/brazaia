@@ -3,33 +3,111 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
   <title>Painel do agente</title>
   <link rel="stylesheet" href="/painel/static/vendor/leaflet/leaflet.css">
   <link rel="stylesheet" href="/painel/static/painel.css">
 </head>
 <body>
   <header class="topo">
-    <div class="marca"><span class="logo">●</span> Painel</div>
+    <div class="marca"><span class="logo">◉</span> BRAZA<span class="barra">//</span><span class="sub-marca">painel</span></div>
     <nav class="abas" id="abas">
       <a href="#devices" data-aba="devices">Devices</a>
+      <a href="#mapa" data-aba="mapa">Mapa</a>
       <a href="#cerebro" data-aba="cerebro" class="breve" title="P3">Cérebro</a>
     </nav>
     <div class="status" id="status">—</div>
+    <button type="button" class="atualizar" id="btn-atualizar" title="Atualizar agora">↻ Atualizar</button>
   </header>
 
   <main>
+    <!-- ── DEVICES ─────────────────────────────────────────────────────────────────────────── -->
     <section id="aba-devices" class="aba">
       <div class="cabeca">
         <h1>Devices</h1>
         <p class="sub" id="resumo-devices">carregando…</p>
       </div>
-      <div class="mapa-caixa">
-        <div id="mapa" class="mapa" role="region" aria-label="Mapa dos devices"></div>
-        <p class="legenda-mapa" id="legenda-mapa">Última posição de cada device. “Trilha 24h” num cartão mostra o caminho.</p>
+      <div class="devices-layout">
+        <div class="lista" id="lista-devices" aria-label="Devices"></div>
+        <aside class="console" id="console" aria-live="polite">
+          <div class="vazio">Escolha um device à esquerda para usar as ferramentas dele.</div>
+        </aside>
       </div>
-      <div class="grade" id="lista-devices"></div>
     </section>
 
+    <!-- ── MAPA ─────────────────────────────────────────────────────────────────────────────── -->
+    <section id="aba-mapa" class="aba" hidden>
+      <div class="cabeca">
+        <h1>Mapa</h1>
+        <p class="sub" id="resumo-mapa">Última posição de cada device; escolha um device e o intervalo para ver a trilha.</p>
+      </div>
+
+      <div class="card barra-mapa">
+        <div class="barra-linha">
+          <label class="campo c-device">Device
+            <select id="f-device"><option value="">Todos (última posição)</option></select>
+          </label>
+          <div class="campo">Intervalo
+            <div class="chips-sel" id="f-presets">
+              <button type="button" data-h="1">1 h</button>
+              <button type="button" data-h="24" class="sel">24 h</button>
+              <button type="button" data-h="168">7 dias</button>
+              <button type="button" data-h="720">30 dias</button>
+              <button type="button" data-h="0">Tudo</button>
+            </div>
+          </div>
+        </div>
+        <div class="barra-linha">
+          <label class="campo">De <input type="datetime-local" id="f-de"></label>
+          <label class="campo">Até <input type="datetime-local" id="f-ate"></label>
+          <button type="button" class="neon" id="f-aplicar">Aplicar</button>
+          <span class="separador" aria-hidden="true"></span>
+          <label class="campo">Camada
+            <select id="f-camada">
+              <option value="escuro">Escuro</option>
+              <option value="ruas">Ruas</option>
+              <option value="satelite">Satélite</option>
+            </select>
+          </label>
+          <div class="campo">Tamanho
+            <div class="chips-sel" id="f-altura">
+              <button type="button" data-a="320">P</button>
+              <button type="button" data-a="520" class="sel">M</button>
+              <button type="button" data-a="760">G</button>
+            </div>
+          </div>
+          <div class="campo">Trilha
+            <div class="chips-sel"><button type="button" id="f-linha" title="liga/desliga a linha (os pontos ficam)">Linha</button></div>
+          </div>
+          <button type="button" id="f-cheia" title="Tela cheia">⛶ Tela cheia</button>
+        </div>
+      </div>
+
+      <div class="mapa-caixa" id="mapa-caixa">
+        <div id="mapa" class="mapa" role="region" aria-label="Mapa dos devices"></div>
+        <button type="button" class="sair-cheia" id="f-sair-cheia" hidden>✕ sair</button>
+      </div>
+      <p class="legenda" id="legenda-mapa">Arraste a borda de baixo do mapa para mudar a altura.</p>
+
+      <div class="grade-cards">
+        <div class="card" id="card-compartilhar" hidden>
+          <h3>Compartilhar posição</h3>
+          <p class="meta" id="compartilhar-alvo">Escolha um device com posição.</p>
+          <div class="links-share" id="links-share"></div>
+        </div>
+        <div class="card">
+          <h3>Importar Linha do tempo do Google</h3>
+          <p class="meta">No celular: Configurações → Localização → Serviços de localização → Linha do tempo → <b>Exportar</b>.
+            Arraste o <code>Timeline.json</code> aqui — os pontos entram no histórico do device escolhido acima.</p>
+          <div class="drop" id="drop-google" tabindex="0" role="button">
+            <span class="drop-texto">Solte o Timeline.json aqui (ou toque para escolher)</span>
+          </div>
+          <input type="file" id="arq-google" accept=".json,application/json" hidden>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── CÉREBRO ──────────────────────────────────────────────────────────────────────────── -->
     <section id="aba-cerebro" class="aba" hidden>
       <div class="cabeca">
         <h1>Cérebro</h1>
@@ -38,7 +116,14 @@
     </section>
   </main>
 
+  <div class="modal" id="modal" hidden>
+    <div class="modal-corpo">
+      <button type="button" class="fechar" id="modal-fechar" aria-label="Fechar">✕</button>
+      <div id="modal-conteudo"></div>
+    </div>
+  </div>
   <div class="aviso" id="aviso" hidden></div>
+
   <script src="/painel/static/vendor/leaflet/leaflet.js"></script>
   <script src="/painel/static/painel.js"></script>
 </body>
