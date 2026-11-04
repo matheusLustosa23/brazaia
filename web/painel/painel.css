@@ -245,7 +245,7 @@ a.btn:hover { border-color: var(--ciano); color: var(--ciano); box-shadow: var(-
 .cp-estado { font-weight: 700; letter-spacing: .02em; }
 .cp-estado.parado { color: #ffb020; }
 .cp-estado.movendo { color: #ff3fd8; }
-.cp-hora { font-size: 1rem; font-variant-numeric: tabular-nums; }
+.cp-hora { font-size: 1rem; font-variant-numeric: tabular-nums; white-space: pre-line; }
 .cp-extra, .cp-meta { color: var(--suave); font-size: .78rem; }
 .cp-end { border-top: 1px solid var(--borda); padding-top: .35rem; }
 .cp-lugar { font-weight: 650; color: var(--ciano); }
