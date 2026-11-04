@@ -111,16 +111,18 @@ class OpenAILLMClient:
         messages: list[dict],
         tools: list[dict] | None = None,
         tool_choice: str | dict = "auto",
+        no_think: bool = False,
         **opts: Any
     ) -> Completion:
-        """Chamada não-stream. Function calling NATIVO via `tools`/`tool_choice`."""
+        """Chamada não-stream. Function calling NATIVO via `tools`/`tool_choice`.
+        no_think=True desliga o raciocínio pelo template (chamada utilitária: resumo, classificação)."""
         kwargs: dict[str, Any] = dict(model=self._model,messages=_system_no_inicio(messages),**opts)
         kwargs.setdefault("max_tokens", self._max_out)
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice
             kwargs.setdefault("parallel_tool_calls", False)
-        _apply_no_think(kwargs)
+        _apply_no_think(kwargs, no_think)
         try:
             r = await self._call(**kwargs)
         except RetryError as e:

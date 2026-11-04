@@ -109,11 +109,13 @@ class ContextManager:
         self,
         raw: str,
         foco: str,
-        target_tokens: int = 256    
+        target_tokens: int = 400,
+        limite_tokens: int = 2500,
     ) -> str:
-        """Compacta uma observação volumosa, focando no objetivo do turno. Reusa o próprio
-        modelo via o contrato LLMClient injetado (coerência de estilo/idioma)."""
-        if self._count([{"role": "user", "content": raw}]) <= target_tokens:
+        """Compacta uma observação MUITO volumosa (> limite_tokens), focando no objetivo do turno.
+        Antes o corte era 256 tokens: quase todo resultado era reescrito — e, com o raciocínio ligado,
+        o "resumo" saía como o pensamento cortado do modelo (o agente recebia lixo e inventava)."""
+        if self._count([{"role": "user", "content": raw}]) <= limite_tokens:
             return raw
         
         prompt = [
@@ -129,7 +131,8 @@ class ContextManager:
         ]
         out = await self._llm.complete(
             prompt,
-            max_tokens=target_tokens + max(64,target_tokens//4)
+            max_tokens=target_tokens + max(64, target_tokens // 4),
+            no_think=True,
         )
         return out.content or raw
     
