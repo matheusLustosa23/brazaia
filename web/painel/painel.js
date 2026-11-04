@@ -642,6 +642,7 @@ function mostrarAba() {
     atualizarSelectMapa();
     recarregar();
   }
+  if (aba === "cerebro" && window.cerebroAbrir) window.cerebroAbrir();
 }
 
 try { const c = localStorage.getItem("painel.camada"); if (c && CAMADAS[c]) $("#f-camada").value = c; } catch { /* sem storage */ }
@@ -652,6 +653,7 @@ $("#btn-atualizar").addEventListener("click", async () => {
   b.disabled = true;
   await atualizar();
   if (abaAtual() === "mapa") await carregarTrilha().catch((x) => aviso(x.message, true));
+  if (abaAtual() === "cerebro" && window.cerebroRecarregar) await window.cerebroRecarregar();
   b.disabled = false;
   aviso("Atualizado");
 });

@@ -14,7 +14,7 @@
     <nav class="abas" id="abas">
       <a href="#devices" data-aba="devices">Devices</a>
       <a href="#mapa" data-aba="mapa">Mapa</a>
-      <a href="#cerebro" data-aba="cerebro" class="breve" title="P3">Cérebro</a>
+      <a href="#cerebro" data-aba="cerebro">Cérebro</a>
     </nav>
     <div class="status" id="status">—</div>
     <button type="button" class="atualizar" id="btn-atualizar" title="Atualizar agora">↻ Atualizar</button>
@@ -109,9 +109,77 @@
 
     <!-- ── CÉREBRO ──────────────────────────────────────────────────────────────────────────── -->
     <section id="aba-cerebro" class="aba" hidden>
-      <div class="cabeca">
-        <h1>Cérebro</h1>
-        <p class="sub">Grafo, ficha, linha do tempo e revisão chegam no P3.</p>
+      <div class="cabeca cabeca-cerebro">
+        <div>
+          <h1>Cérebro</h1>
+          <p class="sub" id="cer-resumo">carregando…</p>
+        </div>
+        <div class="chips-sel vistas" id="cer-vistas" role="tablist">
+          <button type="button" data-v="grafo" class="sel">◉ Grafo</button>
+          <button type="button" data-v="tempo">⏱ Linha do tempo</button>
+          <button type="button" data-v="revisar">✓ Revisar</button>
+        </div>
+      </div>
+
+      <!-- GRAFO + FICHA -->
+      <div id="cer-v-grafo" class="cer-vista">
+        <div class="card cer-barra">
+          <input type="text" id="cer-busca" placeholder="Buscar no cérebro… (nome ou o que ele sabe)" aria-label="Buscar">
+          <div class="chips-sel" id="cer-areas" aria-label="Filtrar por área"></div>
+          <div class="cer-acoes">
+            <button type="button" id="cer-rotulos" class="sel-toggle" title="nomes em todos os nós">Aa Rótulos</button>
+            <button type="button" id="cer-centro" title="enquadrar tudo">⊙ Centralizar</button>
+            <button type="button" class="neon" id="cer-nova">＋ Entidade</button>
+          </div>
+        </div>
+        <div class="cer-layout">
+          <div class="cer-grafo-caixa">
+            <div id="cer-grafo" class="cer-grafo" aria-label="Grafo do cérebro"></div>
+            <div class="cer-legenda" id="cer-legenda"></div>
+            <div class="cer-resultados" id="cer-resultados" hidden></div>
+          </div>
+          <aside class="card cer-ficha" id="cer-ficha">
+            <div class="vazio">Toque num nó do grafo para abrir a ficha: o que ele sabe, o que mudou, as ligações e o que aconteceu.</div>
+          </aside>
+        </div>
+      </div>
+
+      <!-- LINHA DO TEMPO -->
+      <div id="cer-v-tempo" class="cer-vista" hidden>
+        <div class="card cer-barra">
+          <label class="campo">Tipo <select id="lt-tipo"><option value="">Todos</option></select></label>
+          <label class="campo">Assunto <select id="lt-ent"><option value="">Todos</option></select></label>
+          <div class="campo">Período
+            <div class="chips-sel" id="lt-periodo">
+              <button type="button" data-d="7">7 dias</button>
+              <button type="button" data-d="30" class="sel">30 dias</button>
+              <button type="button" data-d="90">90 dias</button>
+              <button type="button" data-d="0">Tudo</button>
+            </div>
+          </div>
+          <label class="campo">Gráfico de <select id="lt-metrica"><option value="">—</option></select></label>
+        </div>
+        <div class="card" id="lt-grafico-card" hidden>
+          <h3 id="lt-grafico-titulo">Evolução</h3>
+          <div id="lt-grafico"></div>
+        </div>
+        <div id="lt-lista" class="lt-lista"></div>
+      </div>
+
+      <!-- REVISAR -->
+      <div id="cer-v-revisar" class="cer-vista" hidden>
+        <div class="card cer-barra">
+          <p class="meta" style="margin:0">O que o agente gravou. Corrija, invalide (fica no histórico) ou apague de vez o que for lixo.</p>
+          <div class="chips-sel" id="rv-dias">
+            <button type="button" data-d="1">Hoje</button>
+            <button type="button" data-d="7" class="sel">7 dias</button>
+            <button type="button" data-d="30">30 dias</button>
+          </div>
+        </div>
+        <div class="grade-cards">
+          <div class="card"><h3>Observações</h3><div id="rv-obs"></div></div>
+          <div class="card"><h3>Registros</h3><div id="rv-reg"></div></div>
+        </div>
       </div>
     </section>
   </main>
@@ -125,6 +193,8 @@
   <div class="aviso" id="aviso" hidden></div>
 
   <script src="/painel/static/vendor/leaflet/leaflet.js"></script>
+  <script src="/painel/static/vendor/force-graph/force-graph.min.js"></script>
   <script src="/painel/static/painel.js"></script>
+  <script src="/painel/static/cerebro.js"></script>
 </body>
 </html>
