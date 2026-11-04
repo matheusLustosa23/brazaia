@@ -164,7 +164,9 @@ def test_desde_mes_e_semana():
 
 
 def test_fmt_dados():
-    assert fmt_dados({"series": 3, "reps": 12, "carga_kg": 20}) == "3×12 · 20 kg"
+    assert fmt_dados({"series": 3, "reps": 12, "carga_kg": 20}) == "3 séries de 12 repetições com 20 kg"
+    assert (fmt_dados({"series": 4, "reps": 6, "carga_kg": 16.0}, "cada lado (32 kg no total)")
+            == "4 séries de 6 repetições com 16 kg cada lado (32 kg no total)")
 
 
 async def test_treino_completo(cer):
@@ -179,7 +181,7 @@ async def test_treino_completo(cer):
     ult = await cer.consultar("treino", "peito", ultimo=True)
     assert "qua 28/10" in ult and "em andamento" not in ult and "Supino reto" in ult and "Crucifixo" in ult
     sup = await cer.consultar("serie", "supino reto", ultimo=True)
-    assert "3×12 · 20 kg" in sup and "Crucifixo" not in sup
+    assert "3 séries de 12 repetições com 20 kg" in sup and "Crucifixo" not in sup
 
 
 async def test_sessao_em_andamento_agrupa_e_aparece_no_contexto(cer):
@@ -190,7 +192,7 @@ async def test_sessao_em_andamento_agrupa_e_aparece_no_contexto(cer):
     bloco = await cer.render_compact("bora")
     assert "Em andamento: treino Peito" in bloco and "Supino reto" in bloco
     fim = await cer.registrar("fechar")
-    assert "sessão fechada" in fim and "Supino reto 3×12 · 22 kg" in fim
+    assert "sessão fechada" in fim and "Supino reto 3 séries de 12 repetições com 22 kg" in fim
     assert "Em andamento" not in await cer.render_compact("bora")
 
 
@@ -225,4 +227,9 @@ async def test_consulta_sem_registro(cer):
 async def test_ficha_do_exercicio_mostra_registros(cer):
     await cer.registrar(tipo="serie", assunto="Supino reto", dados={"series": 3, "reps": 12, "carga_kg": 20})
     ficha = await cer.recordar(entidade="Supino reto")
-    assert "Registros recentes:" in ficha and "3×12 · 20 kg" in ficha and "(exercicio" in ficha
+    assert "Registros recentes:" in ficha and "3 séries de 12 repetições com 20 kg" in ficha and "(exercicio" in ficha
+
+
+
+def test_fmt_prancha():
+    assert fmt_dados({"series": 3, "duracao_s": 60}) == "3 séries de 60 s"

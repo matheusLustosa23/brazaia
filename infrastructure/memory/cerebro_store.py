@@ -89,11 +89,12 @@ END;
 
 # tipos iniciais (área = em qual "frente" do agente a entidade mora). Lista ABERTA: o resto entra como 'geral'.
 _TIPOS = {
-    TIPO_DONO: "voce", "pessoa": "pessoas", "lugar": "geral", "meta": "geral",
+    TIPO_DONO: "voce", "pessoa": "pessoas", "lugar": "geral",
     "exercicio": "academia", "grupo muscular": "academia", "treino": "academia",
     "disciplina": "estudos", "tema": "estudos",
     "projeto": "trabalho", "empresa": "trabalho", "ferramenta": "trabalho", "fluxo": "trabalho",
-    "financa": "financas", "geral": "geral",
+    "financa": "financas", "conta": "financas", "cartao": "financas", "instituicao": "estudos",
+    "meta": "pessoal", "habito": "pessoal", "geral": "geral",
 }
 
 _OBS_SELECT = """SELECT o.id, o.entidade_id, e.nome, e.tipo, o.categoria, o.texto,
@@ -353,13 +354,27 @@ class SqliteCerebroStore:
                    FROM entidades e JOIN tipos t ON t.nome = e.tipo ORDER BY e.id"""))
             rels = list(await db.execute_fetchall(
                 "SELECT id, de_id, tipo, para_id, criado_em FROM relacoes WHERE invalido_em IS NULL ORDER BY id"))
+            # dias (UTC, em número) em que cada entidade teve algo: registro ou observação — filtro de período
+            atividade: dict[int, set[int]] = {}
+            for ent_id, dia in await db.execute_fetchall(
+                    """SELECT entidade_id, CAST(quando / 86400 AS INTEGER) FROM registros
+                       WHERE invalido_em IS NULL AND entidade_id IS NOT NULL
+                       UNION SELECT entidade_id, CAST(valido_desde / 86400 AS INTEGER) FROM observacoes"""):
+                atividade.setdefault(ent_id, set()).add(dia)
+            ult = {r[0]: {"quando": r[1], "tipo": r[2], "dados": json.loads(r[3] or "{}"), "texto": r[4]}
+                   for r in await db.execute_fetchall(
+                       """SELECT r.entidade_id, r.quando, r.tipo, r.dados, r.texto FROM registros r
+                          WHERE r.invalido_em IS NULL AND r.entidade_id IS NOT NULL AND r.quando = (
+                            SELECT MAX(x.quando) FROM registros x
+                            WHERE x.entidade_id = r.entidade_id AND x.invalido_em IS NULL)""")}
             tot = await (await db.execute(
                 """SELECT (SELECT COUNT(*) FROM observacoes WHERE invalido_em IS NULL),
                           (SELECT COUNT(*) FROM observacoes WHERE invalido_em IS NOT NULL),
                           (SELECT COUNT(*) FROM registros WHERE invalido_em IS NULL)""")).fetchone() or (0, 0, 0)
         return {
             "entidades": [{"id": r[0], "nome": r[1], "tipo": r[2], "area": r[3], "criado_em": r[4],
-                           "atualizado_em": r[5], "n_obs": r[6], "n_reg": r[7]} for r in ents],
+                           "atualizado_em": r[5], "n_obs": r[6], "n_reg": r[7], "ultimo": ult.get(r[0]),
+                           "dias": sorted(atividade.get(r[0], ()))} for r in ents],
             "relacoes": [{"id": r[0], "de": r[1], "tipo": r[2], "para": r[3], "criado_em": r[4]} for r in rels],
             "totais": {"entidades": len(ents), "observacoes": tot[0], "historico": tot[1], "registros": tot[2],
                        "relacoes": len(rels)},

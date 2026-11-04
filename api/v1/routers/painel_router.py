@@ -250,8 +250,8 @@ async def cerebro_invalidar_reg(reg_id: int, request: Request):
 
 
 @api.get("/cerebro/revisar", dependencies=[Depends(require_painel)])
-async def cerebro_revisar(request: Request, dias: float = 7):
-    return await _cer(request).revisar(dias)
+async def cerebro_revisar(request: Request, dias: float = 7, desde: float | None = None):
+    return await _cer(request).revisar(dias, desde)
 
 
 @api.get("/cerebro/busca", dependencies=[Depends(require_painel)])

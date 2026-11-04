@@ -110,21 +110,34 @@ def desde_de(texto: str | None, agora: dt.datetime | None = None) -> float | Non
     return dt.datetime.fromtimestamp(quando_de(t, agora)).replace(hour=0, minute=0).timestamp()
 
 
-def fmt_dados(d: dict) -> str:
-    """Números de um registro em fala curta: {series:3, reps:12, carga_kg:20} → '3×12 · 20 kg'."""
-    partes, resto = [], dict(d)
+def _num(v) -> str:
+    return f"{v:g}" if isinstance(v, float) else str(v)
+
+
+def fmt_dados(d: dict, texto: str = "") -> str:
+    """Números de um registro por extenso (é o que o agente FALA):
+    {series:4, reps:6, carga_kg:16} + 'cada lado (32 kg no total)' → '4 séries de 6 repetições com 16 kg cada lado (32 kg no total)'."""
+    resto = dict(d)
     s, r = resto.pop("series", None), resto.pop("reps", None)
+    frase = ""
     if s is not None and r is not None:
-        partes.append(f"{s}×{r}")
+        frase = f"{_num(s)} séries de {_num(r)} repetições"
     elif r is not None:
-        partes.append(f"{r} reps")
+        frase = f"{_num(r)} repetições"
+    elif s is not None and "duracao_s" in resto:
+        frase = f"{_num(s)} séries de {_num(resto.pop('duracao_s'))} s"
     elif s is not None:
-        partes.append(f"{s} séries")
-    for chave, unidade in (("carga_kg", "kg"), ("peso_kg", "kg"), ("duracao_min", "min"), ("distancia_km", "km")):
+        frase = f"{_num(s)} séries"
+    carga = resto.pop("carga_kg", resto.pop("peso_kg", None))
+    if carga is not None:
+        lado = f" {texto}" if texto.startswith("cada lado") else ""
+        frase = (f"{frase} com " if frase else "") + f"{_num(carga)} kg{lado}"
+    partes = [frase] if frase else []
+    for chave, unidade in (("duracao_min", "min"), ("distancia_km", "km")):
         if chave in resto:
-            partes.append(f"{resto.pop(chave)} {unidade}")
-    partes += [f"{k}: {v}" for k, v in resto.items()]
-    return " · ".join(str(p) for p in partes)
+            partes.append(f"{_num(resto.pop(chave))} {unidade}")
+    partes += [f"{k}: {_num(v)}" for k, v in resto.items()]
+    return " · ".join(partes)
 
 
 def _reg_linha(r: Registro, *, com_dia: bool = True, recuo: str = "- ") -> str:
@@ -134,8 +147,8 @@ def _reg_linha(r: Registro, *, com_dia: bool = True, recuo: str = "- ") -> str:
             quando += f"–{_hora(r.fim)}"
         elif time.time() - r.quando < _SESSAO_MAX_H * 3600:     # aberta há muito = esqueceram de fechar
             quando += " (em andamento)"
-    partes = [quando, r.tipo] + ([r.entidade] if r.entidade else []) + ([fmt_dados(r.dados)] if r.dados else [])
-    texto = f' · "{r.texto}"' if r.texto else ""
+    partes = [quando, r.tipo] + ([r.entidade] if r.entidade else []) + ([fmt_dados(r.dados, r.texto)] if r.dados else [])
+    texto = f' · "{r.texto}"' if r.texto and not (r.dados and r.texto.startswith("cada lado")) else ""
     return f"{recuo}{' · '.join(partes)}{texto} (#{r.id})"
 
 
@@ -282,7 +295,7 @@ class CerebroService:
             self._cache.clear()
             return (f"[registro] sessão fechada: {aberta.tipo} · {aberta.entidade or ''} · {_hora(aberta.quando)}–"
                     f"{_hora(ts)} · {len(filhos)} registro(s): "
-                    + ("; ".join(f"{r.entidade} {fmt_dados(r.dados)}".strip() for r in reversed(filhos)) or "nenhum"))
+                    + ("; ".join(f"{r.entidade} {fmt_dados(r.dados, r.texto)}".strip() for r in reversed(filhos)) or "nenhum"))
 
         if not tipo:
             return "[erro] falta o tipo (ex.: treino, serie, estudo) — nada foi registrado."
@@ -443,8 +456,8 @@ class CerebroService:
         self._cache.clear()
         return ok
 
-    async def revisar(self, dias: float = 7) -> dict:
-        desde = time.time() - dias * 86400
+    async def revisar(self, dias: float = 7, desde: float | None = None) -> dict:
+        desde = desde if desde is not None else time.time() - dias * 86400
         return {"observacoes": [dataclasses.asdict(o) for o in await self._store.observacoes_desde(desde)],
                 "registros": [dataclasses.asdict(r) for r in await self._store.registros(desde=desde, limite=300)]}
 

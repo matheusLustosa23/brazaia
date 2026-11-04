@@ -116,28 +116,40 @@
         </div>
         <div class="chips-sel vistas" id="cer-vistas" role="tablist">
           <button type="button" data-v="grafo" class="sel">◉ Grafo</button>
+          <button type="button" data-v="lista">☰ Lista</button>
           <button type="button" data-v="tempo">⏱ Linha do tempo</button>
           <button type="button" data-v="revisar">✓ Revisar</button>
         </div>
       </div>
 
-      <!-- GRAFO + FICHA -->
-      <div id="cer-v-grafo" class="cer-vista">
-        <div class="card cer-barra">
-          <input type="text" id="cer-busca" placeholder="Buscar no cérebro… (nome ou o que ele sabe)" aria-label="Buscar">
-          <div class="chips-sel" id="cer-areas" aria-label="Filtrar por área"></div>
+      <!-- FILTROS (valem pra TODAS as visões: grafo, lista, linha do tempo, revisar) -->
+      <div class="card cer-barra cer-barra-filtros">
+          <div class="cer-linha-topo">
+          <input type="text" id="cer-busca" placeholder="Buscar no cérebro… (nome, tipo, área ou o que ele sabe)" aria-label="Buscar">
           <div class="cer-acoes">
             <button type="button" id="cer-rotulos" class="sel-toggle" title="nomes em todos os nós">Aa Rótulos</button>
+            <div class="chips-sel nivel" id="cer-nivel" title="até onde o cérebro fica aberto">
+              <button type="button" data-n="areas">◉ Áreas</button>
+              <button type="button" data-n="grupos">◎ Grupos</button>
+              <button type="button" data-n="tudo">✺ Tudo</button>
+            </div>
             <button type="button" id="cer-centro" title="enquadrar tudo">⊙ Centralizar</button>
             <button type="button" class="neon" id="cer-nova">＋ Entidade</button>
           </div>
+          </div>
+          <div class="fgrupos" id="cer-filtros" aria-label="Filtros"></div>
+          <div class="fativos" id="cer-ativos" hidden></div>
         </div>
+
+      <!-- GRAFO / LISTA + FICHA -->
+      <div id="cer-v-grafo" class="cer-vista">
         <div class="cer-layout">
-          <div class="cer-grafo-caixa">
+          <div class="cer-grafo-caixa" id="cer-painel-grafo">
             <div id="cer-grafo" class="cer-grafo" aria-label="Grafo do cérebro"></div>
             <div class="cer-legenda" id="cer-legenda"></div>
             <div class="cer-resultados" id="cer-resultados" hidden></div>
           </div>
+          <div class="cer-lista" id="cer-painel-lista" hidden></div>
           <aside class="card cer-ficha" id="cer-ficha">
             <div class="vazio">Toque num nó do grafo para abrir a ficha: o que ele sabe, o que mudou, as ligações e o que aconteceu.</div>
           </aside>
@@ -146,21 +158,11 @@
 
       <!-- LINHA DO TEMPO -->
       <div id="cer-v-tempo" class="cer-vista" hidden>
-        <div class="card cer-barra">
-          <label class="campo">Tipo <select id="lt-tipo"><option value="">Todos</option></select></label>
-          <label class="campo">Assunto <select id="lt-ent"><option value="">Todos</option></select></label>
-          <div class="campo">Período
-            <div class="chips-sel" id="lt-periodo">
-              <button type="button" data-d="7">7 dias</button>
-              <button type="button" data-d="30" class="sel">30 dias</button>
-              <button type="button" data-d="90">90 dias</button>
-              <button type="button" data-d="0">Tudo</button>
-            </div>
+        <div class="card" id="lt-grafico-card">
+          <div class="linha-form" style="margin:0 0 .4rem">
+            <h3 id="lt-grafico-titulo" style="margin:0">Evolução</h3>
+            <label class="campo" style="margin-left:auto">Gráfico de <select id="lt-metrica"><option value="">—</option></select></label>
           </div>
-          <label class="campo">Gráfico de <select id="lt-metrica"><option value="">—</option></select></label>
-        </div>
-        <div class="card" id="lt-grafico-card" hidden>
-          <h3 id="lt-grafico-titulo">Evolução</h3>
           <div id="lt-grafico"></div>
         </div>
         <div id="lt-lista" class="lt-lista"></div>
@@ -168,14 +170,7 @@
 
       <!-- REVISAR -->
       <div id="cer-v-revisar" class="cer-vista" hidden>
-        <div class="card cer-barra">
-          <p class="meta" style="margin:0">O que o agente gravou. Corrija, invalide (fica no histórico) ou apague de vez o que for lixo.</p>
-          <div class="chips-sel" id="rv-dias">
-            <button type="button" data-d="1">Hoje</button>
-            <button type="button" data-d="7" class="sel">7 dias</button>
-            <button type="button" data-d="30">30 dias</button>
-          </div>
-        </div>
+        <p class="meta">O que o agente gravou no período e nos filtros acima. Corrija, invalide (fica no histórico) ou apague de vez o que for lixo.</p>
         <div class="grade-cards">
           <div class="card"><h3>Observações</h3><div id="rv-obs"></div></div>
           <div class="card"><h3>Registros</h3><div id="rv-reg"></div></div>
