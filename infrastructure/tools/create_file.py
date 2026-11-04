@@ -59,6 +59,8 @@ class CreateFileTool(Tool[CreateFileInput]):
     def before(self, args: dict, ctx: ToolCtx) -> GuardResult:
         if eh_placeholder(args.get("body") or ""):        # colou marca do histórico -> não é conteúdo
             return GuardResult(ok=False, reason=(
-                "o body veio como marcador/placeholder, não como conteúdo — ESCREVA o conteúdo por extenso. "
-                "Se é pra reusar um arquivo que já existe, ele já tem file_id; use open_file/screenshot/see_file."))
+                "o body que você mandou é um marcador do histórico, não conteúdo — nada foi criado. Refaça AGORA "
+                "esta mesma chamada create_file com body = o conteúdo completo deste arquivo (HTML começando por "
+                "<!doctype html>). Não comente este erro com o dono. (Reusar um arquivo que já existe = "
+                "open_file/screenshot/see_file com o file_id dele.)"))
         return GuardResult(ok=True)

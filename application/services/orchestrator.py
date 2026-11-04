@@ -17,11 +17,11 @@ from application.guards.output import check_output
 from application.services._trace import trace
 from application.services._turnlog import log_turno
 from application.services._flowlog import flow, curto
-from application.prompts import build_system, HONESTIDADE, VISION_STYLE
+from application.prompts import build_system, blocos_tarefa, HONESTIDADE, VISION_STYLE
 from infrastructure.devices.device_gateway import DeviceGateway
 from infrastructure.storage.file_store import FileStore
 
-MAX_STEPS = 15
+MAX_STEPS = 25    # pedidos encadeados reais chegam a 15+ ações (sessão b8343208: 15 + 1 retry)
 _FALHA_TOOL = re.compile(r"\[(erro|timeout|falha)")   # prefixo que as tools usam p/ dizer que falharam
 LIMITE_PASSOS = ("Limite de passos do turno atingido: NÃO chame mais ferramentas. Responda AGORA ao usuário "
                  "com o que já foi feito e apurado, e diga o que ficou faltando.")
@@ -122,7 +122,7 @@ class Orchestrator:
         history = await self._session_store.get(session_id)
         memory_block = await self._memory.render_compact(user_message)
         # extra_system (ex.: build_system("voz")) é o system COMPLETO quando vem; senão o do modo (chat|tutor).
-        system = extra_system if extra_system else self._system_prompt(modo)
+        system = extra_system if extra_system else self._system_prompt(modo, user_message)
         if device_id:                                       # o modelo não sabia de onde o dono fala → abria no "server"
             system += (f"\n\nO dono está falando com você pelo device '{device_id}'. Pediu pra abrir/mostrar sem "
                        f"dizer onde → use ESTE device.")
@@ -150,7 +150,7 @@ class Orchestrator:
         for _step in range(MAX_STEPS):
             if saw_image and VISION_STYLE not in system:
                 system = f"{system}\n\n{VISION_STYLE}"
-            messages = self._context.build(system, memory_block, history, user_turn or {})
+            messages = self._context.build(system, memory_block, _enxuga_autoria(history, manter_ultimo=True), user_turn or {})
             max_tok = self._context.max_saida(messages)        # saída dinâmica: nunca estoura a janela
             usado = self._context.count(messages)
             if _step == 0:                                      # rodapé de contexto: 1x por turno, com o prompt REAL
@@ -223,7 +223,7 @@ class Orchestrator:
                     if user_turn:
                         history = history + [user_turn]
                     history = history + [{"role": "assistant", "content": aviso}]
-                    await self._session_store.set(session_id, _strip(history))
+                    await self._session_store.set(session_id, _strip(_enxuga_autoria(history, manter_ultimo=False)))
                     log_turno(session_id, user_message, "".join(bruto_turno), think=think)
                     yield ("event", {"evento": "fim", "finish_reason": "length"})
                     return
@@ -284,7 +284,7 @@ class Orchestrator:
             # sem CoT antigo no histórico (não "imita" raciocínio com think off) e economiza contexto.
             reply_salvo = texto.strip()
             history = history + [{"role": "assistant", "content": reply_salvo}]
-            await self._session_store.set(session_id, _strip(history))
+            await self._session_store.set(session_id, _strip(_enxuga_autoria(history, manter_ultimo=False)))
             log_turno(session_id, user_message, "".join(bruto_turno), think=think)   # turno BRUTO inteiro (todos os passos, com <think>) p/ auditoria
             self._flush_trace(session_id)
             flow(session_id, "fim", f"stop · {time.monotonic() - t_turno:.1f}s · {_step + 1} chamada(s) LLM "
@@ -294,7 +294,7 @@ class Orchestrator:
         # estourou MAX_STEPS: 1 chamada FINAL sem tools responde com o que já foi apurado, e o turno é salvo
         # (antes só avisava "respondo com o que apurei" sem responder, e o turno — tools inclusas — se perdia)
         flow(session_id, "limite", f"estourou MAX_STEPS={MAX_STEPS} → resposta final sem tools")
-        messages = self._context.build(system, memory_block, history, user_turn or {})
+        messages = self._context.build(system, memory_block, _enxuga_autoria(history, manter_ultimo=True), user_turn or {})
         messages = messages + [{"role": "system", "content": LIMITE_PASSOS}]
         bruto_turno.append("\n⟦── resposta final (limite de passos) ──⟧\n")
         texto = ""
@@ -316,15 +316,16 @@ class Orchestrator:
         if user_turn:
             history = history + [user_turn]
         history = history + [{"role": "assistant", "content": texto.strip()}]
-        await self._session_store.set(session_id, _strip(history))
+        await self._session_store.set(session_id, _strip(_enxuga_autoria(history, manter_ultimo=False)))
         log_turno(session_id, user_message, "".join(bruto_turno), think=think)
         self._flush_trace(session_id)
         flow(session_id, "fim", f"length · {time.monotonic() - t_turno:.1f}s · resposta {len(texto.strip())} chars")
         yield ("event", {"evento": "fim", "finish_reason": "length"})
     
-    def _system_prompt(self, modo: str = "chat") -> str:
+    def _system_prompt(self, modo: str = "chat", pedido: str = "") -> str:
         if modo == "tutor":                                 # sessão de estudo: metodologia + regras de tool + ferramentas
-            return (build_system("tutor") + "\n" + HONESTIDADE +
+            # + SÓ o bloco da tarefa pedida (cronograma/montagem/exercícios) — foi o que venceu na pesquisa
+            return (build_system("tutor", blocos_tarefa(pedido)) + "\n" + HONESTIDADE +
                     "\nFerramentas:\n" + self._tools.describe_all())
         return(
             "Você é o assistente pessoal local do dono. Aja por FERRAMENTAS: toda AÇÃO "
@@ -346,7 +347,8 @@ class Orchestrator:
         ids_reais: set[str],
     ) ->  AsyncIterator[tuple]:
         passos: list[tuple[str, str]] = []
-        # enxuga o 'body' GRANDE no histórico (economia); o artefato já foi guardado pela própria tool
+        # args CHEIOS no histórico do turno (o modelo vê o body real do create_file mais recente); o body
+        # grande só é enxugado na visão pro modelo (_enxuga_autoria) e ao salvar. stash_map = só pro log.
         stash_map = {tc.id: self._stash_args(tc.arguments) for tc in msg.tool_calls}
         if user_turn is not None:
             history = history + [user_turn]
@@ -360,7 +362,7 @@ class Orchestrator:
                         "type": "function",
                         "function": {
                             "name": tc.name,
-                            "arguments": orjson.dumps(stash_map[tc.id]).decode()   # args enxutos (body -> ⟨omitido⟩)
+                            "arguments": orjson.dumps(tc.arguments).decode()   # cheios; enxuga na visão/ao salvar
                         }
                     }
                     for tc in msg.tool_calls
@@ -535,10 +537,54 @@ class Orchestrator:
         """Contexto que o PRÓXIMO turno vai ocupar (system + memória + histórico) — rodapé ao retomar
         uma sessão e no fim de cada turno (o histórico cresceu)."""
         history = await self._session_store.get(session_id)
-        messages = self._context.build(self._system_prompt(), await self._memory.render_compact(""), history, {})
+        messages = self._context.build(self._system_prompt(), await self._memory.render_compact(""),
+                                       _enxuga_autoria(history, manter_ultimo=True), {})
         return {"usado": self._context.count(messages), "total": self._context.budget,
                 "reservado": self._context.reserved, "model": getattr(self._llm, "model", "")}
             
+_AUTORIA = {"create_file"}    # tools cujo argumento 'body' É o conteúdo autorado (ver _enxuga_autoria)
+
+
+def _enxuga_autoria(history: list[dict], *, manter_ultimo: bool) -> list[dict]:
+    """Cópia do histórico com o 'body' dos create_file trocado pela elisão ⟨conteúdo omitido…⟩ — o mesmo
+    tratamento da imagem (inteira dentro do turno, _strip ao salvar). manter_ultimo=True (visão pro modelo):
+    o create_file MAIS RECENTE fica inteiro; False (ao salvar): todos enxutos.
+
+    Por quê (medido 03/11, docs/tutor/exp-placeholder): o modelo IMITA o formato da última chamada da mesma
+    tool. Se a mais recente tem a elisão no body, ele copia a elisão (50–67% dentro do turno, qualquer
+    redação); com a mais recente inteira, escreve conteúdo (1/24). As chamadas continuam visíveis — sumir com
+    elas (só a nota do resultado) fez o modelo perder o fio e recriar o mesmo arquivo (sessão 24cc15).
+    Custo: no máximo UM body inteiro no contexto (os antigos ficam enxutos; o salvo vem todo enxuto)."""
+    ultimo = None
+    if manter_ultimo:
+        for m in reversed(history):
+            achado = [c for c in m.get("tool_calls") or [] if c.get("function", {}).get("name") in _AUTORIA]
+            if achado:
+                ultimo = achado[-1].get("id")
+                break
+    out = []
+    for m in history:
+        calls = m.get("tool_calls")
+        if not calls:
+            out.append(m)
+            continue
+        novos = []
+        for c in calls:
+            f = c.get("function", {})
+            if f.get("name") in _AUTORIA and c.get("id") != ultimo:
+                try:
+                    args = orjson.loads(f.get("arguments") or "{}")
+                except orjson.JSONDecodeError:
+                    args = None
+                body = args.get("body") if isinstance(args, dict) else None
+                if isinstance(body, str) and len(body) >= _STASH_MIN:
+                    args["body"] = f"⟨conteúdo omitido do histórico · {len(body)} chars⟩"
+                    c = {**c, "function": {**f, "arguments": orjson.dumps(args).decode()}}
+            novos.append(c)
+        out.append({**m, "tool_calls": novos})
+    return out
+
+
 def _args_ok(args: str) -> bool:
     """Os argumentos da tool chegaram INTEIROS (JSON objeto válido)? Cortados no teto de saída → False."""
     try:

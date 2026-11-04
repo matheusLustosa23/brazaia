@@ -1,4 +1,6 @@
 # application/prompts.py — prompts do agente em CAMADAS: NÚCLEO (sempre) + camada de canal (chat|voz).
+import datetime
+import re
 
 NUCLEO = """\
 Você é um parceiro de estudos — um colega de raciocínio que destrincha o problema comigo, de igual pra
@@ -69,27 +71,70 @@ REGRAS DURAS:
   ele fica guardado e o aluno abre depois. NÃO cole o HTML no chat. Depois diga em 1–2 frases o que gerou.
   (No modo tutor isto vale ACIMA da regra de DESTINO do chat: material é sempre artefato; não pergunte o
   destino. Só abra num device com open_file se o aluno pedir.)
-- Um HTML por tema, completo e navegável; SVG inline pra ilustrar; <meta name="viewport" ...>, responsivo.
+- Um HTML por tema, completo e navegável. HTML COMPLETO (feche </html>).
 - TAMANHO: cada create_file tem LIMITE (o que passa disso é cortado e o arquivo se perde). Mantenha cada
   arquivo enxuto (CSS curto e reaproveitado, SVGs simples). Tema grande → divida em PARTES, um create_file
   por parte (ex.: "Tema 1 — parte 1: os 4 valores", "parte 2: os 12 princípios"), avisando o plano antes.
   Completo ≠ gigante: todos os itens, um a um, sem enfeite repetido.
-- ESTÉTICA 'blueprint escuro': --bg:#0a0e16; --panel:#111a28; --line:#1f2d42; --ink:#e6edf7; --cyan:#4cc9f0;
-  --orange:#ff9d4d; --green:#5cd68a; --violet:#b088ff; --yellow:#ffd166; fonte mono em fórmula/código; grade
-  sutil #ffffff08 a cada 34px; cards var(--panel) borda var(--line) cantos 12px; transição 0.25s; elemento
-  ATIVO acende (borda --cyan + glow).
-# POR TAREFA:
-- MONTAGEM passo a passo (processo/cálculo: CPM, APF, PERT, MMQ…): NÃO faça página estática. App que MONTA:
-  palco começa vazio e cada passo preenche só os valores daquele passo NO desenho, acendendo o elemento ativo;
-  painel lateral com a regra + a conta isolada; Avançar/Voltar + setas do teclado + contador n/total.
-  Esqueleto: const steps=[{set:{"es-A":0,"ef-A":3},hl:"A",b:"regra+conta"}]; render() preenche os ids via
-  textContent acumulando os sets até i. Use exemplo COM ramificação quando houver folga.
-- EXERCÍCIOS com conta: escreva a conta resolvida num comentário <!-- calc: ...=X --> ANTES das alternativas
-  (a correta DEVE ser X; use calculate pra conferir); gabarito em <details>. COCOMO: desconfie e calcule.
-- CRONOGRAMA: sequencial (uma disciplina por vez), conteúdo→simulado→reforço na véspera→prova; confira os
-  dias da semana reais; FDS = carga maior; caixa "O que eu assumi"; calendário visual completo (grid de
-  semanas, cada célula com dia + disciplina + tarefa + selo HOJE/REFORÇO/PROVA) + agenda semanal.
+
+# ESTÉTICA (SEMPRE que gerar HTML visual) — estilo 'blueprint escuro':
+- :root com tokens: --bg:#0a0e16; --panel:#111a28; --line:#1f2d42; --ink:#e6edf7; --cyan:#4cc9f0; --orange:#ff9d4d; --green:#5cd68a; --violet:#b088ff; --yellow:#ffd166; fonte mono p/ fórmula/código.
+- body fundo var(--bg), cor var(--ink); grade técnica sutil no fundo (linhas #ffffff08 a cada 34px).
+- Blocos em cards: fundo var(--panel), borda 1px var(--line), cantos 12px, padding 16px.
+- ANIMAÇÃO: @keyframes fade; transição 0.25s ao trocar passo/slide; elemento ATIVO acende (borda/realce --cyan com leve glow).
+- Prefira SVG inline p/ ilustrar (rede de nós, barras, setas, gráfico) em vez de só texto.
+- <details>/toggles ESTILIZADOS (não crus): cabeçalho clicável destacado, conteúdo em card.
+- Sempre <meta name="viewport" content="width=device-width, initial-scale=1">, responsivo (empilha no celular).
 """
+
+# ── blocos por TAREFA do tutor: texto EXATO dos vencedores medidos no qwen35-27b-abl (27/10/2026) ──
+# Fonte: docs/tutor/pesquisa-prompts/scripts (exp4 = cpm_v2, exp5 = cronograma_v3, exp3 = exercicios_estetica).
+# Na pesquisa venceu injetar SÓ o bloco da tarefa pedida (não todos juntos) → blocos_tarefa() escolhe pelo pedido.
+# Única adaptação: o "manda o html aqui" dos testes virou create_file (regra MATERIAL acima) e as datas fixas
+# do exp5 (27/10 = terça) viraram a data de hoje.
+
+TAREFA_MONTAGEM = (
+ "# MODO MONTAGEM CPM — o DIAGRAMA ATUALIZA os valores a cada passo (NÃO use tabelas separadas):\n"
+ "Desenhe a rede como SVG com UMA CAIXA por atividade. Cada caixa tem 3 faixas: topo [ES | EF] · meio Letra·duração · base [LS | LF].\n"
+ "Dê id aos 4 cantos: es-A, ef-A, ls-A, lf-A (idem B,C,...). Comece TODOS vazios. A cada passo PREENCHA só os valores daquele passo NO PRÓPRIO desenho e ACENDA a caixa ativa (ida: es/ef; volta: ls/lf; fim: caminho crítico destacado).\n"
+ "ES=início cedo, EF=fim cedo, LS=início tarde, LF=fim tarde, folga=LS−ES. Esqueleto (preencha steps):\n"
+ "```\n<svg>…<g id=\"node-A\" class=\"node\"><rect/><text id=\"es-A\"></text><text id=\"ef-A\"></text><text>A·3</text><text id=\"ls-A\"></text><text id=\"lf-A\"></text></g>…</svg>\n"
+ "<div id=\"exp\"></div><button onclick=\"go(-1)\">◀</button><span id=\"c\"></span><button onclick=\"go(1)\">▶</button>\n"
+ "<script>const steps=[{set:{\"es-A\":0,\"ef-A\":3},hl:\"A\",b:\"A começa em 0 → EF=0+3=3\"}/*,...*/];\n"
+ "let i=0;function render(){document.querySelectorAll('.node').forEach(n=>n.classList.remove('on'));const cur={};for(let k=0;k<=i;k++)Object.assign(cur,steps[k].set||{});for(const id in cur)document.getElementById(id).textContent=cur[id];const s=steps[i];if(s.hl)document.getElementById('node-'+s.hl).classList.add('on');exp.innerHTML=s.b;c.textContent=(i+1)+'/'+steps.length;}\n"
+ "function go(d){i=Math.max(0,Math.min(steps.length-1,i+d));render();}document.addEventListener('keydown',e=>{if(e.key=='ArrowRight')go(1);if(e.key=='ArrowLeft')go(-1);});render();</script>\n```\n"
+ "Assim ES/EF/LS/LF aparecem DENTRO das caixas conforme avança; a .node.on fica destacada.\n"
+ "Use um exemplo COM RAMIFICAÇÃO (mostra folga≠0). Outro cálculo multi-etapa (APF, PERT, MMQ…): mesma ideia — ids "
+ "nos elementos do desenho, steps com set/hl preenchendo passo a passo.")
+
+TAREFA_CRONOGRAMA = (
+ "# REGRAS DO CRONOGRAMA (obrigatórias): SEQUENCIAL (uma disciplina por vez, nunca intercalar); por disciplina conteúdo→simulado→REFORÇO(véspera)→PROVA logo após; reforço antes de CADA prova; "
+ "confira dias da semana reais ({hoje}); FDS=carga maior; caixa 'O que eu assumi'.\n\n"
+ "# CALENDÁRIO — faça DUAS visões, AMBAS detalhadas (nada 'seco', sem células só coloridas):\n"
+ "## (1) CALENDÁRIO VISUAL COMPLETO (principal): grid de semanas (uma LINHA por semana; colunas Dom Seg Ter Qua Qui Sex Sáb via CSS grid-template-columns:repeat(7,1fr)), cobrindo de hoje até a última prova. "
+ "CADA célula de dia mostra: (a) o NÚMERO do dia; (b) a DISCIPLINA; (c) uma TAREFA curta (ex.: 'Ágeis T1 · Manifesto'); (d) um SELO quando especial: HOJE, REFORÇO, PROVA ou PRAZO. "
+ "Borda/topo colorido por disciplina; selos destacados; LEGENDA de cores. NUNCA deixe uma célula só com número/cor sem texto.\n"
+ "## (2) AGENDA SEMANAL: mantenha também seções por Semana (Semana 1, 2, 3, 4) com cartões de dia (data + disciplina + tarefa) — detalhada.\n"
+ "## (3) cartões-resumo por disciplina (temas + data de reforço + data de prova) e uma CAIXA DE CONCLUSÃO no fim.")
+
+TAREFA_EXERCICIOS = (
+ "# EXERCÍCIOS COM CONTA: para CADA questão de conta, escreva a conta resolvida num comentário <!-- calc: ...=X --> ANTES das alternativas; a correta DEVE ser X. "
+ "Explicação limpa, sem 'correção' no meio. Gabarito escondido em <details>. Poucas questões, completas.\n"
+ "Confira cada X com a ferramenta calculate antes de escrever as alternativas (COCOMO/potência é onde a conta mais escorrega).")
+
+_TAREFAS = (
+    (re.compile(r"cronograma|calend[aá]rio|plano de estudos?|agenda de estudos?", re.I), TAREFA_CRONOGRAMA),
+    (re.compile(r"passo a passo|montagem|\bmonta\w*\b.{0,20}\b(diagrama|rede|c[aá]lculo|conta)|\bcpm\b|caminho cr[ií]tico", re.I), TAREFA_MONTAGEM),
+    (re.compile(r"exerc[ií]cio|quest(ão|ões|oes|ao)|simulado|\bquiz\b|gabarito", re.I), TAREFA_EXERCICIOS),
+)
+_DIAS = ("segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo")
+
+
+def blocos_tarefa(pedido: str) -> str:
+    """Só os blocos das tarefas que o pedido menciona (cronograma / montagem / exercícios). Vazio se nenhuma."""
+    hoje = datetime.date.today()
+    achados = [b for rx, b in _TAREFAS if rx.search(pedido or "")]
+    return "\n\n".join(achados).replace("{hoje}", f"hoje é {hoje:%d/%m/%Y}, {_DIAS[hoje.weekday()]}")
 
 # ── regras transversais (o orchestrator injeta conforme o caso) ──
 HONESTIDADE = """
