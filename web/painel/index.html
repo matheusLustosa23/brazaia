@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Painel do agente</title>
+  <link rel="stylesheet" href="/painel/static/painel.css">
+</head>
+<body>
+  <header class="topo">
+    <div class="marca"><span class="logo">●</span> Painel</div>
+    <nav class="abas" id="abas">
+      <a href="#devices" data-aba="devices">Devices</a>
+      <a href="#cerebro" data-aba="cerebro" class="breve" title="P3">Cérebro</a>
+    </nav>
+    <div class="status" id="status">—</div>
+  </header>
+
+  <main>
+    <section id="aba-devices" class="aba">
+      <div class="cabeca">
+        <h1>Devices</h1>
+        <p class="sub" id="resumo-devices">carregando…</p>
+      </div>
+      <div class="grade" id="lista-devices"></div>
+    </section>
+
+    <section id="aba-cerebro" class="aba" hidden>
+      <div class="cabeca">
+        <h1>Cérebro</h1>
+        <p class="sub">Grafo, ficha, linha do tempo e revisão chegam no P3.</p>
+      </div>
+    </section>
+  </main>
+
+  <div class="aviso" id="aviso" hidden></div>
+  <script src="/painel/static/painel.js"></script>
+</body>
+</html>

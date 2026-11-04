@@ -1,0 +1,109 @@
+:root {
+  --fundo: #f6f7f9;
+  --cartao: #ffffff;
+  --borda: #e3e6eb;
+  --texto: #1b1f24;
+  --suave: #5f6b7a;
+  --acento: #2f6fed;
+  --ok: #1f9d55;
+  --off: #9aa4b2;
+  --erro: #d64545;
+  --chip: #eef1f5;
+  --sombra: 0 1px 2px rgba(16, 24, 40, .06);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fundo: #0f1216;
+    --cartao: #171b21;
+    --borda: #262c35;
+    --texto: #e6e9ee;
+    --suave: #96a1b0;
+    --acento: #6b9bff;
+    --ok: #3ccf7e;
+    --off: #5c6675;
+    --erro: #ff6b6b;
+    --chip: #222832;
+    --sombra: none;
+  }
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--fundo);
+  color: var(--texto);
+  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+.topo {
+  position: sticky; top: 0; z-index: 2;
+  display: flex; align-items: center; gap: 1.25rem;
+  padding: .75rem 1rem;
+  background: var(--cartao);
+  border-bottom: 1px solid var(--borda);
+}
+.marca { font-weight: 650; letter-spacing: .01em; }
+.logo { color: var(--acento); }
+.abas { display: flex; gap: .25rem; flex: 1; overflow-x: auto; }
+.abas a {
+  padding: .35rem .75rem; border-radius: 8px;
+  color: var(--suave); text-decoration: none; white-space: nowrap;
+}
+.abas a.ativa { background: var(--chip); color: var(--texto); }
+.abas a.breve::after { content: " · em breve"; font-size: .8em; opacity: .7; }
+.status { color: var(--suave); font-size: .85rem; white-space: nowrap; }
+
+main { max-width: 1100px; margin: 0 auto; padding: 1.25rem 1rem 3rem; }
+.cabeca h1 { margin: 0 0 .15rem; font-size: 1.4rem; }
+.sub { margin: 0 0 1rem; color: var(--suave); }
+
+.grade {
+  display: grid; gap: .9rem;
+  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+}
+.device {
+  background: var(--cartao);
+  border: 1px solid var(--borda);
+  border-radius: 12px;
+  padding: .9rem 1rem;
+  box-shadow: var(--sombra);
+  display: flex; flex-direction: column; gap: .55rem;
+}
+.device.offline { opacity: .78; }
+.linha1 { display: flex; align-items: center; gap: .55rem; }
+.ponto { width: .65rem; height: .65rem; border-radius: 50%; background: var(--off); flex: none; }
+.online .ponto { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent); }
+.nome { font-weight: 620; font-size: 1.02rem; overflow-wrap: anywhere; }
+.id { color: var(--suave); font-size: .82rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.estado { font-size: .9rem; }
+.estado b { font-weight: 600; }
+.meta { color: var(--suave); font-size: .82rem; }
+.chips { display: flex; flex-wrap: wrap; gap: .3rem; }
+.chip {
+  background: var(--chip); border-radius: 999px;
+  padding: .1rem .55rem; font-size: .76rem; color: var(--suave);
+}
+.acoes { display: flex; gap: .5rem; margin-top: .2rem; }
+button {
+  font: inherit; font-size: .85rem;
+  padding: .35rem .75rem; border-radius: 8px;
+  border: 1px solid var(--borda); background: var(--cartao); color: var(--texto);
+  cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: var(--acento); color: var(--acento); }
+button:disabled { opacity: .45; cursor: default; }
+
+.vazio { color: var(--suave); padding: 2rem 0; }
+
+.aviso {
+  position: fixed; left: 50%; bottom: 1.2rem; transform: translateX(-50%);
+  background: var(--texto); color: var(--fundo);
+  padding: .55rem 1rem; border-radius: 10px; font-size: .9rem;
+  max-width: calc(100vw - 2rem);
+}
+.aviso.erro { background: var(--erro); color: #fff; }
+
+@media (max-width: 560px) {
+  .topo { flex-wrap: wrap; gap: .5rem .9rem; }
+  .status { order: 3; width: 100%; }
+}

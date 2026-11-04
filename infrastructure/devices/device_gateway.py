@@ -26,7 +26,8 @@ class DeviceGateway:
         for d in await self.service.list_all_devices():
             desde = self.connections.desde(d.id)
             itens.append({"id": d.id, "nome": d.name, "status": d.status, "conectado": desde is not None,
-                          "conectado_desde": desde, "ultima_vez": d.last_seen, "registrado_em": d.created_at})
+                          "conectado_desde": desde, "ultima_vez": d.last_seen, "registrado_em": d.created_at,
+                          "tools": sorted(d.allowed_tools)})
         itens.sort(key=lambda x: (not x["conectado"], -(x["ultima_vez"] or 0)))
         return itens
 
