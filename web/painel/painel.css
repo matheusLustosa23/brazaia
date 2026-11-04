@@ -9,6 +9,7 @@
   --off: #9aa4b2;
   --erro: #d64545;
   --chip: #eef1f5;
+  --aviso: #b7791f;
   --sombra: 0 1px 2px rgba(16, 24, 40, .06);
 }
 @media (prefers-color-scheme: dark) {
@@ -23,6 +24,7 @@
     --off: #5c6675;
     --erro: #ff6b6b;
     --chip: #222832;
+    --aviso: #f0b429;
     --sombra: none;
   }
 }
@@ -107,3 +109,22 @@ button:disabled { opacity: .45; cursor: default; }
   .topo { flex-wrap: wrap; gap: .5rem .9rem; }
   .status { order: 3; width: 100%; }
 }
+
+.mapa-caixa { margin-bottom: 1rem; }
+.mapa {
+  height: 340px; border-radius: 12px; overflow: hidden;
+  border: 1px solid var(--borda); background: var(--chip);
+}
+.legenda-mapa { margin: .35rem 0 0; color: var(--suave); font-size: .8rem; }
+.leaflet-container { font: inherit; }
+
+.plataforma { margin-left: auto; font-size: .75rem; color: var(--suave); border: 1px solid var(--borda);
+  border-radius: 999px; padding: .05rem .5rem; }
+.linha-info { display: flex; flex-wrap: wrap; gap: .3rem .9rem; font-size: .85rem; }
+.linha-info .rot { color: var(--suave); }
+.chip.ok { color: var(--ok); }
+.chip.negada { color: var(--erro); }
+.chip.manual { color: var(--aviso); }
+.chip.na { opacity: .6; }
+.acoes { flex-wrap: wrap; }
+@media (max-width: 560px) { .mapa { height: 260px; } }

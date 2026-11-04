@@ -3,7 +3,9 @@
 Servido pelo próprio agente (só a tailnet alcança o server). Acesso: /painel/?k=<chave> uma vez → cookie.
 As páginas leem/escrevem pelos MESMOS serviços que as tools usam (gateway de devices, cérebro): uma regra só.
 """
+import dataclasses
 import os
+import time
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
@@ -58,3 +60,19 @@ async def notificar(device_id: str, corpo: NotificarIn, request: Request):
     r = await gw.request(device_id, "notify", {"title": corpo.title, "message": corpo.message})
     ok = isinstance(r, str) and not r.startswith(("[erro]", "[timeout]"))
     return {"ok": ok, "resultado": r}
+
+
+@api.get("/devices/{device_id}/localizacoes", dependencies=[Depends(require_painel)])
+async def localizacoes(device_id: str, request: Request, horas: float = 24):
+    """Trilha do device nas últimas `horas` (mais recente primeiro)."""
+    svc = request.app.state.container.device.service
+    pts = await svc.localizacoes(device_id, desde=time.time() - horas * 3600, limite=2000)
+    return {"device": device_id, "pontos": [dataclasses.asdict(p) for p in pts]}
+
+
+@api.post("/devices/{device_id}/localizar", dependencies=[Depends(require_painel)])
+async def localizar(device_id: str, request: Request):
+    """Lê a posição AGORA (mesmo caminho da tool get_location) e grava no histórico."""
+    ponto, motivo = await request.app.state.container.device.gateway.localizar(device_id)
+    return {"ok": ponto is not None, "ponto": ponto, "motivo": motivo}
+

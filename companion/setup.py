@@ -74,9 +74,24 @@ def setup_tailscale_termux() -> None:
     print("CS1/CS2b ok — supervisor + Termux:Boot + SOCKS_PROXY. (precisa do app Termux:Boot)")
 
 
+def setup_localizacao_termux() -> None:
+    """P2 — coleta de localização + bateria a cada 15 min (job 2 do JobScheduler; o job 1 é o healthcheck)."""
+    home = os.path.expanduser("~")
+    destino = f"{home}/brazaia/localizacao.sh"
+    if os.path.abspath("companion/boot/localizacao.sh") != os.path.abspath(destino):
+        shutil.copy("companion/boot/localizacao.sh", destino)
+    _mais_x(destino)
+    subprocess.run(["termux-job-scheduler", "--script", destino, "--period-ms", "900000",
+                    "--persisted", "true", "--job-id", "2"], check=False)
+    print("P2 ok — localização + bateria de 15 em 15 min (fila em ~/.brazaia_loc_fila.jsonl)")
+
+
 if __name__ == "__main__":
+    from companion import permissoes
     if _IS_TERMUX:
         setup_termux()
         setup_tailscale_termux()
+        setup_localizacao_termux()
     else:
-        print("setup é só do Termux; no desktop não precisa")
+        print("desktop: só as permissões (o resto do setup é do Termux)")
+    permissoes.main()                          # por último: pede/testa cada permissão UMA vez e guarda

@@ -19,6 +19,7 @@ import websockets
 from companion._json import dumps, loads
 from companion.config import load_config
 from companion.tools.capture_handler import CAMERAS
+from companion import localizacao, permissoes
 from companion.runtime import runtime
 from companion.state import estado                 # device_status p/ o rodapé do CLI (embed); inofensivo standalone
 
@@ -63,7 +64,9 @@ async def _sessao(cfg) -> None:
     uri = f"{cfg.server_ws_url}/ws/device/{cfg.device_id}"
     async with websockets.connect(uri, max_size=None, ping_timeout=120,
                                   proxy=os.getenv("SOCKS_PROXY") or None) as ws:   # max_size=None: imagem (base64) passa de 1MB e o default derrubava a conexão
-        hs = {"name": cfg.device_name, "handlers": runtime.list_tools()}
+        hs = {"name": cfg.device_name, "handlers": runtime.list_tools(),
+              "plataforma": localizacao.plataforma(), "permissoes": permissoes.carregar(),
+              "estado": localizacao.estado_salvo() or await asyncio.to_thread(localizacao.ler_estado)}
         if CAMERAS:
             hs["cameras"] = CAMERAS
         await ws.send(dumps(hs))
@@ -72,14 +75,42 @@ async def _sessao(cfg) -> None:
         if bem.get("type") == "welcome":
             log(f"❇️  handshake ok — tools no server: {bem.get('tools')}")
         estado.device_online = True; estado.device_status = "online"   # rodapé: 🛰 on
-        async for msg in ws:
-            action = loads(msg)
-            if "request_id" in action and "name" in action:        # tool-call do server
-                rid, nome = action["request_id"], action["name"]
-                log(f"⚡ tool {nome} (id={rid})")
-                resultado = await runtime.execute(action)
-                await ws.send(dumps({"request_id": rid, "result": resultado}))
-                log(f"📤 respondido id={rid}")
+        fila = asyncio.create_task(_esvaziar_fila(ws))
+        try:
+            await _escutar(ws)
+        finally:
+            fila.cancel()
+
+
+async def _esvaziar_fila(ws) -> None:
+    """Manda ao server o que a coleta periódica deixou na fila (e a bateria), a cada minuto enquanto conectado.
+    Só apaga da fila no 'ack' (em _escutar): conexão caiu no meio = reenvia na próxima, sem duplicar no server."""
+    ultimo_estado = 0.0
+    while True:
+        pontos = localizacao.pendentes()
+        if pontos:
+            await ws.send(dumps({"type": "localizacao", "pontos": pontos}))
+            log(f"📍 {len(pontos)} ponto(s) da fila enviados")
+        est = localizacao.estado_salvo()
+        if est and est.get("quando", 0) > ultimo_estado:
+            ultimo_estado = est["quando"]
+            await ws.send(dumps({"type": "estado", "estado": {k: v for k, v in est.items() if k != "quando"},
+                                 "quando": est["quando"]}))
+        await asyncio.sleep(60)
+
+
+async def _escutar(ws) -> None:
+    async for msg in ws:
+        action = loads(msg)
+        if action.get("type") == "ack":                         # server gravou → tira da fila
+            localizacao.remover(action.get("ids") or [])
+            continue
+        if "request_id" in action and "name" in action:        # tool-call do server
+            rid, nome = action["request_id"], action["name"]
+            log(f"⚡ tool {nome} (id={rid})")
+            resultado = await runtime.execute(action)
+            await ws.send(dumps({"request_id": rid, "result": resultado}))
+            log(f"📤 respondido id={rid}")
 
 
 async def conectar(cfg=None) -> None:

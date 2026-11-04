@@ -37,6 +37,15 @@ async def device_ws(
 
             if "request_id" in data:
                 container.device.gateway.rpc.resolve_response(data["request_id"], data)
+            elif data.get("type") == "localizacao":
+                # fila do device (coleta periódica): grava e CONFIRMA os ids — só então o device apaga da fila.
+                # Reenvio (ack perdido) não duplica: UNIQUE(device_id, quando).
+                pontos = data.get("pontos") or []
+                await container.device.service.salvar_localizacoes(device_id, pontos)
+                await ws.send_text(orjson.dumps({"type": "ack", "ids": [p.get("id") for p in pontos]}).decode())
+            elif data.get("type") == "estado":
+                await container.device.service.atualizar_estado(device_id, data.get("estado") or {},
+                                                                data.get("quando"))
 
     except WebSocketDisconnect:
         pass                                            # queda normal do cliente

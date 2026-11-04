@@ -27,6 +27,9 @@ class DeviceHandshakeService:
         handlers = data.get("handlers") or all_tool_names
         await self._service.register_device(device_id, device_name)
         device = await self._service.activate_device(device_id, handlers)
+        # P2: o que este device é e o que o dono permitiu nele (câmera, mic, localização…) + bateria
+        await self._service.atualizar_meta(device_id, data.get("plataforma"), data.get("permissoes"),
+                                           data.get("estado"))
         self._gateway.connections.register(device_id, ws)
         
         welcome = {

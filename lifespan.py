@@ -19,6 +19,7 @@ from infrastructure.tools.notify import NotifyTool
 from infrastructure.tools.open_file import OpenFileTool
 from infrastructure.tools.calculate import CalculateTool
 from infrastructure.tools.list_devices import ListDevicesTool
+from infrastructure.tools.get_location import GetLocationTool
 from infrastructure.memory.cerebro_store import SqliteCerebroStore
 from infrastructure.memory.session_store import SqlLiteSessionStore
 from application.services.context_service import ContextManager
@@ -97,6 +98,7 @@ async def lifespan(app: FastAPI):
     registry.register(OpenFileTool(device_gateway, store))
     registry.register(CalculateTool())
     registry.register(ListDevicesTool(device_gateway))
+    registry.register(GetLocationTool(device_gateway))
 
     # ── Orchestrator ──
     orchestrator = Orchestrator(

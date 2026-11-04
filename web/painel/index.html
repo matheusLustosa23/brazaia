@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Painel do agente</title>
+  <link rel="stylesheet" href="/painel/static/vendor/leaflet/leaflet.css">
   <link rel="stylesheet" href="/painel/static/painel.css">
 </head>
 <body>
@@ -22,6 +23,10 @@
         <h1>Devices</h1>
         <p class="sub" id="resumo-devices">carregando…</p>
       </div>
+      <div class="mapa-caixa">
+        <div id="mapa" class="mapa" role="region" aria-label="Mapa dos devices"></div>
+        <p class="legenda-mapa" id="legenda-mapa">Última posição de cada device. “Trilha 24h” num cartão mostra o caminho.</p>
+      </div>
       <div class="grade" id="lista-devices"></div>
     </section>
 
@@ -34,6 +39,7 @@
   </main>
 
   <div class="aviso" id="aviso" hidden></div>
+  <script src="/painel/static/vendor/leaflet/leaflet.js"></script>
   <script src="/painel/static/painel.js"></script>
 </body>
 </html>
