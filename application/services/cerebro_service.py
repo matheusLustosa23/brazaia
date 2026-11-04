@@ -30,7 +30,7 @@ oi ola bom boa dia tarde noite tudo obrigado valeu beleza blz certo ok
 _DIAS = ["seg", "ter", "qua", "qui", "sex", "sáb", "dom"]
 _SESSAO_MAX_H = 6            # sessão aberta há mais que isso = esquecida aberta, não "em andamento"
 # tipo de registro → tipo da entidade-assunto quando ela ainda não existe (série é de um exercício, etc.)
-_ASSUNTO_TIPO = {"serie": "exercicio", "treino": "grupo muscular", "estudo": "disciplina"}
+_ASSUNTO_TIPO = {"serie": "exercicio", "treino": "grupo muscular", "estudo": "disciplina", "exercicios": "tema"}
 
 _NUCLEO_MAX_CHARS = 1600     # ≈ 400 tokens: o núcleo vai em TODO turno, tem que ser pequeno
 _RELEVANTES = 6              # observações puxadas pela fala atual (além do núcleo)
@@ -128,6 +128,11 @@ def fmt_dados(d: dict, texto: str = "") -> str:
         frase = f"{_num(s)} séries de {_num(resto.pop('duracao_s'))} s"
     elif s is not None:
         frase = f"{_num(s)} séries"
+    ac, tot = resto.pop("acertos", None), resto.pop("total", None)
+    if ac is not None:                                     # exercícios do tutor: "acertou 7 de 10"
+        frase = f"acertou {_num(ac)} de {_num(tot)}" if tot is not None else f"{_num(ac)} acertos"
+    elif tot is not None:
+        frase = f"{_num(tot)} questões"
     carga = resto.pop("carga_kg", resto.pop("peso_kg", None))
     if carga is not None:
         lado = f" {texto}" if texto.startswith("cada lado") else ""
@@ -274,6 +279,10 @@ class CerebroService:
     # ── registros (tools log / query_log) ──────────────────────────────────────────────────────────────
     async def _sessao_aberta(self) -> Registro | None:
         return await self._store.sessao_aberta(time.time() - _SESSAO_MAX_H * 3600)
+
+    async def sessao_aberta(self) -> Registro | None:
+        """A sessão em andamento (treino/estudo), se houver — pro registro automático do estudo."""
+        return await self._sessao_aberta()
 
     async def registrar(self, acao: str = "registrar", tipo: str | None = None, assunto: str | None = None,
                         dados: dict | None = None, texto: str = "", quando: str | None = None,
