@@ -83,29 +83,45 @@ async def _sessao(cfg) -> None:
 
 
 async def _esvaziar_fila(ws) -> None:
-    """Manda ao server o que a coleta periódica deixou na fila (e a bateria), a cada minuto enquanto conectado.
-    Só apaga da fila no 'ack' (em _escutar): conexão caiu no meio = reenvia na próxima, sem duplicar no server."""
+    """Manda ao server o que o rastreador deixou na fila (e a bateria), a cada 30 s enquanto conectado.
+    Só apaga da fila no 'ack' (em _escutar): conexão caiu no meio = reenvia na próxima, sem duplicar no server.
+    BLINDADA (04/11): era uma tarefa solta — uma exceção a matava calada e a conexão seguia 'online' sem mandar
+    nada (pontos de 13:31 a 15:57 só chegaram quando o connect foi reiniciado). Agora erro = log + tenta de novo;
+    3 seguidos = fecha a conexão (o laço do conectar() reconecta e cria a tarefa de novo)."""
     ultimo_estado = 0.0
     ultima_leitura = 0.0                            # device sem bateria (PC) devolve vazio: não ler a cada 30 s
+    falhas = 0
     while True:
-        pontos = localizacao.pendentes()
-        if pontos:
-            await ws.send(dumps({"type": "localizacao", "pontos": pontos}))
-            log(f"📍 {len(pontos)} ponto(s) da fila enviados")
-            if len(pontos) >= 200:                  # voltou a conexão com muita coisa acumulada: esvazia em sequência
-                await asyncio.sleep(5)
-                continue
-        est = localizacao.estado_salvo()
-        if time.time() - (est or {}).get("quando", 0) > 300 and time.time() - ultima_leitura > 300:
-            ultima_leitura = time.time()            # leitura velha (job do Android atrasado): lê aqui
-            novo = await asyncio.to_thread(localizacao.ler_estado)
-            if novo:
-                localizacao.salvar_estado(novo)
-                est = localizacao.estado_salvo()
-        if est and est.get("quando", 0) > ultimo_estado:
-            ultimo_estado = est["quando"]
-            await ws.send(dumps({"type": "estado", "estado": {k: v for k, v in est.items() if k != "quando"},
-                                 "quando": est["quando"]}))
+        try:
+            pontos = localizacao.pendentes()
+            if pontos:
+                await ws.send(dumps({"type": "localizacao", "pontos": pontos}))
+                log(f"📍 {len(pontos)} ponto(s) da fila enviados")
+                if len(pontos) >= 200:              # voltou a conexão com muita coisa acumulada: esvazia em sequência
+                    falhas = 0
+                    await asyncio.sleep(5)
+                    continue
+            est = localizacao.estado_salvo()
+            if time.time() - (est or {}).get("quando", 0) > 300 and time.time() - ultima_leitura > 300:
+                ultima_leitura = time.time()        # leitura velha (rastreador parado/atrasado): lê aqui
+                novo = await asyncio.to_thread(localizacao.ler_estado)
+                if novo:
+                    localizacao.salvar_estado(novo)
+                    est = localizacao.estado_salvo()
+            if est and est.get("quando", 0) > ultimo_estado:
+                ultimo_estado = est["quando"]
+                await ws.send(dumps({"type": "estado", "estado": {k: v for k, v in est.items() if k != "quando"},
+                                     "quando": est["quando"]}))
+            falhas = 0
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            falhas += 1
+            log(f"⚠️  envio da fila falhou ({falhas}/3): {type(e).__name__}: {e}")
+            if falhas >= 3:
+                log("🔁 fila travada — fechando a conexão pra reconectar")
+                await ws.close()
+                return
         await asyncio.sleep(30)                     # o rastreador gera até 1 ponto/30 s em movimento
 
 
