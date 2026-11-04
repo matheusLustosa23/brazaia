@@ -28,6 +28,8 @@ from application.services.device_service import DeviceService
 from application.services.device_handshake import DeviceHandshakeService
 from application.tools.remember import RememberTool
 from application.tools.recall import RecallTool
+from application.tools.log import LogTool
+from application.tools.query_log import QueryLogTool
 from domain.tools.base import ToolRegistry
 from infrastructure.voice.asr import make_asr
 from infrastructure.voice.vad import make_vad
@@ -85,6 +87,8 @@ async def lifespan(app: FastAPI):
     
     registry.register(RememberTool(memory))
     registry.register(RecallTool(memory))
+    registry.register(LogTool(memory))
+    registry.register(QueryLogTool(memory))
     registry.register(CaptureImageTool(vision))
     registry.register(SeeFileTool(store))
     registry.register(CreateFileTool(store))

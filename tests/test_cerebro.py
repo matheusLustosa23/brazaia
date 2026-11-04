@@ -16,7 +16,8 @@ def _id(saida: str) -> int:
 
 
 async def test_nucleo_vazio_sem_observacoes(cer):
-    assert await cer.render_compact("oi") == ""
+    bloco = await cer.render_compact("oi")
+    assert bloco.startswith("Agora: ") and "MEMÓRIA" not in bloco
 
 
 async def test_perfil_chega_ao_contexto(cer):
@@ -138,3 +139,90 @@ async def test_ficha_mostra_versao_anterior(cer):
     await cer.lembrar("prefere exemplos práticos", "preferencia", substitui=velha)
     out = await cer.recordar(entidade="Você")
     assert "antes: #" in out and "resposta direta" in out
+
+
+# ── M2: registros ──────────────────────────────────────────────────────────────────────────────────────
+import datetime as _dt
+from application.services.cerebro_service import quando_de, desde_de, fmt_dados
+
+
+def test_quando_de_formatos():
+    a = _dt.datetime(2026, 11, 4, 7, 40)
+    f = lambda t: _dt.datetime.fromtimestamp(quando_de(t, a))
+    assert f("") == a
+    assert f("ontem 18:40") == _dt.datetime(2026, 11, 3, 18, 40)
+    assert f("28/10") == _dt.datetime(2026, 10, 28, 12, 0)
+    assert f("2026-10-28 19:05") == _dt.datetime(2026, 10, 28, 19, 5)
+    with pytest.raises(ValueError):
+        quando_de("semana que vem", a)
+
+
+def test_desde_mes_e_semana():
+    a = _dt.datetime(2026, 11, 4, 7, 40)
+    assert _dt.datetime.fromtimestamp(desde_de("mes", a)) == _dt.datetime(2026, 11, 1)
+    assert _dt.datetime.fromtimestamp(desde_de("semana", a)) == _dt.datetime(2026, 10, 29)
+
+
+def test_fmt_dados():
+    assert fmt_dados({"series": 3, "reps": 12, "carga_kg": 20}) == "3×12 · 20 kg"
+
+
+async def test_treino_completo(cer):
+    out = await cer.registrar("abrir", "treino", "Peito", quando="28/10 18:40")
+    assert "sessão aberta" in out
+    # sessão de 28/10 já passou das 6h → não está "em andamento" agora; registra as séries com data explícita
+    sid = int(out.rsplit("#", 1)[1].rstrip(")"))
+    for ex, d, q in (("Supino reto", {"series": 3, "reps": 12, "carga_kg": 20}, "28/10 18:45"),
+                     ("Crucifixo", {"series": 3, "reps": 15, "carga_kg": 10}, "28/10 19:00")):
+        await cer._store.registrar("serie", quando_de(q), entidade_id=(await cer._store.entidade(ex, "exercicio")).id,
+                                   dados=d, sessao=sid)
+    ult = await cer.consultar("treino", "peito", ultimo=True)
+    assert "qua 28/10" in ult and "em andamento" not in ult and "Supino reto" in ult and "Crucifixo" in ult
+    sup = await cer.consultar("serie", "supino reto", ultimo=True)
+    assert "3×12 · 20 kg" in sup and "Crucifixo" not in sup
+
+
+async def test_sessao_em_andamento_agrupa_e_aparece_no_contexto(cer):
+    await cer.registrar("abrir", "treino", "Peito")
+    out = await cer.registrar(tipo="serie", assunto="Supino reto", dados={"series": 3, "reps": 12, "carga_kg": 22},
+                              texto="a última foi difícil")
+    assert "dentro de treino Peito" in out
+    bloco = await cer.render_compact("bora")
+    assert "Em andamento: treino Peito" in bloco and "Supino reto" in bloco
+    fim = await cer.registrar("fechar")
+    assert "sessão fechada" in fim and "Supino reto 3×12 · 22 kg" in fim
+    assert "Em andamento" not in await cer.render_compact("bora")
+
+
+async def test_abrir_outra_fecha_a_anterior(cer):
+    await cer.registrar("abrir", "treino", "Peito")
+    out = await cer.registrar("abrir", "treino", "Costas")
+    assert "fechei a anterior" in out
+
+
+async def test_corrigir_registro(cer):
+    out = await cer.registrar(tipo="serie", assunto="Supino reto", dados={"series": 3, "reps": 12, "carga_kg": 20})
+    rid = int(out.rsplit("#", 1)[1].split(")")[0])
+    await cer.registrar(tipo="serie", assunto="Supino reto", dados={"series": 3, "reps": 12, "carga_kg": 25}, corrige=rid)
+    res = await cer.consultar("serie", "Supino reto")
+    assert "25 kg" in res and "20 kg" not in res
+
+
+async def test_progresso_no_mes(cer):
+    ent = (await cer._store.entidade("Supino reto", "exercicio")).id
+    hoje = _dt.datetime.now()
+    for dias, kg in ((40, 15), (2, 20), (0, 22)):
+        ts = (hoje - _dt.timedelta(days=dias)).timestamp()
+        await cer._store.registrar("serie", ts, entidade_id=ent, dados={"series": 3, "reps": 12, "carga_kg": kg})
+    res = await cer.consultar("serie", "Supino reto", desde="30 dias")
+    assert "22 kg" in res and "20 kg" in res and "15 kg" not in res
+
+
+async def test_consulta_sem_registro(cer):
+    assert "nenhum registro" in await cer.consultar("treino", "Perna", ultimo=True)
+
+
+async def test_ficha_do_exercicio_mostra_registros(cer):
+    await cer.registrar(tipo="serie", assunto="Supino reto", dados={"series": 3, "reps": 12, "carga_kg": 20})
+    ficha = await cer.recordar(entidade="Supino reto")
+    assert "Registros recentes:" in ficha and "3×12 · 20 kg" in ficha and "(exercicio" in ficha

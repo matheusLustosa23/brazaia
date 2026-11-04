@@ -5,7 +5,8 @@
 #   Observação = UMA frase verdadeira sobre uma entidade, com categoria ("[preferencia] prefere resposta direta").
 #                Nunca é apagada: quando muda, a velha ganha `invalido_em` e a nova aponta pra ela (`substitui`).
 #   Relação    = ligação entre duas entidades ("Supino reto" —grupo→ "Peito").
-# Registros com data e números (treino, sessão de estudo) são o M2 — outra tabela, não entram aqui.
+#   Registro   = (M2) algo que ACONTECEU, com data e números: uma série de supino, um treino, uma sessão de estudo.
+#                Observação = o que é verdade ("o ombro dói acima de 60 kg"); registro = o que houve ("ter 3×12 20 kg").
 from dataclasses import dataclass
 
 DONO = "Você"          # a entidade do próprio dono: o que estiver nela vira o NÚCLEO (sempre no contexto)
@@ -30,6 +31,20 @@ class Observacao:
     texto: str
     valido_desde: float
     invalido_em: float | None = None
+    substitui: int | None = None
+
+
+@dataclass(slots=True)
+class Registro:
+    id: int
+    tipo: str              # serie | treino | estudo | ... (normalizado)
+    quando: float          # quando ACONTECEU (não quando foi gravado)
+    entidade: str | None   # o assunto: "Supino reto", "Peito", "Cálculo"
+    dados: dict            # números: {"series": 3, "reps": 12, "carga_kg": 20}
+    texto: str = ""        # o que foi dito ("a última foi difícil")
+    sessao: int | None = None    # id do registro-sessão que agrupa este (as séries dentro do treino do dia)
+    fim: float | None = None     # só em sessão: quando terminou (None = em andamento)
+    eh_sessao: bool = False
     substitui: int | None = None
 
 

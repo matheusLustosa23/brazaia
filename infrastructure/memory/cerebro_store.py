@@ -7,13 +7,16 @@
 #   observacoes  frases sobre uma entidade. Nunca DELETE: corrigir = invalido_em na velha + nova com `substitui`.
 #   relacoes     ligações entidade→entidade.
 #   obs_fts      índice de busca (FTS5) sobre texto + categoria + nome da entidade, sem acento.
+#   registros    (M2) o que ACONTECEU: tipo, quando, assunto (entidade), números em JSON. Uma "sessão" (treino do
+#                dia) é um registro com eh_sessao=1 e fim=NULL enquanto dura; as séries apontam pra ela em `sessao`.
+import json
 import time
 from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
 
 import aiosqlite
 
-from domain.entities.cerebro import DONO, TIPO_DONO, Entidade, Observacao, Relacao, norm
+from domain.entities.cerebro import DONO, TIPO_DONO, Entidade, Observacao, Registro, Relacao, norm
 
 _SCHEMA = """
 PRAGMA journal_mode = WAL;
@@ -60,6 +63,24 @@ CREATE VIRTUAL TABLE IF NOT EXISTS obs_fts USING fts5(
     texto, categoria, entidade,
     tokenize = 'unicode61 remove_diacritics 2'
 );
+CREATE TABLE IF NOT EXISTS registros (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    tipo        TEXT    NOT NULL,
+    quando      REAL    NOT NULL,                 -- quando ACONTECEU
+    entidade_id INTEGER REFERENCES entidades(id), -- o assunto ("Supino reto", "Peito")
+    dados       TEXT    NOT NULL DEFAULT '{}',    -- JSON com os números
+    texto       TEXT    NOT NULL DEFAULT '',
+    sessao      INTEGER REFERENCES registros(id),
+    eh_sessao   INTEGER NOT NULL DEFAULT 0,
+    fim         REAL,                             -- sessão: NULL = em andamento
+    fonte       TEXT    NOT NULL DEFAULT '',
+    criado_em   REAL    NOT NULL,
+    invalido_em REAL,                             -- corrigido → a velha fica, marcada
+    substitui   INTEGER REFERENCES registros(id)
+);
+CREATE INDEX IF NOT EXISTS ix_reg_tipo ON registros(tipo, entidade_id, quando DESC);
+CREATE INDEX IF NOT EXISTS ix_reg_sessao ON registros(sessao);
+
 CREATE TRIGGER IF NOT EXISTS obs_fts_ai AFTER INSERT ON observacoes BEGIN
     INSERT INTO obs_fts(rowid, texto, categoria, entidade)
     VALUES (new.id, new.texto, new.categoria, (SELECT nome FROM entidades WHERE id = new.entidade_id));
@@ -83,6 +104,15 @@ _OBS_SELECT = """SELECT o.id, o.entidade_id, e.nome, e.tipo, o.categoria, o.text
 def _obs(r) -> Observacao:
     return Observacao(id=r[0], entidade_id=r[1], entidade=r[2], tipo=r[3], categoria=r[4], texto=r[5],
                       valido_desde=r[6], invalido_em=r[7], substitui=r[8])
+
+
+_REG_SELECT = """SELECT r.id, r.tipo, r.quando, e.nome, r.dados, r.texto, r.sessao, r.fim, r.eh_sessao, r.substitui
+                 FROM registros r LEFT JOIN entidades e ON e.id = r.entidade_id"""
+
+
+def _reg(r) -> Registro:
+    return Registro(id=r[0], tipo=r[1], quando=r[2], entidade=r[3], dados=json.loads(r[4] or "{}"), texto=r[5],
+                    sessao=r[6], fim=r[7], eh_sessao=bool(r[8]), substitui=r[9])
 
 
 class SqliteCerebroStore:
@@ -236,3 +266,61 @@ class SqliteCerebroStore:
                 " WHERE obs_fts MATCH ? AND o.invalido_em IS NULL ORDER BY bm25(obs_fts) LIMIT ?",
                 (q, limite))
         return [_obs(r) for r in rows]
+
+    # ── registros (M2) ────────────────────────────────────────────────────────────────────────────────
+    async def registrar(self, tipo: str, quando: float, *, entidade_id: int | None, dados: dict, texto: str = "",
+                        sessao: int | None = None, eh_sessao: bool = False, substitui: int | None = None,
+                        fonte: str = "") -> Registro:
+        now = time.time()
+        async with self._db() as db:
+            if substitui is not None:
+                velho = await (await db.execute(
+                    "SELECT invalido_em FROM registros WHERE id = ?", (substitui,))).fetchone()
+                if velho is None or velho[0] is not None:
+                    raise ValueError(f"o registro #{substitui} não existe ou já foi corrigido")
+                await db.execute("UPDATE registros SET invalido_em = ? WHERE id = ?", (now, substitui))
+            cur = await db.execute(
+                "INSERT INTO registros(tipo, quando, entidade_id, dados, texto, sessao, eh_sessao, fonte, criado_em,"
+                " substitui) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (norm(tipo), quando, entidade_id, json.dumps(dados, ensure_ascii=False), texto.strip(), sessao,
+                 int(eh_sessao), fonte, now, substitui))
+            if cur.lastrowid is None:
+                raise RuntimeError("INSERT em registros não retornou lastrowid")
+            reg_id = cur.lastrowid
+            await db.commit()
+        reg = await self.registro(reg_id)
+        assert reg is not None
+        return reg
+
+    async def registro(self, reg_id: int) -> Registro | None:
+        async with self._db() as db:
+            r = await (await db.execute(_REG_SELECT + " WHERE r.id = ?", (reg_id,))).fetchone()
+        return _reg(r) if r else None
+
+    async def fechar_sessao(self, reg_id: int, fim: float) -> None:
+        async with self._db() as db:
+            await db.execute("UPDATE registros SET fim = ? WHERE id = ? AND fim IS NULL", (fim, reg_id))
+            await db.commit()
+
+    async def sessao_aberta(self, desde: float) -> Registro | None:
+        """A sessão em andamento mais recente (aberta depois de `desde` — sessão esquecida aberta não vale pra sempre)."""
+        async with self._db() as db:
+            r = await (await db.execute(
+                _REG_SELECT + " WHERE r.eh_sessao = 1 AND r.fim IS NULL AND r.invalido_em IS NULL AND r.quando >= ?"
+                " ORDER BY r.quando DESC LIMIT 1", (desde,))).fetchone()
+        return _reg(r) if r else None
+
+    async def registros(self, *, tipo: str | None = None, entidade_id: int | None = None, sessao: int | None = None,
+                        desde: float | None = None, ate: float | None = None, limite: int = 50) -> list[Registro]:
+        """Válidos, mais recentes primeiro. Filtros opcionais e combináveis."""
+        onde, args = ["r.invalido_em IS NULL"], []
+        for cond, val in (("r.tipo = ?", norm(tipo) if tipo else None), ("r.entidade_id = ?", entidade_id),
+                          ("r.sessao = ?", sessao), ("r.quando >= ?", desde), ("r.quando <= ?", ate)):
+            if val is not None:
+                onde.append(cond)
+                args.append(val)
+        async with self._db() as db:
+            rows = await db.execute_fetchall(
+                _REG_SELECT + " WHERE " + " AND ".join(onde) + " ORDER BY r.quando DESC, r.id DESC LIMIT ?",
+                (*args, limite))
+        return [_reg(r) for r in rows]
