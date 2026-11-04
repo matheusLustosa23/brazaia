@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     port: int = 8080
     log_level: str = "INFO"
     
+    acervo_dir: str = "data/acervo"                 # documentos (Markdown) que o agente consulta: search_docs/read_doc
+    acervo_db_path: str = "data/acervo.db"           # índice (reconstruível: python ops/acervo.py reindexar)
     cerebro_db_path: str = "data/cerebro.db"     # M1: entidades/observações/relações (substitui o memoria.db)
     session_db_path: str = "data/sessoes.db"
     
