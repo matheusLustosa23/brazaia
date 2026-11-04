@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     port: int = 8080
     log_level: str = "INFO"
     
-    memory_db_path: str = "data/memoria.db"
+    cerebro_db_path: str = "data/cerebro.db"     # M1: entidades/observações/relações (substitui o memoria.db)
     session_db_path: str = "data/sessoes.db"
     
     device_db_path: str = "data/devices.db"

@@ -62,11 +62,14 @@ class ContextManager:
         rolling_summary: str = "" #conversas compactadas 
     ) -> list[dict]:
         """Ordem canônica: system ESTÁTICO → memória → resumo rolante → histórico → turno atual."""
-        head: list[dict] = [{"role": "system", "content": system_static}]
+        # UMA mensagem system só: o template do Qwen rejeita (400) system fora da 1ª posição. O estático vai
+        # primeiro (prefixo estável p/ o cache de prefixo do vLLM); memória e resumo, que mudam, vão no fim dele.
+        partes = [system_static]
         if memory_block:
-            head.append({"role": "system", "content": memory_block})
+            partes.append(memory_block)
         if rolling_summary:
-            head.append({"role": "system", "content": f"[resumo da conversa]\n{rolling_summary}"})
+            partes.append(f"[resumo da conversa]\n{rolling_summary}")
+        head: list[dict] = [{"role": "system", "content": "\n\n".join(partes)}]
         tail = [user_turn] if user_turn else []
         
         room = self.input_budget - self._count(head + tail)

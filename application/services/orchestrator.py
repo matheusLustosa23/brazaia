@@ -11,7 +11,7 @@ from domain.tools.guard import ToolCtx
 from domain.contracts import SessionStore
 from domain.entities.message import Completion, ToolCall
 from application.services.context_service import ContextManager
-from application.services.memory_service import MemoryService
+from application.services.cerebro_service import CerebroService
 from application.services.helpers import _strip, persist_image, normalize_image_uri
 from application.guards.output import check_output
 from application.services._trace import trace
@@ -97,7 +97,7 @@ class Orchestrator:
         llm: LLMClient,
         context: ContextManager,
         tools: ToolRegistry,
-        memory: MemoryService,
+        memory: CerebroService,
         device_gateway: DeviceGateway,
         session_store: SessionStore,
         file_store: FileStore,
@@ -577,7 +577,7 @@ def _enxuga_autoria(history: list[dict], *, manter_ultimo: bool) -> list[dict]:
                 except orjson.JSONDecodeError:
                     args = None
                 body = args.get("body") if isinstance(args, dict) else None
-                if isinstance(body, str) and len(body) >= _STASH_MIN:
+                if isinstance(args, dict) and isinstance(body, str) and len(body) >= _STASH_MIN:
                     args["body"] = f"⟨conteúdo omitido do histórico · {len(body)} chars⟩"
                     c = {**c, "function": {**f, "arguments": orjson.dumps(args).decode()}}
             novos.append(c)

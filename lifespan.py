@@ -19,14 +19,15 @@ from infrastructure.tools.notify import NotifyTool
 from infrastructure.tools.open_file import OpenFileTool
 from infrastructure.tools.calculate import CalculateTool
 from infrastructure.tools.list_devices import ListDevicesTool
-from infrastructure.memory.sqlite_store import SqlLiteMemoryStore
+from infrastructure.memory.cerebro_store import SqliteCerebroStore
 from infrastructure.memory.session_store import SqlLiteSessionStore
 from application.services.context_service import ContextManager
-from application.services.memory_service import MemoryService
+from application.services.cerebro_service import CerebroService
 from application.services.orchestrator import Orchestrator
 from application.services.device_service import DeviceService
 from application.services.device_handshake import DeviceHandshakeService
 from application.tools.remember import RememberTool
+from application.tools.recall import RecallTool
 from domain.tools.base import ToolRegistry
 from infrastructure.voice.asr import make_asr
 from infrastructure.voice.vad import make_vad
@@ -50,11 +51,11 @@ async def lifespan(app: FastAPI):
         llm=llm,
     )
     
-    # ── Memory ──
-    os.makedirs(os.path.dirname(settings.memory_db_path), exist_ok=True)
-    _store = SqlLiteMemoryStore(settings.memory_db_path)
-    await _store.init()
-    memory = MemoryService(_store)
+    # ── Cérebro (memória do dono) ──
+    os.makedirs(os.path.dirname(settings.cerebro_db_path), exist_ok=True)
+    _cerebro_store = SqliteCerebroStore(settings.cerebro_db_path)
+    await _cerebro_store.init()
+    memory = CerebroService(_cerebro_store)
 
     # ── Session ──
     os.makedirs(os.path.dirname(settings.session_db_path), exist_ok=True)
@@ -83,6 +84,7 @@ async def lifespan(app: FastAPI):
     device_handshake = DeviceHandshakeService(device_service, device_gateway)
     
     registry.register(RememberTool(memory))
+    registry.register(RecallTool(memory))
     registry.register(CaptureImageTool(vision))
     registry.register(SeeFileTool(store))
     registry.register(CreateFileTool(store))

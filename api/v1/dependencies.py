@@ -2,7 +2,7 @@ from fastapi import Request, Header, WebSocket
 from core.container import Container
 from domain.contracts import LLMClient
 from domain.exceptions.base import AgentError
-from application.services.memory_service import MemoryService
+from application.services.cerebro_service import CerebroService
 from application.services.orchestrator import Orchestrator
 from application.services.device_service import DeviceService
 
@@ -15,7 +15,7 @@ def _get_container(request: Request) -> Container:
 def get_llm(request: Request) -> LLMClient:
     return _get_container(request).ai.llm
 
-def get_memory(request: Request) -> MemoryService:
+def get_memory(request: Request) -> CerebroService:
     return _get_container(request).ai.memory
 
 def get_orchestrator(request: Request) -> Orchestrator:
