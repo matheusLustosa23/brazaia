@@ -239,11 +239,23 @@ a.btn:hover { border-color: var(--ciano); color: var(--ciano); box-shadow: var(-
   background: rgba(10, 14, 24, .88); border: 1px solid rgba(34, 229, 255, .5); border-radius: 999px;
   padding: .1rem .55rem; box-shadow: 0 0 10px rgba(34, 229, 255, .25); cursor: pointer; }
 .pino-rotulo b { color: var(--ciano); font-weight: 650; }
+/* card do ponto (clique) */
+.popup-ponto .leaflet-popup-content { margin: .7rem .85rem; }
+.card-ponto { display: grid; gap: .3rem; min-width: 210px; font-size: .85rem; }
+.cp-estado { font-weight: 700; letter-spacing: .02em; }
+.cp-estado.parado { color: #ffb020; }
+.cp-estado.movendo { color: #ff3fd8; }
+.cp-hora { font-size: 1rem; font-variant-numeric: tabular-nums; }
+.cp-extra, .cp-meta { color: var(--suave); font-size: .78rem; }
+.cp-end { border-top: 1px solid var(--borda); padding-top: .35rem; }
+.cp-lugar { font-weight: 650; color: var(--ciano); }
+.card-ponto a { color: var(--ciano); font-size: .8rem; }
 /* horário em cima de cada ponto da trilha */
 .rotulo-hora { pointer-events: none; }
 .rotulo-hora span { position: absolute; left: 0; top: 0; transform: translate(-50%, calc(-100% - 7px)); white-space: nowrap;
   font-size: .68rem; font-variant-numeric: tabular-nums; color: #fff; background: rgba(10, 14, 24, .82);
   border: 1px solid rgba(255, 63, 216, .55); border-radius: 6px; padding: 0 .3rem; line-height: 1.35; }
+.rotulo-hora.parada span { border-color: #ffb020; color: #ffd27a; font-weight: 650; transform: translate(-50%, calc(-100% - 13px)); }
 
 /* importação: carregando + cancelar */
 .drop.carregando { cursor: progress; display: flex; align-items: center; justify-content: center; gap: .7rem; flex-wrap: wrap;

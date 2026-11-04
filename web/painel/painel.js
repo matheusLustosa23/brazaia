@@ -468,6 +468,61 @@ function trechosLimpos(cron) {
   return trechos;
 }
 
+// ── paradas × movimento ──────────────────────────────────────────────────────────────────────────────
+// Parada = pontos seguidos que ficam a até RAIO_PARADA m do centro deles por ≥ 5 min (o centro vai sendo a
+// média). O resto é movimento. Precisão ruim (> 250 m) não decide nada (a rede "pula" com o celular parado).
+const RAIO_PARADA = 120, MIN_PARADA_S = 300, BURACO_MAX_S = 3 * 3600;
+function detectarParadas(cron) {
+  const pts = cron.filter((p) => !(p.precisao_m > 250));
+  const paradas = [];
+  let i = 0;
+  while (i < pts.length) {
+    let j = i, c = { lat: pts[i].lat, lon: pts[i].lon }, n = 1;
+    while (j + 1 < pts.length && metros(c, pts[j + 1]) <= RAIO_PARADA && pts[j + 1].quando - pts[j].quando < BURACO_MAX_S) {
+      j++; n++;
+      c = { lat: c.lat + (pts[j].lat - c.lat) / n, lon: c.lon + (pts[j].lon - c.lon) / n };
+    }
+    if (pts[j].quando - pts[i].quando >= MIN_PARADA_S) {
+      paradas.push({ inicio: pts[i].quando, fim: pts[j].quando, lat: c.lat, lon: c.lon, n });
+      i = j + 1;
+    } else i++;
+  }
+  return paradas;
+}
+
+function duracao(s) {
+  const m = Math.round(s / 60);
+  return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h${m % 60 ? ` ${String(m % 60).padStart(2, "0")}` : ""}`;
+}
+
+// Card do ponto (ao clicar): estado, horário, endereço (Nominatim, pelo server), coordenadas, abrir no Maps.
+function abrirCard(ll, info) {
+  const el = document.createElement("div");
+  el.className = "card-ponto";
+  const t = (cls, txt) => { const e = document.createElement("div"); e.className = cls; e.textContent = txt; el.append(e); return e; };
+  t(`cp-estado ${info.parado ? "parado" : "movendo"}`, info.parado ? "⏸ Parado" : "▶ Em movimento");
+  t("cp-hora", info.hora);
+  if (info.extra) t("cp-extra", info.extra);
+  const end = t("cp-end", "buscando endereço…");
+  t("cp-meta", `${ll.lat.toFixed(6)}, ${ll.lng.toFixed(6)}${info.meta ? ` · ${info.meta}` : ""}`);
+  const a = document.createElement("a");
+  a.href = `https://www.google.com/maps?q=${ll.lat},${ll.lng}`; a.target = "_blank"; a.rel = "noopener";
+  a.textContent = "abrir no Google Maps ↗";
+  el.append(a);
+  L.popup({ maxWidth: 320, className: "popup-ponto" }).setLatLng(ll).setContent(el).openOn(mapa);
+  api(`/endereco?lat=${ll.lat}&lon=${ll.lng}`)
+    .then((r) => {
+      if (r.erro) { end.textContent = r.erro; return; }
+      end.replaceChildren();
+      for (const [cls, v] of [["cp-lugar", r.lugar], ["cp-rua", r.linha1], ["cp-cidade", r.linha2]]) {
+        if (!v) continue;
+        const d = document.createElement("div"); d.className = cls; d.textContent = v; end.append(d);
+      }
+      if (!end.childElementCount) end.textContent = r.completo || "sem endereço para este ponto";
+    })
+    .catch(() => { end.textContent = "endereço indisponível"; });
+}
+
 let mostrarLinha = true;
 try { mostrarLinha = localStorage.getItem("painel.linha") !== "0"; } catch { /* sem storage */ }
 let mostrarHoras = true;
@@ -490,7 +545,7 @@ function desenharRotulos() {
     if (postos.some((q) => Math.abs(q.x - pt.x) < MIN_X && Math.abs(q.y - pt.y) < MIN_Y)) continue;
     postos.push(pt);
     L.marker(r.ll, { interactive: false, keyboard: false,
-      icon: L.divIcon({ className: "rotulo-hora", html: `<span>${r.txt}</span>`, iconSize: null }) }).addTo(grupoRotulos);
+      icon: L.divIcon({ className: `rotulo-hora${r.parada ? " parada" : ""}`, html: `<span>${r.txt}</span>`, iconSize: null }) }).addTo(grupoRotulos);
     if (postos.length >= 150) break;
   }
 }
@@ -524,27 +579,58 @@ async function carregarTrilha() {
   if (mostrarLinha) {
     L.polyline(trechosLimpos(cron), { color: "#ff3fd8", weight: 3, opacity: 0.8, lineJoin: "round" }).addTo(grupoTrilha);
   }
-  const passo = Math.max(1, Math.ceil(cron.length / 1500));      // milhares de bolinhas travam o navegador
-  for (let i = 0; i < cron.length; i += passo) {
-    const p = cron[i];
-    const visita = p.fonte === "google-visita";
-    L.circleMarker([p.lat, p.lon], visita
-      ? { radius: 7, color: "#ff3fd8", weight: 2, fillOpacity: 0.15 }               // lugar visitado (Google)
-      : { radius: 3.5, color: COR_FONTE(p.fonte), weight: 1, fillOpacity: 0.9 })
-      .bindTooltip(`${visita ? "visita · " : ""}${dataHora(p.quando)}${p.precisao_m ? ` · ±${Math.round(p.precisao_m)} m` : ""}` +
-        `${p.fonte && !visita ? ` · ${p.fonte}` : ""}`)
-      .addTo(grupoTrilha);
-  }
   const ult = cron[cron.length - 1];
-  pino([ult.lat, ult.lon], nome, ult.quando).addTo(grupoTrilha);
   const variosDias = new Date(cron[0].quando * 1000).toDateString() !== new Date(ult.quando * 1000).toDateString();
   const hora = (e) => new Date(e * 1000).toLocaleString("pt-BR", variosDias
     ? { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" } : { hour: "2-digit", minute: "2-digit" });
-  rotulosPontos = cron.slice(0, -1).map((p) => ({ ll: L.latLng(p.lat, p.lon), txt: hora(p.quando) }));  // o último já tem o pino
+  const hm = (e) => new Date(e * 1000).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+
+  // paradas: círculo âmbar com "chegou–saiu · quanto tempo"; os pontos de dentro delas não viram bolinha
+  const paradas = detectarParadas(cron);
+  const naParada = (p) => paradas.find((s) => p.quando >= s.inicio && p.quando <= s.fim && metros(s, p) <= RAIO_PARADA);
+  const rotParadas = [];
+  for (const s of paradas) {
+    const info = { parado: true, hora: `${hora(s.inicio)} → ${hm(s.fim)}`, extra: `ficou ${duracao(s.fim - s.inicio)} · ${s.n} ponto(s)` };
+    L.circleMarker([s.lat, s.lon], { radius: 11, color: "#ffb020", weight: 2.5, fillColor: "#ffb020", fillOpacity: 0.28 })
+      .bindTooltip(`⏸ parado ${hm(s.inicio)}–${hm(s.fim)} · ${duracao(s.fim - s.inicio)}`)
+      .on("click", (e) => abrirCard(e.latlng, info))
+      .addTo(grupoTrilha);
+    rotParadas.push({ ll: L.latLng(s.lat, s.lon), txt: `⏸ ${hm(s.inicio)}–${hm(s.fim)} · ${duracao(s.fim - s.inicio)}`, parada: true });
+  }
+
+  // movimento: bolinhas pela fonte + velocidade desde o ponto anterior
+  const passo = Math.max(1, Math.ceil(cron.length / 1500));      // milhares de bolinhas travam o navegador
+  const rotMov = [];
+  let distMov = 0;
+  for (let i = 0; i < cron.length; i++) {
+    const p = cron[i], ant = cron[i - 1];
+    const parada = naParada(p);
+    let vel = null;
+    if (ant && !parada && p.quando > ant.quando && !(p.precisao_m > 250)) {
+      const d = metros(ant, p);
+      vel = (d / (p.quando - ant.quando)) * 3.6;
+      if (vel < 200 && p.quando - ant.quando < 3600) distMov += d;
+    }
+    if (parada || i % passo) continue;
+    const visita = p.fonte === "google-visita";
+    const meta = [p.precisao_m ? `±${Math.round(p.precisao_m)} m` : "", p.fonte || ""].filter(Boolean).join(" · ");
+    const info = { parado: false, hora: dataHora(p.quando), extra: vel != null && vel < 200 ? `${Math.round(vel)} km/h desde o ponto anterior` : "", meta };
+    L.circleMarker([p.lat, p.lon], visita
+      ? { radius: 7, color: "#ff3fd8", weight: 2, fillOpacity: 0.15 }               // lugar visitado (Google)
+      : { radius: 4, color: COR_FONTE(p.fonte), weight: 1, fillOpacity: 0.9 })
+      .bindTooltip(`${hora(p.quando)}${info.extra ? ` · ${Math.round(vel)} km/h` : ""}`)
+      .on("click", (e) => abrirCard(e.latlng, info))
+      .addTo(grupoTrilha);
+    if (i < cron.length - 1) rotMov.push({ ll: L.latLng(p.lat, p.lon), txt: hora(p.quando) });   // o último já tem o pino
+  }
+  pino([ult.lat, ult.lon], nome, ult.quando).addTo(grupoTrilha);
+  rotulosPontos = [...rotParadas, ...rotMov];             // paradas primeiro: ganham o espaço na tela
   mapa.fitBounds(ll, { maxZoom: 16, padding: [40, 40] });
   desenharRotulos();
+  const tParado = paradas.reduce((a, s) => a + s.fim - s.inicio, 0);
   $("#resumo-mapa").textContent = `${nome}: ${pontos.length} posição(ões) de ${dataHora(cron[0].quando)} a ${dataHora(ult.quando)}` +
-    " · ciano = GPS, verde = rede, rosa = Google, círculo vazado = lugar visitado";
+    ` · ${paradas.length} parada(s), ${duracao(tParado)} parado · ${(distMov / 1000).toFixed(1)} km em movimento` +
+    " · âmbar = parado · bolinhas: ciano = GPS, verde = rede, rosa = Google · clique num ponto para ver o endereço";
   renderCompartilhar(nome, ult);
 }
 

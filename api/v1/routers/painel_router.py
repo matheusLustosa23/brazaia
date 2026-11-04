@@ -76,6 +76,14 @@ async def localizacoes(device_id: str, request: Request, horas: float = 24, desd
     return {"device": device_id, "pontos": [dataclasses.asdict(p) for p in pts]}
 
 
+@api.get("/endereco", dependencies=[Depends(require_painel)])
+async def endereco_do_ponto(lat: float, lon: float):
+    """Endereço de um ponto do mapa (ao clicar) — Nominatim/OSM, com cache e 1 pedido/s."""
+    from core import get_settings
+    from infrastructure.geo.endereco import endereco
+    return await endereco(lat, lon, get_settings().web_user_agent)
+
+
 @api.post("/devices/{device_id}/localizar", dependencies=[Depends(require_painel)])
 async def localizar(device_id: str, request: Request):
     """Lê a posição AGORA (mesmo caminho da tool get_location) e grava no histórico."""
