@@ -68,3 +68,36 @@ def test_notificar_usa_a_tool_do_device():
     r = TestClient(app).post("/api/v1/painel/devices/S24/notificar", json={"message": "oi"},
                              headers={"x-api-key": CHAVE})
     assert r.json()["ok"] is True and gw.enviados == [("S24", "notify", {"title": "Painel", "message": "oi"})]
+
+
+class _GW2(_GW):
+    async def request(self, device_id, name, args, timeout=None):
+        self.enviados.append((device_id, name, args))
+        return "data:image/jpeg;base64,AAAA" if name == "capture_image" else "ok"
+
+
+def _app2():
+    app, _ = _app()
+    gw = _GW2()
+    app.state.container = SimpleNamespace(device=SimpleNamespace(gateway=gw))
+    return app, gw
+
+
+def test_capturar_devolve_a_imagem():
+    app, gw = _app2()
+    r = TestClient(app).post("/api/v1/painel/devices/S24/capturar", json={"camera": "front"}, headers={"x-api-key": CHAVE})
+    assert r.json() == {"ok": True, "imagem": "data:image/jpeg;base64,AAAA"}
+    assert gw.enviados[-1] == ("S24", "capture_image", {"camera": "front"})
+
+
+def test_abrir_html_e_imagem_arrastados():
+    app, gw = _app2()
+    c = TestClient(app)
+    h = {"x-api-key": CHAVE}
+    r = c.post("/api/v1/painel/devices/S24/abrir", files={"arquivo": ("a.html", b"<h1>oi</h1>", "text/html")}, headers=h)
+    assert r.json()["ok"] and gw.enviados[-1] == ("S24", "display_page", {"html": "<h1>oi</h1>"})
+    r = c.post("/api/v1/painel/devices/S24/abrir", files={"arquivo": ("f.png", b"\x89PNG", "image/png")}, headers=h)
+    assert r.json()["ok"] and gw.enviados[-1][1] == "open_image"
+    assert gw.enviados[-1][2]["image"].startswith("data:image/png;base64,")
+    r = c.post("/api/v1/painel/devices/S24/abrir", files={"arquivo": ("x.exe", b"MZ", "application/octet-stream")}, headers=h)
+    assert r.status_code == 415
