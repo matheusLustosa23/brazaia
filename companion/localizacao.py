@@ -5,7 +5,7 @@ Duas formas de ler:
   rastreador (processo contínuo, mantido vivo pelo supervisor.sh) → ADAPTATIVO, como a Linha do tempo do Google
       (medido no export do S24: mediana de 42 s entre pontos em movimento, ≥ 5 min parado):
       a cada 30 s lê a "última conhecida" do Android (instantânea e de graça — aproveita o que o Google já leu);
-      sem posição fresca: em movimento pede GPS; parado, no máximo 1 ponto a cada 5 min.
+      sem posição fresca: em movimento pede GPS; parado, 1 ponto a cada 2 min.
   periódica (a cada 15 min, termux-job-scheduler) → só RESERVA se o rastreador estiver morto. O Android
       (Doze/App Standby) adia esse job por horas — medido 04/11: nada das 13:14 às 16h com o celular conectado.
 
@@ -258,7 +258,7 @@ def coletar() -> None:
 
 # ── rastreador contínuo (adaptativo) ───────────────────────────────────────────────────────────────────
 TICK_S = 30            # de quanto em quanto tempo olha (o Google: ~30–45 s em movimento)
-PARADO_S = 300         # parado: no máximo 1 ponto a cada 5 min
+PARADO_S = 120         # parado: 1 ponto a cada 2 min (o Google no S24, parado no trabalho: 09:14, 09:16, 09:18…)
 FRESCO_S = 60          # "última conhecida" mais velha que isto não serve como posição de agora
 RAIO_M = 40            # andou menos que isto (ou que a precisão) = parado
 
@@ -269,14 +269,19 @@ def _dist_m(a: dict, b: dict) -> float:
     return 2 * 6371000 * math.asin(math.sqrt(h))
 
 
+_motivos: list[str] = []          # por que as leituras do tick falharam (vai pro log quando fica sem ponto)
+
+
 def _fix(provedor: str, modo: str, timeout: float) -> dict | None:
     """Uma leitura do termux-location com a IDADE real do fix (elapsedMs) e o provedor que mediu."""
     rc, out = _rodar(["termux-location", "-p", provedor, "-r", modo], timeout)
     try:
         d = json.loads(out)
     except ValueError:
+        _motivos.append(f"{provedor}/{modo}: {out.strip()[:80] or f'rc={rc}'}")
         return None
     if "latitude" not in d:
+        _motivos.append(f"{provedor}/{modo}: {str(d)[:80]}")
         return None
     idade = (d.get("elapsedMs") or 0) / 1000 if modo == "last" else 0
     return {"lat": d["latitude"], "lon": d["longitude"], "precisao_m": d.get("accuracy"),
@@ -304,7 +309,7 @@ def rastrear() -> None:
         print("rastreador já está rodando"); return
     with open(PID_RASTREADOR, "w") as f:
         f.write(str(os.getpid()))
-    print(time.strftime("%d/%m %H:%M:%S"), "rastreador no ar (tick 30 s, parado ≤ 1 ponto/5 min)", flush=True)
+    print(time.strftime("%d/%m %H:%M:%S"), "rastreador no ar (tick 30 s, parado 1 ponto/2 min)", flush=True)
     ultimo: dict | None = None
     ultimo_mov = 0.0                  # última vez que andou de verdade
     ultimo_estado = 0.0
@@ -312,11 +317,22 @@ def rastrear() -> None:
         t0 = time.time()
         try:
             movendo = t0 - ultimo_mov < PARADO_S
+            _motivos.clear()
             p = _mais_fresca()
             if p is None or p["idade_s"] > FRESCO_S:
                 vencido = ultimo is None or t0 - ultimo["quando"] >= PARADO_S
                 if movendo or vencido:        # sem posição fresca: pede uma (GPS se está andando, rede se parado)
-                    p = (_fix("gps", "once", 20) if movendo else None) or _fix("network", "once", 15) or p
+                    velha = p
+                    p = (_fix("gps", "once", 20) if movendo else None) or _fix("network", "once", 15)
+                    if p is None and not movendo:
+                        p = _fix("gps", "once", 20)          # rede não respondeu (04/11: parado 16:17→16:33 sem ponto)
+                    if p is None:
+                        p = velha
+                    sem_ponto = t0 - (ultimo["quando"] if ultimo else t0)
+                    if (p is None or ultimo is None or p["quando"] <= ultimo["quando"] + 1) and sem_ponto >= 2 * PARADO_S:
+                        print(time.strftime("%H:%M:%S"), f"sem posição nova há {round(sem_ponto)}s",
+                              f"(última conhecida: {round(velha['idade_s'])}s)" if velha else "(sem última conhecida)",
+                              "· falhas:", "; ".join(_motivos) or "nenhuma (leitura repetida)", flush=True)
             if p is not None and (ultimo is None or p["quando"] > ultimo["quando"] + 1):
                 d = _dist_m(ultimo, p) if ultimo else float("inf")
                 andou = ultimo is None or d > max(RAIO_M, min(p.get("precisao_m") or 0, 150)) \

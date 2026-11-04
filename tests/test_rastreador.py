@@ -44,9 +44,9 @@ def _p(lat, idade=5, prec=10):
     return {"lat": lat, "lon": -49.2, "precisao_m": prec, "fonte": "gps", "idade_s": idade}
 
 
-def test_parado_no_maximo_um_ponto_a_cada_5_min(monkeypatch, tmp_path):
+def test_parado_um_ponto_a_cada_2_min(monkeypatch, tmp_path):
     fila, _ = _simular(monkeypatch, tmp_path, [(_p(-16.8), None)], ticks=21)    # 10 min parado, fix sempre fresco
-    assert len(fila) == 3                    # t=0, t=5min, t=10min
+    assert len(fila) == 6                    # t=0, 2, 4, 6, 8, 10 min
     assert all(p["origem"] == "rastreador" for p in fila)
 
 
@@ -65,3 +65,10 @@ def test_sem_fix_fresco_andando_pede_gps(monkeypatch, tmp_path):
 def test_bateria_salva(monkeypatch, tmp_path):
     _simular(monkeypatch, tmp_path, [(_p(-16.8), None)], ticks=2)
     assert L.estado_salvo()["bateria"] == 80
+
+
+def test_rede_falha_parado_tenta_gps(monkeypatch, tmp_path):
+    # last sempre velha (idade 900 s) e a rede não responde: parado tem que cair no GPS
+    leituras = [(_p(-16.8, idade=900), _p(-16.8))]
+    fila, pedidos = _simular(monkeypatch, tmp_path, leituras, ticks=6)
+    assert len(fila) >= 1

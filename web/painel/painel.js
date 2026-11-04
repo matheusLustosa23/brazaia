@@ -471,7 +471,10 @@ function trechosLimpos(cron) {
 // ── paradas × movimento ──────────────────────────────────────────────────────────────────────────────
 // Parada = pontos seguidos que ficam a até RAIO_PARADA m do centro deles por ≥ 5 min (o centro vai sendo a
 // média). O resto é movimento. Precisão ruim (> 250 m) não decide nada (a rede "pula" com o celular parado).
-const RAIO_PARADA = 120, MIN_PARADA_S = 300, BURACO_MAX_S = 3 * 3600;
+// Buraco > 20 min sem nenhum ponto = SEM DADOS (não dá pra afirmar que ficou parado: medido 04/11, o job antigo
+// deixou 11:12→12:42 vazio e o mapa "juntava" tudo numa parada só de 6 h 36). O rastreador manda ≤ 5 min parado.
+// MIN_PARADA_S = 2 min: o dono lembrou de ter parado 2–3 min e com 5 min não aparecia (04/11)
+const RAIO_PARADA = 120, MIN_PARADA_S = 120, BURACO_MAX_S = 20 * 60;
 function detectarParadas(cron) {
   const pts = cron.filter((p) => !(p.precisao_m > 250));
   const paradas = [];
@@ -488,6 +491,25 @@ function detectarParadas(cron) {
     } else i++;
   }
   return paradas;
+}
+
+// Buracos: intervalos sem nenhum ponto maiores que BURACO_MAX_S (pra dizer "sem dados", não inventar parada)
+function buracos(cron) {
+  const out = [];
+  for (let i = 1; i < cron.length; i++) {
+    if (cron[i].quando - cron[i - 1].quando > BURACO_MAX_S) out.push({ inicio: cron[i - 1].quando, fim: cron[i].quando });
+  }
+  return out;
+}
+
+// Paradas no MESMO lugar (centros a até RAIO_PARADA) viram um marcador só, com todos os intervalos
+function agruparLugares(paradas) {
+  const lugares = [];
+  for (const s of paradas) {
+    const l = lugares.find((x) => metros(x, s) <= RAIO_PARADA);
+    if (l) l.paradas.push(s); else lugares.push({ lat: s.lat, lon: s.lon, paradas: [s] });
+  }
+  return lugares;
 }
 
 function duracao(s) {
@@ -556,7 +578,9 @@ function escolherNoMapa(id) {
   recarregar();
 }
 
-async function carregarTrilha() {
+let trilhaEm = 0;                             // quando a trilha foi carregada (pro refresh automático)
+async function carregarTrilha(manterVista = false) {
+  trilhaEm = Date.now();
   iniciarMapa();
   const f = estado.filtro;
   if (!f.device) { desenharUltimas(); return; }
@@ -576,28 +600,38 @@ async function carregarTrilha() {
   }
   const cron = pontos.slice().reverse();
   const ll = cron.map((p) => [p.lat, p.lon]);
-  if (mostrarLinha) {
-    L.polyline(trechosLimpos(cron), { color: "#ff3fd8", weight: 3, opacity: 0.8, lineJoin: "round" }).addTo(grupoTrilha);
-  }
   const ult = cron[cron.length - 1];
   const variosDias = new Date(cron[0].quando * 1000).toDateString() !== new Date(ult.quando * 1000).toDateString();
   const hora = (e) => new Date(e * 1000).toLocaleString("pt-BR", variosDias
     ? { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" } : { hour: "2-digit", minute: "2-digit" });
   const hm = (e) => new Date(e * 1000).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
 
-  // paradas: círculo âmbar com "chegou–saiu · quanto tempo"; os pontos de dentro delas não viram bolinha
+  // paradas: círculo âmbar por LUGAR com cada intervalo "chegou–saiu · quanto tempo". É uma MARCAÇÃO por cima:
+  // todos os pontos e a linha crua continuam no mapa (esconder ponto = esconder dado — pedido do dono 04/11)
   const paradas = detectarParadas(cron);
+  const semDados = buracos(cron);
   const naParada = (p) => paradas.find((s) => p.quando >= s.inicio && p.quando <= s.fim && metros(s, p) <= RAIO_PARADA);
   const rotParadas = [];
-  for (const s of paradas) {
-    const info = { parado: true, hora: `${hora(s.inicio)} → ${hm(s.fim)}`, extra: `ficou ${duracao(s.fim - s.inicio)} · ${s.n} ponto(s)` };
-    L.circleMarker([s.lat, s.lon], { radius: 11, color: "#ffb020", weight: 2.5, fillColor: "#ffb020", fillOpacity: 0.28 })
-      .bindTooltip(`⏸ parado ${hm(s.inicio)}–${hm(s.fim)} · ${duracao(s.fim - s.inicio)}`)
+  const intervalo = (s) => `${hm(s.inicio)}–${hm(s.fim)} · ${duracao(s.fim - s.inicio)}`;
+  for (const l of agruparLugares(paradas)) {
+    const total = l.paradas.reduce((a, s) => a + s.fim - s.inicio, 0);
+    const vazios = semDados.filter((b) => l.paradas.some((s) => Math.abs(b.inicio - s.fim) < 60 || Math.abs(b.fim - s.inicio) < 60));
+    const info = { parado: true,
+      hora: l.paradas.map((s) => `${hora(s.inicio)} → ${hm(s.fim)}`).join("\n"),
+      extra: `ficou ${duracao(total)} no total` + (vazios.length ? ` · sem dados: ${vazios.map((b) => `${hm(b.inicio)}–${hm(b.fim)}`).join(", ")}` : "") };
+    L.circleMarker([l.lat, l.lon], { radius: 11, color: "#ffb020", weight: 2.5, fillColor: "#ffb020", fillOpacity: 0.28 })
+      .bindTooltip(`⏸ parado ${l.paradas.map(intervalo).join(" | ")}`)
       .on("click", (e) => abrirCard(e.latlng, info))
       .addTo(grupoTrilha);
-    rotParadas.push({ ll: L.latLng(s.lat, s.lon), txt: `⏸ ${hm(s.inicio)}–${hm(s.fim)} · ${duracao(s.fim - s.inicio)}`, parada: true });
+    rotParadas.push({ ll: L.latLng(l.lat, l.lon), txt: `⏸ ${l.paradas.map(intervalo).join("  ·  ")}`, parada: true });
   }
 
+  // linha crua ANTES das bolinhas e sem clique: no canvas, a camada de cima "rouba" o clique (04/11: o card
+  // não abria nos pontos de movimento porque a linha estava desenhada por cima deles)
+  if (mostrarLinha) {
+    L.polyline(trechosLimpos(cron), { color: "#ff3fd8", weight: 3, opacity: 0.8, lineJoin: "round", interactive: false })
+      .addTo(grupoTrilha);
+  }
   // movimento: bolinhas pela fonte + velocidade desde o ponto anterior
   const passo = Math.max(1, Math.ceil(cron.length / 1500));      // milhares de bolinhas travam o navegador
   const rotMov = [];
@@ -611,25 +645,30 @@ async function carregarTrilha() {
       vel = (d / (p.quando - ant.quando)) * 3.6;
       if (vel < 200 && p.quando - ant.quando < 3600) distMov += d;
     }
-    if (parada || i % passo) continue;
+    if (i % passo) continue;
     const visita = p.fonte === "google-visita";
     const meta = [p.precisao_m ? `±${Math.round(p.precisao_m)} m` : "", p.fonte || ""].filter(Boolean).join(" · ");
-    const info = { parado: false, hora: dataHora(p.quando), extra: vel != null && vel < 200 ? `${Math.round(vel)} km/h desde o ponto anterior` : "", meta };
+    const avisos = [];
+    if (parada) avisos.push(`dentro da parada ${hm(parada.inicio)}–${hm(parada.fim)}`);
+    else if (vel != null && vel < 200) avisos.push(`${Math.round(vel)} km/h desde o ponto anterior`);
+    if (p.precisao_m >= 100) avisos.push("precisão de rede (±100 m): um desvio pequeno pode ser tremido do sinal");
+    const info = { parado: !!parada, hora: dataHora(p.quando), extra: avisos.join(" · "), meta };
     L.circleMarker([p.lat, p.lon], visita
       ? { radius: 7, color: "#ff3fd8", weight: 2, fillOpacity: 0.15 }               // lugar visitado (Google)
       : { radius: 4, color: COR_FONTE(p.fonte), weight: 1, fillOpacity: 0.9 })
-      .bindTooltip(`${hora(p.quando)}${info.extra ? ` · ${Math.round(vel)} km/h` : ""}`)
+      .bindTooltip(`${hora(p.quando)}${!parada && vel != null && vel < 200 ? ` · ${Math.round(vel)} km/h` : ""}`)
       .on("click", (e) => abrirCard(e.latlng, info))
       .addTo(grupoTrilha);
-    if (i < cron.length - 1) rotMov.push({ ll: L.latLng(p.lat, p.lon), txt: hora(p.quando) });   // o último já tem o pino
+    if (i < cron.length - 1 && !parada) rotMov.push({ ll: L.latLng(p.lat, p.lon), txt: hora(p.quando) });  // dentro da parada o horário já está na etiqueta dela
   }
   pino([ult.lat, ult.lon], nome, ult.quando).addTo(grupoTrilha);
   rotulosPontos = [...rotParadas, ...rotMov];             // paradas primeiro: ganham o espaço na tela
-  mapa.fitBounds(ll, { maxZoom: 16, padding: [40, 40] });
+  if (!manterVista) mapa.fitBounds(ll, { maxZoom: 16, padding: [40, 40] });   // refresh: não mexe no zoom do usuário
   desenharRotulos();
   const tParado = paradas.reduce((a, s) => a + s.fim - s.inicio, 0);
   $("#resumo-mapa").textContent = `${nome}: ${pontos.length} posição(ões) de ${dataHora(cron[0].quando)} a ${dataHora(ult.quando)}` +
     ` · ${paradas.length} parada(s), ${duracao(tParado)} parado · ${(distMov / 1000).toFixed(1)} km em movimento` +
+    (semDados.length ? ` · sem dados: ${semDados.map((b) => `${hm(b.inicio)}–${hm(b.fim)}`).join(", ")}` : "") +
     " · âmbar = parado · bolinhas: ciano = GPS, verde = rede, rosa = Google · clique num ponto para ver o endereço";
   renderCompartilhar(nome, ult);
 }
@@ -754,6 +793,10 @@ function abaAtual() {
 async function atualizar() {
   try {
     await carregarDevices();
+    // trilha "até agora" com o mapa aberto: recarrega a cada 30 s (pontos novos do rastreador aparecem sozinhos)
+    if (abaAtual() === "mapa" && estado.filtro.device && estado.filtro.ate == null && Date.now() - trilhaEm > 30_000) {
+      await carregarTrilha(true);
+    }
     $("#status").textContent = `● ${new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`;
   } catch (e) {
     $("#status").textContent = `sem conexão (${e.message})`;
