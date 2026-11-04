@@ -385,6 +385,8 @@ function iniciarMapa() {
   trocarCamada($("#f-camada").value);
   grupoPontos = L.layerGroup().addTo(mapa);
   grupoTrilha = L.layerGroup().addTo(mapa);
+  grupoRotulos = L.layerGroup().addTo(mapa);
+  mapa.on("zoomend moveend", desenharRotulos);                          // mais zoom → cabem mais horários
   new ResizeObserver(() => mapa.invalidateSize()).observe($("#mapa"));   // borda arrastável / tamanhos P M G
 }
 
@@ -468,6 +470,30 @@ function trechosLimpos(cron) {
 
 let mostrarLinha = true;
 try { mostrarLinha = localStorage.getItem("painel.linha") !== "0"; } catch { /* sem storage */ }
+let mostrarHoras = true;
+try { mostrarHoras = localStorage.getItem("painel.horas") !== "0"; } catch { /* sem storage */ }
+let grupoRotulos = null;
+let rotulosPontos = [];                       // [{ll, txt}] da trilha atual, em ordem cronológica
+
+// Horário em cima de cada ponto da trilha. Só desenha os que NÃO se sobrepõem na tela (guloso, em ordem
+// cronológica): com zoom afastado aparecem poucos; aproximando, aparecem os do meio.
+function desenharRotulos() {
+  if (!grupoRotulos) return;
+  grupoRotulos.clearLayers();
+  if (!mostrarHoras || !rotulosPontos.length) return;
+  const vista = mapa.getBounds().pad(0.1);
+  const postos = [];
+  const MIN_X = 64, MIN_Y = 22;               // ~ tamanho de uma etiqueta "dd/mm 09:18"
+  for (const r of rotulosPontos) {
+    if (!vista.contains(r.ll)) continue;
+    const pt = mapa.latLngToContainerPoint(r.ll);
+    if (postos.some((q) => Math.abs(q.x - pt.x) < MIN_X && Math.abs(q.y - pt.y) < MIN_Y)) continue;
+    postos.push(pt);
+    L.marker(r.ll, { interactive: false, keyboard: false,
+      icon: L.divIcon({ className: "rotulo-hora", html: `<span>${r.txt}</span>`, iconSize: null }) }).addTo(grupoRotulos);
+    if (postos.length >= 150) break;
+  }
+}
 
 function escolherNoMapa(id) {
   estado.filtro.device = id;
@@ -484,6 +510,8 @@ async function carregarTrilha() {
   const { pontos } = await api(`/devices/${encodeURIComponent(f.device)}/localizacoes?${q}`);
   grupoPontos.clearLayers();
   grupoTrilha.clearLayers();
+  rotulosPontos = [];
+  desenharRotulos();
   const d = dev(f.device);
   const nome = d?.nome || f.device;
   if (!pontos.length) {
@@ -509,7 +537,12 @@ async function carregarTrilha() {
   }
   const ult = cron[cron.length - 1];
   pino([ult.lat, ult.lon], nome, ult.quando).addTo(grupoTrilha);
+  const variosDias = new Date(cron[0].quando * 1000).toDateString() !== new Date(ult.quando * 1000).toDateString();
+  const hora = (e) => new Date(e * 1000).toLocaleString("pt-BR", variosDias
+    ? { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" } : { hour: "2-digit", minute: "2-digit" });
+  rotulosPontos = cron.slice(0, -1).map((p) => ({ ll: L.latLng(p.lat, p.lon), txt: hora(p.quando) }));  // o último já tem o pino
   mapa.fitBounds(ll, { maxZoom: 16, padding: [40, 40] });
+  desenharRotulos();
   $("#resumo-mapa").textContent = `${nome}: ${pontos.length} posição(ões) de ${dataHora(cron[0].quando)} a ${dataHora(ult.quando)}` +
     " · ciano = GPS, verde = rede, rosa = Google, círculo vazado = lugar visitado";
   renderCompartilhar(nome, ult);
@@ -527,8 +560,10 @@ function aplicarPreset(h) {
   estado.filtro.horas = h;
   estado.filtro.desde = h ? Date.now() / 1000 - h * 3600 : 0;     // 0 = desde sempre
   estado.filtro.ate = null;
+  // os campos De/Até mostram o intervalo que o preset escolheu (dá pra ajustar a partir dele e Aplicar);
+  // estado.filtro.ate segue null = "até agora" (a trilha continua viva, não congela na hora do clique)
   $("#f-de").value = h ? paraInput(estado.filtro.desde) : "";
-  $("#f-ate").value = "";
+  $("#f-ate").value = paraInput(Date.now() / 1000);
 }
 
 const recarregar = () => carregarTrilha().catch((x) => aviso(x.message, true));
@@ -548,6 +583,13 @@ $("#f-aplicar").addEventListener("click", () => {
   recarregar();
 });
 $("#f-camada").addEventListener("change", (e) => trocarCamada(e.target.value));
+$("#f-horas").classList.toggle("sel", mostrarHoras);
+$("#f-horas").addEventListener("click", () => {
+  mostrarHoras = !mostrarHoras;
+  $("#f-horas").classList.toggle("sel", mostrarHoras);
+  try { localStorage.setItem("painel.horas", mostrarHoras ? "1" : "0"); } catch { /* sem storage */ }
+  desenharRotulos();
+});
 $("#f-linha").classList.toggle("sel", mostrarLinha);
 $("#f-linha").addEventListener("click", () => {
   mostrarLinha = !mostrarLinha;

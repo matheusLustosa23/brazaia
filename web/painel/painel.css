@@ -239,6 +239,11 @@ a.btn:hover { border-color: var(--ciano); color: var(--ciano); box-shadow: var(-
   background: rgba(10, 14, 24, .88); border: 1px solid rgba(34, 229, 255, .5); border-radius: 999px;
   padding: .1rem .55rem; box-shadow: 0 0 10px rgba(34, 229, 255, .25); cursor: pointer; }
 .pino-rotulo b { color: var(--ciano); font-weight: 650; }
+/* horário em cima de cada ponto da trilha */
+.rotulo-hora { pointer-events: none; }
+.rotulo-hora span { position: absolute; left: 0; top: 0; transform: translate(-50%, calc(-100% - 7px)); white-space: nowrap;
+  font-size: .68rem; font-variant-numeric: tabular-nums; color: #fff; background: rgba(10, 14, 24, .82);
+  border: 1px solid rgba(255, 63, 216, .55); border-radius: 6px; padding: 0 .3rem; line-height: 1.35; }
 
 /* importação: carregando + cancelar */
 .drop.carregando { cursor: progress; display: flex; align-items: center; justify-content: center; gap: .7rem; flex-wrap: wrap;
