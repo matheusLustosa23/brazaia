@@ -6,6 +6,7 @@
 #   recordar()       → tool `recall`: busca por palavras OU tudo de uma entidade (com histórico se pedir).
 #   render_compact() → bloco injetado em TODO turno: NÚCLEO (tudo sobre o dono) + o que a fala atual puxa.
 #   registrar() / consultar() → (M2) tools `log` / `query_log`: o que ACONTECEU, com data e números.
+import dataclasses
 import datetime as dt
 import math
 import re
@@ -153,7 +154,7 @@ class CerebroService:
     async def lembrar(self, texto: str, categoria: str, entidade: str | None = None, tipo: str | None = None,
                       substitui: int | None = None, relacao: str | None = None, com: str | None = None,
                       fonte: str = "") -> str:
-        ent = await self._store.entidade(self.nome_entidade(entidade), tipo)
+        ent = await self._promover(await self._store.entidade(self.nome_entidade(entidade), tipo), tipo)
         try:
             obs, op = await self._store.observar(ent.id, categoria, texto, substitui=substitui, fonte=fonte)
         except ValueError as e:
@@ -177,6 +178,13 @@ class CerebroService:
             r = await self._store.relacionar(ent.id, relacao, alvo.id)
             saida += f" · ligação {ent.nome} —{norm(relacao)}→ {alvo.nome}" + (" (já existia)" if r == "NOOP" else "")
         return saida
+
+    async def _promover(self, ent, tipo: str | None):
+        """Entidade criada sem tipo (ex.: como alvo de uma ligação) fica 'geral'; quando o tipo aparece, ela ganha."""
+        if tipo and ent.tipo == "geral" and norm(tipo) != "geral":
+            await self._store.mudar_tipo(ent.id, tipo)
+            return await self._store.entidade_por_id(ent.id) or ent
+        return ent
 
     async def _parecidas(self, nova: Observacao) -> list[Observacao]:
         """Observações válidas da MESMA entidade que talvez digam a mesma coisa: mesma categoria ou ≥2 palavras
@@ -280,7 +288,8 @@ class CerebroService:
             return "[erro] falta o tipo (ex.: treino, serie, estudo) — nada foi registrado."
         ent = None
         if assunto:
-            ent = await self._store.entidade(self.nome_entidade(assunto), _ASSUNTO_TIPO.get(norm(tipo)))
+            sugerido = _ASSUNTO_TIPO.get(norm(tipo))
+            ent = await self._promover(await self._store.entidade(self.nome_entidade(assunto), sugerido), sugerido)
         aviso = ""
         if acao == "abrir":
             if aberta is not None:                       # abriu outra sem fechar: fecha a anterior agora
@@ -333,6 +342,117 @@ class CerebroService:
         if len(regs) > limite:
             linhas.append(f"(+{len(regs) - limite} mais antigos)")
         return "\n".join(linhas)
+
+    # ── painel (P3): o dono vê e mexe no cérebro pelas MESMAS regras (corrigir = substitui, com histórico) ──
+    async def panorama(self) -> dict:
+        p = await self._store.panorama()
+        p["tipos"] = [{"nome": n, "area": a} for n, a in await self._store.tipos()]
+        return p
+
+    async def ficha(self, ent_id: int) -> dict | None:
+        ent = await self._store.entidade_por_id(ent_id)
+        if ent is None:
+            return None
+        obs = await self._store.da_entidade(ent_id, incluir_antigas=True)
+        regs = await self._store.registros(entidade_id=ent_id, limite=500)
+        numeros = sorted({k for r in regs for k, v in r.dados.items() if isinstance(v, (int, float))})
+        return {"entidade": dataclasses.asdict(ent),
+                "observacoes": [dataclasses.asdict(o) for o in obs],
+                "relacoes": await self._store.relacoes_com_id(ent_id),
+                "registros": [dataclasses.asdict(r) for r in regs],
+                "metricas": numeros}
+
+    async def criar_entidade(self, nome: str, tipo: str | None) -> dict:
+        nome = (nome or "").strip()
+        if not nome:
+            raise ValueError("dê um nome")
+        if await self._store.achar_entidade(nome):
+            raise ValueError(f"já existe '{nome}'")
+        ent = await self._store.entidade(nome, tipo)
+        self._cache.clear()
+        return dataclasses.asdict(ent)
+
+    async def editar_entidade(self, ent_id: int, nome: str | None = None, tipo: str | None = None,
+                              area: str | None = None) -> dict:
+        ent = await self._store.entidade_por_id(ent_id)
+        if ent is None:
+            raise ValueError("entidade não existe")
+        if nome and nome.strip() != ent.nome:
+            if ent.nome == DONO:
+                raise ValueError("'Você' é o dono — o nome não muda")
+            await self._store.renomear_entidade(ent_id, nome)
+        if tipo and norm(tipo) != ent.tipo:
+            await self._store.mudar_tipo(ent_id, tipo)
+        if area:
+            atual = await self._store.entidade_por_id(ent_id)
+            await self._store.definir_area((atual or ent).tipo, area)
+        self._cache.clear()
+        return dataclasses.asdict(await self._store.entidade_por_id(ent_id) or ent)
+
+    async def apagar_entidade(self, ent_id: int) -> dict:
+        ent = await self._store.entidade_por_id(ent_id)
+        if ent is None:
+            raise ValueError("entidade não existe")
+        if ent.nome == DONO:
+            raise ValueError("'Você' não pode ser apagado (é o núcleo da memória)")
+        r = await self._store.apagar_entidade(ent_id)
+        self._cache.clear()
+        return r
+
+    async def nova_observacao(self, ent_id: int, categoria: str, texto: str, substitui: int | None = None) -> dict:
+        if not (texto or "").strip():
+            raise ValueError("texto vazio")
+        obs, op = await self._store.observar(ent_id, categoria or "observacao", texto, substitui=substitui,
+                                             fonte="painel")
+        self._cache.clear()
+        return {"op": op, "observacao": dataclasses.asdict(obs)}
+
+    async def invalidar_observacao(self, obs_id: int) -> bool:
+        ok = await self._store.invalidar(obs_id)
+        self._cache.clear()
+        return ok
+
+    async def apagar_observacao(self, obs_id: int) -> bool:
+        ok = await self._store.apagar_observacao(obs_id)
+        self._cache.clear()
+        return ok
+
+    async def nova_relacao(self, de_id: int, tipo: str, para: str) -> dict:
+        de = await self._store.entidade_por_id(de_id)
+        if de is None or not (tipo or "").strip() or not (para or "").strip():
+            raise ValueError("diga o tipo da ligação e com quem")
+        alvo = await self._store.entidade(self.nome_entidade(para))
+        if alvo.id == de.id:
+            raise ValueError("uma entidade não se liga a ela mesma")
+        op = await self._store.relacionar(de.id, tipo, alvo.id)
+        self._cache.clear()
+        return {"op": op, "para": dataclasses.asdict(alvo)}
+
+    async def apagar_relacao(self, rel_id: int) -> bool:
+        ok = await self._store.apagar_relacao(rel_id)
+        self._cache.clear()
+        return ok
+
+    async def lista_registros(self, tipo: str | None = None, entidade_id: int | None = None,
+                              desde: float | None = None, ate: float | None = None) -> list[dict]:
+        regs = await self._store.registros(tipo=tipo, entidade_id=entidade_id, desde=desde, ate=ate, limite=2000)
+        return [dataclasses.asdict(r) for r in regs]
+
+    async def invalidar_registro(self, reg_id: int) -> bool:
+        ok = await self._store.invalidar_registro(reg_id)
+        self._cache.clear()
+        return ok
+
+    async def revisar(self, dias: float = 7) -> dict:
+        desde = time.time() - dias * 86400
+        return {"observacoes": [dataclasses.asdict(o) for o in await self._store.observacoes_desde(desde)],
+                "registros": [dataclasses.asdict(r) for r in await self._store.registros(desde=desde, limite=300)]}
+
+    async def busca_painel(self, q: str) -> dict:
+        achadas = await self._ranquear(q, limite=30)
+        alvo = norm(q)
+        ents = [e for e in (await self._store.panorama())["entidades"] if alvo and alvo in norm(e["nome"])]
+        return {"observacoes": [dataclasses.asdict(o) for o in achadas], "entidades": ents[:20]}
 
     # ── contexto (todo turno) ──────────────────────────────────────────────────────────────────────────
     async def render_compact(self, query: str | None = None) -> str:

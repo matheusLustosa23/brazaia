@@ -324,3 +324,121 @@ class SqliteCerebroStore:
                 _REG_SELECT + " WHERE " + " AND ".join(onde) + " ORDER BY r.quando DESC, r.id DESC LIMIT ?",
                 (*args, limite))
         return [_reg(r) for r in rows]
+
+    # ── painel (P3): visão geral e gestão pelo dono ───────────────────────────────────────────────────────
+    async def tipos(self) -> list[tuple[str, str]]:
+        async with self._db() as db:
+            return [(r[0], r[1]) for r in await db.execute_fetchall("SELECT nome, area FROM tipos ORDER BY area, nome")]
+
+    async def definir_area(self, tipo: str, area: str) -> None:
+        async with self._db() as db:
+            t = await self._tipo(db, tipo)
+            await db.execute("UPDATE tipos SET area = ? WHERE nome = ?", (norm(area) or "geral", t))
+            await db.commit()
+
+    async def entidade_por_id(self, ent_id: int) -> Entidade | None:
+        async with self._db() as db:
+            r = await (await db.execute(
+                "SELECT e.id, e.tipo, e.nome, t.area FROM entidades e JOIN tipos t ON t.nome = e.tipo WHERE e.id = ?",
+                (ent_id,))).fetchone()
+        return Entidade(id=r[0], tipo=r[1], nome=r[2], area=r[3]) if r else None
+
+    async def panorama(self) -> dict:
+        """Tudo que o grafo precisa numa ida: entidades (com contagens), relações válidas e totais."""
+        async with self._db() as db:
+            ents = list(await db.execute_fetchall(
+                """SELECT e.id, e.nome, e.tipo, t.area, e.criado_em, e.atualizado_em,
+                          (SELECT COUNT(*) FROM observacoes o WHERE o.entidade_id = e.id AND o.invalido_em IS NULL),
+                          (SELECT COUNT(*) FROM registros r WHERE r.entidade_id = e.id AND r.invalido_em IS NULL)
+                   FROM entidades e JOIN tipos t ON t.nome = e.tipo ORDER BY e.id"""))
+            rels = list(await db.execute_fetchall(
+                "SELECT id, de_id, tipo, para_id, criado_em FROM relacoes WHERE invalido_em IS NULL ORDER BY id"))
+            tot = await (await db.execute(
+                """SELECT (SELECT COUNT(*) FROM observacoes WHERE invalido_em IS NULL),
+                          (SELECT COUNT(*) FROM observacoes WHERE invalido_em IS NOT NULL),
+                          (SELECT COUNT(*) FROM registros WHERE invalido_em IS NULL)""")).fetchone() or (0, 0, 0)
+        return {
+            "entidades": [{"id": r[0], "nome": r[1], "tipo": r[2], "area": r[3], "criado_em": r[4],
+                           "atualizado_em": r[5], "n_obs": r[6], "n_reg": r[7]} for r in ents],
+            "relacoes": [{"id": r[0], "de": r[1], "tipo": r[2], "para": r[3], "criado_em": r[4]} for r in rels],
+            "totais": {"entidades": len(ents), "observacoes": tot[0], "historico": tot[1], "registros": tot[2],
+                       "relacoes": len(rels)},
+        }
+
+    async def relacoes_com_id(self, entidade_id: int) -> list[dict]:
+        async with self._db() as db:
+            rows = await db.execute_fetchall(
+                "SELECT r.id, a.id, a.nome, r.tipo, b.id, b.nome FROM relacoes r"
+                " JOIN entidades a ON a.id = r.de_id JOIN entidades b ON b.id = r.para_id"
+                " WHERE r.invalido_em IS NULL AND (r.de_id = ? OR r.para_id = ?) ORDER BY r.criado_em",
+                (entidade_id, entidade_id))
+        return [{"id": r[0], "de_id": r[1], "de": r[2], "tipo": r[3], "para_id": r[4], "para": r[5]} for r in rows]
+
+    async def renomear_entidade(self, ent_id: int, nome: str) -> None:
+        nome = nome.strip()
+        if not nome:
+            raise ValueError("nome vazio")
+        async with self._db() as db:
+            outro = await (await db.execute("SELECT id FROM entidades WHERE nome_norm = ? AND id <> ?",
+                                            (norm(nome), ent_id))).fetchone()
+            if outro:
+                raise ValueError(f"já existe uma entidade chamada '{nome}'")
+            await db.execute("UPDATE entidades SET nome = ?, nome_norm = ?, atualizado_em = ? WHERE id = ?",
+                             (nome, norm(nome), time.time(), ent_id))
+            # o índice de busca guarda o nome da entidade em cada observação — acompanha o novo nome
+            await db.execute("UPDATE obs_fts SET entidade = ? WHERE rowid IN (SELECT id FROM observacoes WHERE entidade_id = ?)",
+                             (nome, ent_id))
+            await db.commit()
+
+    async def mudar_tipo(self, ent_id: int, tipo: str) -> None:
+        async with self._db() as db:
+            t = await self._tipo(db, tipo)
+            await db.execute("UPDATE entidades SET tipo = ?, atualizado_em = ? WHERE id = ?", (t, time.time(), ent_id))
+            await db.commit()
+
+    async def apagar_entidade(self, ent_id: int) -> dict:
+        """Apaga DE VEZ a entidade e o que é dela (observações, ligações, registros). Só pelo dono, no painel."""
+        async with self._db() as db:
+            ids = [r[0] for r in await db.execute_fetchall("SELECT id FROM observacoes WHERE entidade_id = ?", (ent_id,))]
+            await db.executemany("DELETE FROM obs_fts WHERE rowid = ?", [(i,) for i in ids])
+            await db.execute("UPDATE observacoes SET substitui = NULL WHERE entidade_id = ?", (ent_id,))
+            n_obs = (await db.execute("DELETE FROM observacoes WHERE entidade_id = ?", (ent_id,))).rowcount
+            n_rel = (await db.execute("DELETE FROM relacoes WHERE de_id = ? OR para_id = ?", (ent_id, ent_id))).rowcount
+            await db.execute("UPDATE registros SET sessao = NULL WHERE sessao IN (SELECT id FROM registros WHERE entidade_id = ?)",
+                             (ent_id,))
+            await db.execute("UPDATE registros SET substitui = NULL WHERE substitui IN (SELECT id FROM registros WHERE entidade_id = ?)",
+                             (ent_id,))
+            n_reg = (await db.execute("DELETE FROM registros WHERE entidade_id = ?", (ent_id,))).rowcount
+            await db.execute("DELETE FROM entidades WHERE id = ?", (ent_id,))
+            await db.commit()
+        return {"observacoes": n_obs, "relacoes": n_rel, "registros": n_reg}
+
+    async def apagar_observacao(self, obs_id: int) -> bool:
+        """De vez (some até do histórico). Invalidar é o caminho normal; isto é pra lixo/erro."""
+        async with self._db() as db:
+            await db.execute("UPDATE observacoes SET substitui = NULL WHERE substitui = ?", (obs_id,))
+            await db.execute("DELETE FROM obs_fts WHERE rowid = ?", (obs_id,))
+            ok = (await db.execute("DELETE FROM observacoes WHERE id = ?", (obs_id,))).rowcount > 0
+            await db.commit()
+            return ok
+
+    async def apagar_relacao(self, rel_id: int) -> bool:
+        async with self._db() as db:
+            ok = (await db.execute("DELETE FROM relacoes WHERE id = ?", (rel_id,))).rowcount > 0
+            await db.commit()
+            return ok
+
+    async def invalidar_registro(self, reg_id: int) -> bool:
+        async with self._db() as db:
+            ok = (await db.execute("UPDATE registros SET invalido_em = ? WHERE id = ? AND invalido_em IS NULL",
+                                   (time.time(), reg_id))).rowcount > 0
+            await db.commit()
+            return ok
+
+    async def observacoes_desde(self, desde: float) -> list[Observacao]:
+        """Pra tela Revisar: tudo que entrou (ou foi corrigido) desde `desde`, mais novo primeiro."""
+        async with self._db() as db:
+            rows = await db.execute_fetchall(
+                _OBS_SELECT + " WHERE o.valido_desde >= ? OR o.invalido_em >= ? ORDER BY o.valido_desde DESC LIMIT 300",
+                (desde, desde))
+        return [_obs(r) for r in rows]

@@ -152,3 +152,108 @@ async def importar_google(device_id: str, request: Request, arquivo: UploadFile 
     return {"ok": True, "lidos": len(pontos), "novos": novos,
             "de": pontos[0]["quando"] if pontos else None, "ate": pontos[-1]["quando"] if pontos else None}
 
+
+
+# ── cérebro (P3): grafo, ficha, gestão, linha do tempo, revisar ─────────────────────────────────────────
+def _cer(request: Request):
+    return request.app.state.container.ai.memory
+
+
+async def _ou_422(coro):
+    try:
+        return await coro
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@api.get("/cerebro", dependencies=[Depends(require_painel)])
+async def cerebro_panorama(request: Request):
+    return await _cer(request).panorama()
+
+
+@api.get("/cerebro/entidades/{ent_id}", dependencies=[Depends(require_painel)])
+async def cerebro_ficha(ent_id: int, request: Request):
+    f = await _cer(request).ficha(ent_id)
+    if f is None:
+        raise HTTPException(status_code=404, detail="entidade não existe")
+    return f
+
+
+class EntidadeIn(BaseModel):
+    nome: str | None = Field(default=None, max_length=120)
+    tipo: str | None = Field(default=None, max_length=60)
+    area: str | None = Field(default=None, max_length=40)
+
+
+@api.post("/cerebro/entidades", dependencies=[Depends(require_painel)])
+async def cerebro_criar(corpo: EntidadeIn, request: Request):
+    return await _ou_422(_cer(request).criar_entidade(corpo.nome or "", corpo.tipo))
+
+
+@api.patch("/cerebro/entidades/{ent_id}", dependencies=[Depends(require_painel)])
+async def cerebro_editar(ent_id: int, corpo: EntidadeIn, request: Request):
+    return await _ou_422(_cer(request).editar_entidade(ent_id, corpo.nome, corpo.tipo, corpo.area))
+
+
+@api.delete("/cerebro/entidades/{ent_id}", dependencies=[Depends(require_painel)])
+async def cerebro_apagar(ent_id: int, request: Request):
+    return await _ou_422(_cer(request).apagar_entidade(ent_id))
+
+
+class ObservacaoIn(BaseModel):
+    entidade_id: int
+    categoria: str = Field(default="observacao", max_length=60)
+    texto: str = Field(max_length=1000)
+    substitui: int | None = None          # editar = corrigir: a antiga fica no histórico
+
+
+@api.post("/cerebro/observacoes", dependencies=[Depends(require_painel)])
+async def cerebro_observar(corpo: ObservacaoIn, request: Request):
+    return await _ou_422(_cer(request).nova_observacao(corpo.entidade_id, corpo.categoria, corpo.texto, corpo.substitui))
+
+
+@api.post("/cerebro/observacoes/{obs_id}/invalidar", dependencies=[Depends(require_painel)])
+async def cerebro_invalidar(obs_id: int, request: Request):
+    return {"ok": await _cer(request).invalidar_observacao(obs_id)}
+
+
+@api.delete("/cerebro/observacoes/{obs_id}", dependencies=[Depends(require_painel)])
+async def cerebro_apagar_obs(obs_id: int, request: Request):
+    return {"ok": await _cer(request).apagar_observacao(obs_id)}
+
+
+class RelacaoIn(BaseModel):
+    de_id: int
+    tipo: str = Field(max_length=60)
+    para: str = Field(max_length=120)     # nome da outra entidade (criada se não existir)
+
+
+@api.post("/cerebro/relacoes", dependencies=[Depends(require_painel)])
+async def cerebro_relacionar(corpo: RelacaoIn, request: Request):
+    return await _ou_422(_cer(request).nova_relacao(corpo.de_id, corpo.tipo, corpo.para))
+
+
+@api.delete("/cerebro/relacoes/{rel_id}", dependencies=[Depends(require_painel)])
+async def cerebro_apagar_rel(rel_id: int, request: Request):
+    return {"ok": await _cer(request).apagar_relacao(rel_id)}
+
+
+@api.get("/cerebro/registros", dependencies=[Depends(require_painel)])
+async def cerebro_registros(request: Request, tipo: str | None = None, entidade_id: int | None = None,
+                            desde: float | None = None, ate: float | None = None):
+    return {"registros": await _cer(request).lista_registros(tipo, entidade_id, desde, ate)}
+
+
+@api.post("/cerebro/registros/{reg_id}/invalidar", dependencies=[Depends(require_painel)])
+async def cerebro_invalidar_reg(reg_id: int, request: Request):
+    return {"ok": await _cer(request).invalidar_registro(reg_id)}
+
+
+@api.get("/cerebro/revisar", dependencies=[Depends(require_painel)])
+async def cerebro_revisar(request: Request, dias: float = 7):
+    return await _cer(request).revisar(dias)
+
+
+@api.get("/cerebro/busca", dependencies=[Depends(require_painel)])
+async def cerebro_busca(request: Request, q: str = ""):
+    return await _cer(request).busca_painel(q)
