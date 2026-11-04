@@ -1,3 +1,4 @@
+import json
 from functools import lru_cache
 
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
@@ -17,11 +18,25 @@ def _flatten(messages: list[dict]) -> list[dict]:
     for m in messages:
         content = m.get("content","") 
         if isinstance(content, list):
-            text = " ".join(block.get("text", "") for block in content if block.get("type") == "text")
-            flat.append({"role": m["role"], "content": text})
-        else:
-            flat.append(m)
+            m = {**m, "content": " ".join(b.get("text", "") for b in content if b.get("type") == "text")}
+        if m.get("tool_calls"):
+            # o chat template do Qwen itera arguments|items (exige dict); a API manda string JSON. Sem converter,
+            # o template levanta e o fallback contava só o content — o body do create_file valia 0 token.
+            m = {**m, "tool_calls": [_args_dict(tc) for tc in m["tool_calls"]]}
+        flat.append(m)
     return flat
+
+
+def _args_dict(tc: dict) -> dict:
+    f = tc.get("function") or {}
+    a = f.get("arguments")
+    if isinstance(a, str):
+        try:
+            a = json.loads(a or "{}")
+        except ValueError:
+            a = {"_raw": a}
+        tc = {**tc, "function": {**f, "arguments": a if isinstance(a, dict) else {"_raw": a}}}
+    return tc
 
 
 def count_tokens(messages: list[dict], model: str | None = None) -> int:

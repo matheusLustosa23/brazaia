@@ -54,7 +54,8 @@ class NotifyTool(Tool[NotifyInput]):
         self._index = index    
         
     async def run(self, payload: NotifyInput, ctx: ToolCtx) -> str:
-        args:dict = {"title": payload.title, "message": payload.message}
+        # o modelo às vezes escapa duas vezes no JSON ("\\n") → chega '\n' literal na tela
+        args:dict = {"title": payload.title, "message": payload.message.replace("\\n", "\n")}
         if payload.image_id:
             data_uri = resolve_data_uri(self._index, payload.image_id)
             if data_uri is None:
