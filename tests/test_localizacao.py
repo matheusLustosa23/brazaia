@@ -100,3 +100,38 @@ def test_fila_do_companion(tmp_path, monkeypatch):
     assert len(L.pendentes()) == 1
     L.remover([resto[0]["id"]])                                       # remover não quebra com a linha cortada
     assert L.pendentes() == []
+
+
+async def test_tool_historico_no_intervalo(svc):
+    import datetime as dt
+    ontem = dt.datetime.now() - dt.timedelta(days=1)
+    base = ontem.replace(hour=12, minute=0, second=0, microsecond=0).timestamp()
+    await svc.salvar_localizacoes("S24", [{"lat": -16.7 - i / 100, "lon": -49.1, "quando": base + i * 900}
+                                          for i in range(40)])          # 12:00 → 21:45, a cada 15 min
+    tool = GetLocationTool(_GW(svc))  # type: ignore[arg-type]
+    out = await tool.run(GetLocationInput(device="S24", desde="ontem 14:00", ate="ontem 18:00"),
+                         ToolCtx(fala_do_usuario=""))
+    assert "histórico de S24: 17 posição(ões)" in out and "14:00" in out and "18:00" in out
+    assert out.count("\n- ") <= 14
+
+
+async def test_tool_historico_exige_device(svc):
+    tool = GetLocationTool(_GW(svc))  # type: ignore[arg-type]
+    out = await tool.run(GetLocationInput(desde="ontem"), ToolCtx(fala_do_usuario=""))
+    assert out.startswith("[erro]")
+
+
+def test_importa_linha_do_tempo_google():
+    import json as _j
+    from infrastructure.devices import google_timeline as g
+    a = {"semanticSegments": [{"startTime": "2026-10-01T08:00:00.000-03:00",
+                               "timelinePath": [{"point": "-16.7081°, -49.0931°", "time": "2026-10-01T08:10:00.000-03:00"}]},
+                              {"startTime": "2026-10-01T09:00:00.000-03:00",
+                               "visit": {"topCandidate": {"placeLocation": {"latLng": "-16.80°, -49.20°"}}}}],
+         "rawSignals": [{"position": {"LatLng": "-16.81°, -49.21°", "accuracyMeters": 12,
+                                      "timestamp": "2026-10-01T13:00:00.000-03:00"}}]}
+    pts = g.ler(_j.dumps(a).encode())
+    assert [p["fonte"] for p in pts] == ["google-trajeto", "google-visita", "google-gps"]
+    assert all(p["origem"] == "google" for p in pts) and pts[2]["precisao_m"] == 12
+    c = {"locations": [{"latitudeE7": -167081000, "longitudeE7": -490931000, "timestamp": "2026-10-01T08:00:00Z"}]}
+    assert g.ler(_j.dumps(c).encode())[0]["lat"] == -16.7081

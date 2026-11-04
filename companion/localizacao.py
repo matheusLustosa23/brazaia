@@ -27,13 +27,14 @@ def plataforma() -> str:
     return "macos" if sys.platform == "darwin" else "linux"
 
 
-def _rodar(cmd: list[str], timeout: float) -> tuple[int, str]:
+def _rodar(cmd: list[str], timeout: float, env: dict | None = None) -> tuple[int, str]:
     """Roda e devolve (rc, stdout+stderr). Estourou o tempo → (124, 'timeout')."""
     # Windows: o companion de fundo roda SEM console (VBS escondido); um filho de console (powershell) herdando
     # isso morre com 0xC0000142 (DLL init). CREATE_NO_WINDOW dá a ele um console próprio, invisível.
     kw = {"creationflags": 0x08000000, "stdin": subprocess.DEVNULL} if os.name == "nt" else {}
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, **kw)
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                           env={**os.environ, **env} if env else None, **kw)
         return p.returncode, (p.stdout or "") + (p.stderr or "")
     except subprocess.TimeoutExpired:
         return 124, "timeout"
@@ -83,13 +84,17 @@ def _linux() -> dict | str:
                  if os.path.exists(p)), None)
     if not demo:
         return "linux: GeoClue não instalado (sem fonte de localização)"
-    rc, out = _rodar([demo, "-t", "12"], 15)
-    lat = re.search(r"Latitude:\s*(-?[\d.]+)", out)
-    lon = re.search(r"Longitude:\s*(-?[\d.]+)", out)
-    prec = re.search(r"Accuracy:\s*([\d.]+)", out)
+    # LC_ALL=C: em pt_BR ele escreve "-16,708100" (vírgula). -t 20: a 1ª posição pode levar uns 10-15 s.
+    rc, out = _rodar([demo, "-t", "20", "-a", "8"], 25, env={"LC_ALL": "C"})
+    num = r"(-?\d+(?:[.,]\d+)?)"
+    lat = re.search(r"Latitude:\s*" + num, out)
+    lon = re.search(r"Longitude:\s*" + num, out)
+    prec = re.search(r"Accuracy:\s*" + num, out)
+    f = lambda m: float(m[1].replace(",", "."))
     if lat and lon:
-        return {"lat": float(lat[1]), "lon": float(lon[1]), "precisao_m": float(prec[1]) if prec else None,
-                "fonte": "geoclue", "quando": time.time()}
+        fonte = "geoclue-ip" if "ipf fallback" in out or "GeoIP" in out else "geoclue"   # ip = só a cidade
+        return {"lat": f(lat), "lon": f(lon), "precisao_m": f(prec) if prec else None,
+                "fonte": fonte, "quando": time.time()}
     return f"linux/geoclue: {out.strip()[:120] or f'rc={rc}'}"
 
 
