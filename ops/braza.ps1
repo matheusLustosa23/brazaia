@@ -1,8 +1,8 @@
-# ops/braza.ps1 — toggle + WATCHDOG do stack brazaia: vLLM (WSL) + agente + companion (Windows).
+# ops/braza.ps1 — toggle + WATCHDOG do stack brazaia: vLLM (WSL) + agente + companion (Windows) + busca (SearXNG/Docker).
 # GPU-aware (pausa pra jogar). Regra: SEMPRE disponível — o watchdog checa SAÚDE e reergue sozinho.
 #
 # Uso:
-#   braza start [--all|--vllm|--agent|--companion]     # default: --all
+#   braza start [--all|--vllm|--agent|--companion|--busca]  # default: --all
 #   braza stop  [--all|--vllm|--agent|--companion]     # default: --all
 #   braza restart [mesmas flags]                       # default: --all
 #   braza status                                       # estado de tudo
@@ -29,6 +29,14 @@ $VllmUrl     = 'http://iobraza:8002/v1/models'
 $AgentUrl    = 'http://100.79.27.100:8080/api/v1/health'
 $TsIp        = '100.79.27.100'   # IP Tailscale onde o agente BINDA (--host). Sem ele, o agente nao sobe.
 $Gpu0Limite  = 2000              # MiB em uso na 3090 acima disso (SEM vLLM) = tem jogo/app -> nao sobe
+# busca na web: SearXNG em Docker (Docker Desktop), so em 127.0.0.1:8888 (o agente usa no mesmo Windows)
+$DockerExe   = 'C:\Program Files\Docker\Docker\Docker Desktop.exe'
+$SearxNome   = 'searxng'
+$SearxImagem = 'searxng/searxng:latest'
+$SearxPorta  = 8888
+$SearxUrl    = "http://127.0.0.1:$SearxPorta/search?q=teste&format=json"
+$SearxConf   = Join-Path $Repo 'ops\searxng'
+$SearxSecret = Join-Path $env:USERPROFILE '.braza_searxng_secret'   # fora do git
 
 # ---- alvos (flags) ----  sem flag = tudo. Aceita PT/EN e 0-2 tracos (--agent, --agente, agente...)
 $flags = @($rest) | Where-Object { $_ }
@@ -40,13 +48,15 @@ foreach ($f in $flags) {
     '^-{0,2}(vllm)$'               { $norm += '--vllm' }
     '^-{0,2}(agent|agente)$'       { $norm += '--agent' }
     '^-{0,2}(companion|companheiro|comp)$' { $norm += '--companion' }
-    default { Write-Host "flag '$f' nao reconhecida (use: --all --vllm --agent --companion)" -ForegroundColor Yellow }
+    '^-{0,2}(busca|searxng|search)$' { $norm += '--busca' }
+    default { Write-Host "flag '$f' nao reconhecida (use: --all --vllm --agent --companion --busca)" -ForegroundColor Yellow }
   }
 }
 $allTgt   = ($norm -contains '--all') -or ($flags.Count -eq 0)   # sem flag nenhuma = tudo; flag errada = so o aviso
 $tgtVllm  = $allTgt -or ($norm -contains '--vllm')
 $tgtAgent = $allTgt -or ($norm -contains '--agent')
 $tgtComp  = $allTgt -or ($norm -contains '--companion')
+$tgtBusca = $allTgt -or ($norm -contains '--busca')
 
 # ---- helpers ----
 function Gpu0Used { [int]((nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -i 0) | Select-Object -First 1) }
@@ -77,6 +87,35 @@ function EnsureTailscale {
   for ($i=0; $i -lt 30; $i++) { if (TsIpPresente) { return $true }; Start-Sleep 2 }
   return (TsIpPresente)
 }
+
+# ---- busca (SearXNG em Docker) ----
+function DockerAlive { docker info --format '{{.ServerVersion}}' 2>$null | Out-Null; return ($LASTEXITCODE -eq 0) }
+function EnsureDocker {
+  # Docker Desktop e um app de sessao: se fechou (ou nao abriu no login), abre e espera o daemon responder
+  if (DockerAlive) { return $true }
+  if (-not (Get-Process 'Docker Desktop' -ErrorAction SilentlyContinue)) { Start-Process $DockerExe -WindowStyle Minimized }
+  for ($i=0; $i -lt 90; $i++) { Start-Sleep 2; if (DockerAlive) { return $true } }
+  return $false
+}
+function SearxHealthy { try { $r = Invoke-RestMethod $SearxUrl -TimeoutSec 10; return ($null -ne $r.results) } catch { return $false } }
+function EnsureSearx {
+  if (SearxHealthy) { return $true }
+  if (-not (EnsureDocker)) { return $false }
+  $existe = docker ps -a --filter "name=^/$SearxNome$" --format '{{.Names}}' 2>$null
+  if (-not $existe) {
+    if (-not (Test-Path $SearxSecret)) {                      # segredo do SearXNG: gerado 1 vez, fica fora do git
+      -join ((48..57) + (97..122) | Get-Random -Count 48 | ForEach-Object { [char]$_ }) | Set-Content -NoNewline $SearxSecret
+    }
+    $sec = (Get-Content $SearxSecret -Raw).Trim()
+    docker run -d --name $SearxNome --restart unless-stopped -p "127.0.0.1:${SearxPorta}:8080" `
+      -v "${SearxConf}:/etc/searxng" -e "SEARXNG_SECRET=$sec" -e "SEARXNG_BASE_URL=http://127.0.0.1:$SearxPorta/" $SearxImagem | Out-Null
+  } else {
+    docker start $SearxNome 2>$null | Out-Null
+  }
+  for ($i=0; $i -lt 30; $i++) { Start-Sleep 2; if (SearxHealthy) { return $true } }
+  return $false
+}
+function StopSearx { docker stop $SearxNome 2>$null | Out-Null; Write-Host "Busca (SearXNG) parada." }
 
 # ---- start/stop por componente ----
 function KillAgentProcs {
@@ -174,6 +213,7 @@ ALVOS (flags, aceita PT/EN, combinaveis; SEM flag = todos):
   --vllm
   --agent | --agente
   --companion | --companheiro
+  --busca | --searxng            (SearXNG no Docker; 'braza stop' de jogo nao para a busca)
 
 EXEMPLOS:
   braza start                 sobe tudo
@@ -209,6 +249,7 @@ switch ($cmd) {
       else { Write-Host "Agente nao respondeu em 60s (braza logs --agent)." -ForegroundColor Red }
     }
     if ($tgtComp) { StartCompanion | Out-Null }
+    if ($tgtBusca) { if (EnsureSearx) { Write-Host "Busca (SearXNG) no ar." -ForegroundColor Green } else { Write-Host "Busca nao subiu (Docker Desktop aberto? docker logs searxng)." -ForegroundColor Red } }
   }
 
   "restart" {
@@ -219,6 +260,8 @@ switch ($cmd) {
     if ($tgtVllm -and -not (VllmActive)) { Write-Host "vLLM nao subiu (braza logs --vllm)." -ForegroundColor Red }
     if ($tgtAgent) { if (StartAgent) { Write-Host "Agente no ar." -ForegroundColor Green } else { Write-Host "Agente nao respondeu (braza logs --agent)." -ForegroundColor Red } }
     if ($tgtComp)  { StartCompanion | Out-Null }
+    if ($tgtBusca -and -not $allTgt) { StopSearx; if (EnsureSearx) { Write-Host "Busca (SearXNG) no ar." -ForegroundColor Green } else { Write-Host "Busca nao subiu." -ForegroundColor Red } }
+    elseif ($tgtBusca) { if (EnsureSearx) { Write-Host "Busca (SearXNG) no ar." -ForegroundColor Green } else { Write-Host "Busca nao subiu." -ForegroundColor Red } }
   }
 
   "stop" {
@@ -226,6 +269,7 @@ switch ($cmd) {
     if ($tgtComp)  { StopCompanion }
     if ($tgtAgent) { StopAgent }
     if ($tgtVllm)  { StopVllm }
+    if ($tgtBusca -and -not $allTgt) { StopSearx }          # 'braza stop' (jogo) NAO para a busca: e leve; so com --busca
     if ($tgtVllm) { Write-Host "(pausado p/ jogo; 'braza start' religa)" -ForegroundColor Green }
   }
 
@@ -241,6 +285,9 @@ switch ($cmd) {
     else                        { Write-Host "Agente:    CAIDO -> braza start --agent" -ForegroundColor Red }
     if (CompanionAlive) { Write-Host "Companion: ONLINE" -ForegroundColor Green }
     else                { Write-Host "Companion: CAIDO -> braza start --companion" -ForegroundColor Red }
+    if (SearxHealthy)   { Write-Host "Busca:     ONLINE (SearXNG 127.0.0.1:$SearxPorta)" -ForegroundColor Green }
+    elseif (-not (DockerAlive)) { Write-Host "Busca:     CAIDA (Docker Desktop fechado) -> braza start --busca" -ForegroundColor Red }
+    else                { Write-Host "Busca:     CAIDA -> braza start --busca (docker logs searxng)" -ForegroundColor Red }
     $wd = Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like "*braza.ps1*watchdog*" }
     if ($wd) { Write-Host "Watchdog:  ATIVO (PID $($wd.ProcessId))" -ForegroundColor Green }
     else     { Write-Host "Watchdog:  INATIVO -> braza watchdog (ou reinicie pra subir no boot)" -ForegroundColor Yellow }
@@ -253,7 +300,7 @@ switch ($cmd) {
   }
 
   "watchdog" {
-    Write-Host "Watchdog ON — checa agente + companion a cada 30s e reergue. Log: $WatchLog  (Ctrl+C sai)"
+    Write-Host "Watchdog ON — checa agente + companion + busca a cada 30s e reergue. Log: $WatchLog  (Ctrl+C sai)"
     while ($true) {
       try {
         if (Test-Path $PauseFlag) { Start-Sleep 30; continue }   # pausado p/ jogo -> nao mexe
@@ -264,6 +311,11 @@ switch ($cmd) {
           $subiu = StartAgent
           $st = if ($subiu) { "ONLINE" } elseif (-not (TsIpPresente)) { "FALHOU (tailscale)" } else { "FALHOU" }
           ("{0}  agente -> {1}" -f (Get-Date -Format "HH:mm:ss"), $st) | Out-File -Append $WatchLog
+        }
+        if (-not (SearxHealthy)) {
+          ("{0}  busca DOWN -> reerguendo (docker/searxng)" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss")) | Out-File -Append $WatchLog
+          $b = EnsureSearx
+          ("{0}  busca -> {1}" -f (Get-Date -Format "HH:mm:ss"), $(if ($b) { "ONLINE" } else { "FALHOU" })) | Out-File -Append $WatchLog
         }
         if (-not (CompanionAlive)) {
           ("{0}  companion DOWN -> reerguendo" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss")) | Out-File -Append $WatchLog

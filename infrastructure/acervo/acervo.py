@@ -310,6 +310,27 @@ class Acervo:
                 break
         return out
 
+    def partes_relevantes(self, consulta: str, doc_id: str, limite: int = 3, max_chars: int = 7500) -> list[dict]:
+        """As PARTES (texto original inteiro, não um resumo) do documento que mais respondem à consulta, em ordem
+        de relevância — o jeito Perplexity: em vez de ler a página toda, entrega os pedaços que importam."""
+        ts = termos(consulta)
+        if not ts:
+            return []
+        q = " OR ".join(f'"{t}"*' for t in ts)
+        with self._c() as c:
+            rows = c.execute(
+                """SELECT p.secao, p.parte, s.caminho, p.texto FROM partes_fts JOIN partes p ON p.id = partes_fts.rowid
+                   JOIN secoes s ON s.doc_id = p.doc_id AND s.n = p.secao
+                   WHERE partes_fts MATCH ? AND p.doc_id = ? ORDER BY bm25(partes_fts, 1.0, 4.0, 1.0) LIMIT ?""",
+                (q, doc_id, limite * 2)).fetchall()
+        out, total = [], 0
+        for secao, parte, cam, txt in rows:
+            if len(out) >= limite or (out and total + len(txt) > max_chars):
+                break
+            out.append({"secao": secao, "parte": parte, "caminho": cam, "texto": txt})
+            total += len(txt)
+        return out
+
     def sumario(self, doc_id: str) -> dict | None:
         with self._c() as c:
             d = c.execute("SELECT titulo, meta, bytes FROM docs WHERE id = ?", (doc_id,)).fetchone()
@@ -335,7 +356,7 @@ class Acervo:
                 "proxima_secao": {"n": prox[0], "caminho": prox[1]} if prox else None}
 
 
-    def adicionar(self, nome: str, dados: bytes, colecao: str = "anexos") -> dict:
+    def adicionar(self, nome: str, dados: bytes, colecao: str = "anexos", meta: dict | None = None) -> dict:
         """Arquivo enviado pelo dono (CLI, celular, painel) → Markdown → acervo/<colecao>/<nome>.md, indexado.
         Mesmo nome de arquivo = substitui (reenviar atualiza)."""
         texto = para_markdown(nome, dados)
@@ -344,7 +365,7 @@ class Acervo:
             texto = f"# {base}\n\n{texto}"
         doc = self.salvar(slug(colecao), slug(base), texto,
                           {"titulo": base, "fonte": "anexo", "arquivo": os.path.basename(nome),
-                           "enviado_em": time.strftime("%Y-%m-%d %H:%M")})
+                           "enviado_em": time.strftime("%Y-%m-%d %H:%M"), **(meta or {})})
         s = self.sumario(doc) or {"secoes": []}
         return {"doc": doc, "titulo": base, "secoes": len(s["secoes"]),
                 "partes": sum(x["partes"] for x in s["secoes"]), "chars": sum(x["chars"] for x in s["secoes"])}
