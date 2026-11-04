@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import orjson, re, time
+import asyncio, orjson, re, time
 
 from typing import Awaitable, Callable,BinaryIO
 from collections.abc import AsyncIterator
@@ -12,6 +12,7 @@ from domain.contracts import SessionStore
 from domain.entities.message import Completion, ToolCall
 from application.services.context_service import ContextManager
 from application.services.cerebro_service import CerebroService
+from application.services.registro_estudo import registrar_correcao
 from application.services.helpers import _strip, persist_image, normalize_image_uri
 from application.guards.output import check_output
 from application.services._trace import trace
@@ -110,6 +111,7 @@ class Orchestrator:
         self._context = context
         self._tools = tools
         self._memory = memory
+        self._bg: set[asyncio.Task] = set()                 # tarefas de 2º plano (registro do estudo)
         self._device_gateway = device_gateway
         self._confirm = confirm or deny_by_default
         self._audit_log = audit_log
@@ -122,11 +124,17 @@ class Orchestrator:
     async def run_react(self, session_id, user_message, *, image=None, device_id=None, extra_system=None, think=True,
                         modo: str = "chat") -> AsyncIterator[tuple]:
         history = await self._session_store.get(session_id)
+        n_hist0 = len(history)                              # o que vier depois disto é o turno atual
+        if modo == "tutor":
+            # Tutor SEMPRE raciocina. Medido 04/11 (qwen35-27b-abl): com think=False ele responde de cabeça
+            # 3/3 — não chama search_docs (inventa a "fonte") nem log; com think=True: search_docs → read_doc
+            # → log(abrir) → resposta. O CLI em think "off" só não mostra o raciocínio.
+            think = True
         memory_block = await self._memory.render_compact(user_message)
         # extra_system (ex.: build_system("voz")) é o system COMPLETO quando vem; senão o do modo (chat|tutor).
         system = extra_system if extra_system else self._system_prompt(modo, user_message)
         if self._acervo is not None:                        # sem isto ele não sabe que o documento existe e responde genérico
-            anexos = [d for d in self._acervo.docs() if d["colecao"] != "estacio"][-15:]
+            anexos = [d for d in self._acervo.docs() if d["colecao"] not in ("estacio", "web")][-15:]
             if anexos:
                 system += ("\n\nDocumentos que o dono te mandou (consulte com search_docs/read_doc quando a pergunta "
                            "tocar nesses assuntos, mesmo sem ele citar o documento): "
@@ -293,6 +301,8 @@ class Orchestrator:
             reply_salvo = texto.strip()
             history = history + [{"role": "assistant", "content": reply_salvo}]
             await self._session_store.set(session_id, _strip(_enxuga_autoria(history, manter_ultimo=False)))
+            if modo == "tutor":                                 # acertos/dificuldades → cérebro (em 2º plano)
+                self._registro_estudo(session_id, history[:n_hist0], user_message, reply_salvo, history[n_hist0:])
             log_turno(session_id, user_message, "".join(bruto_turno), think=think)   # turno BRUTO inteiro (todos os passos, com <think>) p/ auditoria
             self._flush_trace(session_id)
             flow(session_id, "fim", f"stop · {time.monotonic() - t_turno:.1f}s · {_step + 1} chamada(s) LLM "
@@ -330,6 +340,22 @@ class Orchestrator:
         flow(session_id, "fim", f"length · {time.monotonic() - t_turno:.1f}s · resposta {len(texto.strip())} chars")
         yield ("event", {"evento": "fim", "finish_reason": "length"})
     
+    def _registro_estudo(self, session_id: str, antes: list[dict], fala: str, correcao: str, turno: list[dict]) -> None:
+        """Dispara a extração da correção (registro_estudo.py) sem segurar a resposta."""
+        anterior = next((m.get("content") or "" for m in reversed(antes) if m.get("role") == "assistant"
+                         and isinstance(m.get("content"), str) and m["content"].strip()), "")
+        if not anterior:
+            return
+
+        async def _vai() -> None:
+            aberta = await self._memory.sessao_aberta()
+            disciplina = aberta.entidade if aberta is not None and aberta.tipo == "estudo" else None
+            await registrar_correcao(self._llm, self._memory, session_id, disciplina, anterior, fala, correcao, turno)
+
+        t = asyncio.create_task(_vai())
+        self._bg.add(t)
+        t.add_done_callback(self._bg.discard)
+
     def _system_prompt(self, modo: str = "chat", pedido: str = "") -> str:
         if modo == "tutor":                                 # sessão de estudo: metodologia + regras de tool + ferramentas
             # + SÓ o bloco da tarefa pedida (cronograma/montagem/exercícios) — foi o que venceu na pesquisa
@@ -552,7 +578,7 @@ class Orchestrator:
         return {"usado": self._context.count(messages), "total": self._context.budget,
                 "reservado": self._context.reserved, "model": getattr(self._llm, "model", "")}
             
-_NAO_RESUMIR = {"search_docs", "read_doc", "recall", "query_log", "get_location", "list_devices"}
+_NAO_RESUMIR = {"search_docs", "read_doc", "recall", "query_log", "get_location", "list_devices", "web_search", "web_fetch"}
 _AUTORIA = {"create_file"}    # tools cujo argumento 'body' É o conteúdo autorado (ver _enxuga_autoria)
 
 

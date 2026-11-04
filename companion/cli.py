@@ -43,6 +43,20 @@ tail_think = False    # True quando o rabo é RACIOCÍNIO (<think>), p/ estilo d
 tool_build: dict = {} # tool_calls sendo MONTADAS ao vivo: index -> {"tool", "args" (JSON cru), "t0"}
 aguardando = False    # True entre mandar e o 1º token chegar (TTFT) → mostra "processando…"
 think_mode = "off"    # thinking: "off" | "full" (caixa) | "colap" (só resumo). Toggle /think
+think_fora_tutor = None   # o think_mode de antes de entrar no tutor (volta ao sair)
+
+
+def _ajusta_think_ao_modo() -> None:
+    """O server SEMPRE raciocina no modo tutor (sem isso ele não consulta o acervo — medido 04/11). Pra não
+    enganar, o CLI mostra: no tutor, 'off' vira 'colap' (a caixinha do raciocínio aparece); ao sair, volta."""
+    global think_mode, think_fora_tutor
+    if modo_sessao == "tutor":
+        if think_fora_tutor is None:
+            think_fora_tutor = think_mode
+        if think_mode == "off":
+            think_mode = "colap"
+    elif think_fora_tutor is not None:
+        think_mode, think_fora_tutor = think_fora_tutor, None
 pensando = False      # colap: True enquanto recebe o <think> (mostra "pensando…" em vez do texto)
 think_t0 = 0.0        # início do raciocínio (p/ o tempo no modo colapsado)
 turno_t0 = 0.0        # início do turno (p/ o tempo total no rodapé/loader)
@@ -769,6 +783,7 @@ async def _retomar(sid: str) -> None:
     session_id = sid; arquivos_cache = []
     meta = data.get("meta") or {}
     modo_sessao = meta.get("modo") or "chat"
+    _ajusta_think_ao_modo()
     hist, narr = data.get("history", []), data.get("narrative", [])
     nome = f" · {meta['titulo']}" if meta.get("titulo") else ""
     _p(f"\n{VERDE_A}   ↺ sessão {sid[:8]} retomada{nome}{' · 🎓 modo tutor' if modo_sessao == 'tutor' else ''}{R}\n")
@@ -1062,6 +1077,9 @@ def _dispatch(msg: str, app) -> None:
             think_mode = partes[1]
         else:
             think_mode = modos[(modos.index(think_mode) + 1) % 3]    # cicla off → full → colap
+        if modo_sessao == "tutor" and think_mode == "off":       # no tutor o server raciocina sempre: off mentiria
+            think_mode = "colap" if len(partes) > 1 else "full"
+            _p(f"{DIM_A}   🎓 no modo tutor o raciocínio fica sempre ligado — escolha full ou colap{R}\n")
         desc = {"off": "desligado", "full": "completo (caixa)", "colap": "colapsado (só resumo)"}[think_mode]
         _p(f"{VERDE_A}   💭 thinking: {think_mode} — {desc}{R}\n")
     elif cmd == "/sessoes":                            # /sessoes [pág] · /sessoes <termo> (filtra: título, fala, etiqueta)
@@ -1079,6 +1097,7 @@ def _dispatch(msg: str, app) -> None:
     elif cmd == "/modo":                               # chat | tutor — vai na próxima mensagem e fica gravado na sessão
         if len(partes) > 1 and partes[1] in ("chat", "tutor"):
             modo_sessao = modo_pendente = partes[1]
+            _ajusta_think_ao_modo()
             _p(f"{VERDE_A}   modo {'🎓 tutor (metodologia de estudo)' if modo_sessao == 'tutor' else 'chat'} — vale a partir da próxima mensagem{R}\n")
         else:
             _p(f"{DIM_A}   modo atual: {modo_sessao} · uso: /modo tutor | /modo chat{R}\n")
@@ -1096,6 +1115,7 @@ def _dispatch(msg: str, app) -> None:
         arquivos_cache = []
         if modo_sessao != "chat" and modo_pendente is None:          # nova sessão volta pro chat (a não ser que /modo antes)
             modo_sessao = "chat"
+            _ajusta_think_ao_modo()
         _p(f"{VERDE_A}   ✚ nova sessão — a próxima mensagem começa do zero{R}\n")
     elif cmd == "/limpar":                             # o Enter já esvaziou o input
         pass

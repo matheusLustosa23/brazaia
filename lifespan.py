@@ -22,6 +22,7 @@ from infrastructure.tools.list_devices import ListDevicesTool
 from infrastructure.tools.get_location import GetLocationTool
 from infrastructure.tools.search_docs import SearchDocsTool
 from infrastructure.tools.read_doc import ReadDocTool
+from infrastructure.tools.web import WebFetchTool, WebSearchTool
 from infrastructure.acervo.acervo import Acervo
 from infrastructure.memory.cerebro_store import SqliteCerebroStore
 from infrastructure.memory.session_store import SqlLiteSessionStore
@@ -34,6 +35,9 @@ from application.tools.remember import RememberTool
 from application.tools.recall import RecallTool
 from application.tools.log import LogTool
 from application.tools.query_log import QueryLogTool
+from application.tools.remind import RemindTool
+from application.services.lembretes import agendador
+from infrastructure.memory.lembrete_store import SqliteLembreteStore
 from domain.tools.base import ToolRegistry
 from infrastructure.voice.asr import make_asr
 from infrastructure.voice.vad import make_vad
@@ -92,6 +96,9 @@ async def lifespan(app: FastAPI):
     registry.register(RememberTool(memory))
     registry.register(RecallTool(memory))
     registry.register(LogTool(memory))
+    lembretes = SqliteLembreteStore(settings.cerebro_db_path)      # lembretes que avisam (tabela no cerebro.db)
+    await lembretes.init()
+    registry.register(RemindTool(lembretes))
     registry.register(QueryLogTool(memory))
     registry.register(CaptureImageTool(vision))
     registry.register(SeeFileTool(store))
@@ -106,6 +113,8 @@ async def lifespan(app: FastAPI):
     app.state.acervo = acervo                                        # rota /acervo (enviar pelo CLI/celular/painel)
     registry.register(SearchDocsTool(acervo))
     registry.register(ReadDocTool(acervo))
+    registry.register(WebSearchTool(settings.searxng_url))     # busca na web (SearXNG próprio)
+    registry.register(WebFetchTool(acervo, settings.web_user_agent))   # lê a página e guarda no acervo (coleção web)
 
     # ── Orchestrator ──
     orchestrator = Orchestrator(
@@ -171,4 +180,20 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("warm do render falhou (segue sem): %s", e) 
         
+    async def _enviar_lembrete(titulo: str, mensagem: str) -> bool:
+        """Manda o aviso pros devices (os configurados, ou todos os conectados que sabem notificar)."""
+        alvo = [d.strip() for d in settings.lembrete_devices.split(",") if d.strip()] or device_gateway.connections.names()
+        ok = False
+        for dev in alvo:
+            if dev not in device_gateway.connections.names():
+                continue
+            caps = await device_gateway.capabilities(dev)
+            if caps is not None and "notify" not in caps:
+                continue
+            r = await device_gateway.request(dev, "notify", {"title": titulo, "message": mensagem}, timeout=20)
+            ok = ok or not r.startswith(("[erro", "[timeout"))
+        return ok
+
+    _tarefa_lembretes = asyncio.create_task(agendador(lembretes, _enviar_lembrete))
     yield
+    _tarefa_lembretes.cancel()
