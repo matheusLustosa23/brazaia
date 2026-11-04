@@ -31,8 +31,15 @@ sobe_connect() {
   ( cd "$REPO" && python -m companion.connect --fg >> "$HOME/ts/connect.log" 2>&1 ) &
 }
 
+sobe_rastreador() {
+  pgrep -f "companion.localizacao rastrear" >/dev/null 2>&1 && return
+  log "subindo rastreador de localizacao..."
+  ( cd "$REPO" && python -m companion.localizacao rastrear >> "$HOME/ts/rastreador.log" 2>&1 ) &
+}
+
 while true; do
   sobe_tailscaled           # garante a tailnet
   sobe_connect              # garante a presenca do device no server (CS2b: via SOCKS5)
+  sobe_rastreador           # localização contínua → fila (funciona offline; o connect entrega)
   sleep 30
 done

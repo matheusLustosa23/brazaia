@@ -86,17 +86,27 @@ async def _esvaziar_fila(ws) -> None:
     """Manda ao server o que a coleta periódica deixou na fila (e a bateria), a cada minuto enquanto conectado.
     Só apaga da fila no 'ack' (em _escutar): conexão caiu no meio = reenvia na próxima, sem duplicar no server."""
     ultimo_estado = 0.0
+    ultima_leitura = 0.0                            # device sem bateria (PC) devolve vazio: não ler a cada 30 s
     while True:
         pontos = localizacao.pendentes()
         if pontos:
             await ws.send(dumps({"type": "localizacao", "pontos": pontos}))
             log(f"📍 {len(pontos)} ponto(s) da fila enviados")
+            if len(pontos) >= 200:                  # voltou a conexão com muita coisa acumulada: esvazia em sequência
+                await asyncio.sleep(5)
+                continue
         est = localizacao.estado_salvo()
+        if time.time() - (est or {}).get("quando", 0) > 300 and time.time() - ultima_leitura > 300:
+            ultima_leitura = time.time()            # leitura velha (job do Android atrasado): lê aqui
+            novo = await asyncio.to_thread(localizacao.ler_estado)
+            if novo:
+                localizacao.salvar_estado(novo)
+                est = localizacao.estado_salvo()
         if est and est.get("quando", 0) > ultimo_estado:
             ultimo_estado = est["quando"]
             await ws.send(dumps({"type": "estado", "estado": {k: v for k, v in est.items() if k != "quando"},
                                  "quando": est["quando"]}))
-        await asyncio.sleep(60)
+        await asyncio.sleep(30)                     # o rastreador gera até 1 ponto/30 s em movimento
 
 
 async def _escutar(ws) -> None:

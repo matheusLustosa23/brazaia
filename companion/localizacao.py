@@ -2,19 +2,32 @@
 
 Duas formas de ler:
   sob demanda (get_location, alguém pediu)  → preciso: GPS; se não achar, rede; se não, a última conhecida
-  periódica (a cada 15 min, termux-job-scheduler) → barata: rede (Wi-Fi/antena); se não, a última conhecida
+  rastreador (processo contínuo, mantido vivo pelo supervisor.sh) → ADAPTATIVO, como a Linha do tempo do Google
+      (medido no export do S24: mediana de 42 s entre pontos em movimento, ≥ 5 min parado):
+      a cada 30 s lê a "última conhecida" do Android (instantânea e de graça — aproveita o que o Google já leu);
+      sem posição fresca: em movimento pede GPS; parado, no máximo 1 ponto a cada 5 min.
+  periódica (a cada 15 min, termux-job-scheduler) → só RESERVA se o rastreador estiver morto. O Android
+      (Doze/App Standby) adia esse job por horas — medido 04/11: nada das 13:14 às 16h com o celular conectado.
 
 A periódica NÃO depende do server: grava numa fila em disco (~/.brazaia_loc_fila.jsonl). O connect esvazia a
 fila quando está conectado e só apaga cada ponto depois do "ack" do server — server fora = nada se perde.
 
 Uso:
-  python -m companion.localizacao coletar     # 1 leitura barata + bateria → fila (o que o agendador roda)
+  python -m companion.localizacao rastrear    # o rastreador contínuo (o supervisor sobe sozinho)
+  python -m companion.localizacao coletar     # 1 leitura barata + bateria → fila (reserva do agendador)
   python -m companion.localizacao teste       # lê agora (preciso) e mostra; não grava
   python -m companion.localizacao fila        # quantos pontos esperando o server
 """
-import json, os, re, shutil, subprocess, sys, time, uuid
+import json, math, os, re, shutil, subprocess, sys, time, uuid
+from contextlib import contextmanager
+
+try:
+    import fcntl                                  # trava da fila (Termux/Linux); no Windows não há rastreador
+except ImportError:
+    fcntl = None
 
 FILA = os.path.expanduser("~/.brazaia_loc_fila.jsonl")
+PID_RASTREADOR = os.path.expanduser("~/.brazaia_rastreador.pid")
 ESTADO = os.path.expanduser("~/.brazaia_estado.json")
 _IS_TERMUX = shutil.which("termux-location") is not None
 
@@ -162,9 +175,24 @@ def ler_estado() -> dict:
 
 
 # ── fila ───────────────────────────────────────────────────────────────────────────────────────────────
-def enfileirar(ponto: dict) -> None:
-    ponto = {**ponto, "id": uuid.uuid4().hex[:12], "origem": "periodica"}
-    with open(FILA, "a", encoding="utf-8") as f:
+@contextmanager
+def _trava():
+    """O rastreador ESCREVE e o connect REESCREVE (no ack) o mesmo arquivo: sem trava, um ponto gravado entre
+    a leitura e o replace do connect sumia."""
+    if fcntl is None:
+        yield
+        return
+    with open(FILA + ".lock", "a") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lk, fcntl.LOCK_UN)
+
+
+def enfileirar(ponto: dict, origem: str = "periodica") -> None:
+    ponto = {**ponto, "id": uuid.uuid4().hex[:12], "origem": origem}
+    with _trava(), open(FILA, "a", encoding="utf-8") as f:
         f.write(json.dumps(ponto) + "\n")
 
 
@@ -187,17 +215,18 @@ def remover(ids: list[str]) -> None:
     if not ids or not os.path.exists(FILA):
         return
     tirar = set(ids)
-    restantes = []
-    for l in open(FILA, encoding="utf-8"):
-        try:
-            if json.loads(l).get("id") not in tirar:
-                restantes.append(l if l.endswith("\n") else l + "\n")
-        except ValueError:
-            continue                                          # linha cortada: descarta (não tem como reenviar)
-    tmp = FILA + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.writelines(restantes)
-    os.replace(tmp, FILA)
+    with _trava():
+        restantes = []
+        for l in open(FILA, encoding="utf-8"):
+            try:
+                if json.loads(l).get("id") not in tirar:
+                    restantes.append(l if l.endswith("\n") else l + "\n")
+            except ValueError:
+                continue                                      # linha cortada: descarta (não tem como reenviar)
+        tmp = FILA + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.writelines(restantes)
+        os.replace(tmp, FILA)
 
 
 def salvar_estado(estado: dict) -> None:
@@ -214,7 +243,10 @@ def estado_salvo() -> dict:
 
 
 def coletar() -> None:
-    """O que o agendador roda a cada 15 min: leitura barata → fila; bateria → arquivo. Sem rede, sem server."""
+    """RESERVA (agendador, 15 min): leitura barata → fila; bateria → arquivo. Sem rede, sem server.
+    Rastreador vivo → não faz nada (ele já cobre, com muito mais frequência)."""
+    if _rastreador_vivo():
+        return
     r = ler_localizacao(preciso=False)
     if isinstance(r, dict):
         enfileirar(r)
@@ -224,9 +256,93 @@ def coletar() -> None:
     salvar_estado(ler_estado())
 
 
+# ── rastreador contínuo (adaptativo) ───────────────────────────────────────────────────────────────────
+TICK_S = 30            # de quanto em quanto tempo olha (o Google: ~30–45 s em movimento)
+PARADO_S = 300         # parado: no máximo 1 ponto a cada 5 min
+FRESCO_S = 60          # "última conhecida" mais velha que isto não serve como posição de agora
+RAIO_M = 40            # andou menos que isto (ou que a precisão) = parado
+
+
+def _dist_m(a: dict, b: dict) -> float:
+    la1, lo1, la2, lo2 = map(math.radians, (a["lat"], a["lon"], b["lat"], b["lon"]))
+    h = math.sin((la2 - la1) / 2) ** 2 + math.cos(la1) * math.cos(la2) * math.sin((lo2 - lo1) / 2) ** 2
+    return 2 * 6371000 * math.asin(math.sqrt(h))
+
+
+def _fix(provedor: str, modo: str, timeout: float) -> dict | None:
+    """Uma leitura do termux-location com a IDADE real do fix (elapsedMs) e o provedor que mediu."""
+    rc, out = _rodar(["termux-location", "-p", provedor, "-r", modo], timeout)
+    try:
+        d = json.loads(out)
+    except ValueError:
+        return None
+    if "latitude" not in d:
+        return None
+    idade = (d.get("elapsedMs") or 0) / 1000 if modo == "last" else 0
+    return {"lat": d["latitude"], "lon": d["longitude"], "precisao_m": d.get("accuracy"),
+            "velocidade_ms": d.get("speed"), "fonte": d.get("provider") or provedor,
+            "quando": time.time() - idade, "idade_s": idade}
+
+
+def _mais_fresca() -> dict | None:
+    """A 'última conhecida' mais nova entre GPS e rede — instantânea: não liga o GPS, aproveita quem ligou."""
+    fixes = [f for f in (_fix("gps", "last", 8), _fix("network", "last", 8)) if f]
+    return min(fixes, key=lambda f: f["idade_s"]) if fixes else None
+
+
+def _rastreador_vivo() -> bool:
+    try:
+        pid = int(open(PID_RASTREADOR).read().strip())
+        os.kill(pid, 0)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def rastrear() -> None:
+    if _rastreador_vivo():
+        print("rastreador já está rodando"); return
+    with open(PID_RASTREADOR, "w") as f:
+        f.write(str(os.getpid()))
+    print(time.strftime("%d/%m %H:%M:%S"), "rastreador no ar (tick 30 s, parado ≤ 1 ponto/5 min)", flush=True)
+    ultimo: dict | None = None
+    ultimo_mov = 0.0                  # última vez que andou de verdade
+    ultimo_estado = 0.0
+    while True:
+        t0 = time.time()
+        try:
+            movendo = t0 - ultimo_mov < PARADO_S
+            p = _mais_fresca()
+            if p is None or p["idade_s"] > FRESCO_S:
+                vencido = ultimo is None or t0 - ultimo["quando"] >= PARADO_S
+                if movendo or vencido:        # sem posição fresca: pede uma (GPS se está andando, rede se parado)
+                    p = (_fix("gps", "once", 20) if movendo else None) or _fix("network", "once", 15) or p
+            if p is not None and (ultimo is None or p["quando"] > ultimo["quando"] + 1):
+                d = _dist_m(ultimo, p) if ultimo else float("inf")
+                andou = ultimo is None or d > max(RAIO_M, min(p.get("precisao_m") or 0, 150)) \
+                    or (p.get("velocidade_ms") or 0) > 1.5
+                if andou and ultimo is not None:
+                    ultimo_mov = t0
+                if andou or t0 - ultimo["quando"] >= PARADO_S:
+                    ponto = {k: v for k, v in p.items() if k not in ("idade_s", "velocidade_ms")}
+                    enfileirar(ponto, origem="rastreador")
+                    ultimo = p
+                    print(time.strftime("%H:%M:%S"), "andando" if t0 - ultimo_mov < PARADO_S else "parado",
+                          round(p["lat"], 5), round(p["lon"], 5), p["fonte"], f"±{round(p.get('precisao_m') or 0)}m",
+                          f"idade {round(p['idade_s'])}s", flush=True)
+            if t0 - ultimo_estado >= PARADO_S:
+                salvar_estado(ler_estado())
+                ultimo_estado = t0
+        except Exception as e:                # nunca morre por uma leitura ruim
+            print(time.strftime("%H:%M:%S"), "erro:", e, flush=True)
+        time.sleep(max(1.0, TICK_S - (time.time() - t0)))
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "teste"
-    if cmd == "coletar":
+    if cmd == "rastrear":
+        rastrear()
+    elif cmd == "coletar":
         coletar()
     elif cmd == "fila":
         print(f"{len(pendentes(10_000))} ponto(s) esperando o server em {FILA}")
