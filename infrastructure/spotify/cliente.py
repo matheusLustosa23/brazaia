@@ -97,7 +97,10 @@ class SpotifyCliente:
                 await asyncio.sleep(min(float(r.headers.get("Retry-After", "1")), 5))
                 continue
             if r.status_code in (200, 201) and r.content:
-                return r.json()
+                try:
+                    return r.json()
+                except ValueError:                          # a fila responde 200 com corpo que NÃO é JSON: deu certo
+                    return None                             # (05/11: lia como erro, o agente repetiu e entrou 2x)
             if r.status_code in (200, 201, 202, 204):
                 return None
             motivo = ""
@@ -135,6 +138,9 @@ class SpotifyCliente:
 
     async def enfileirar(self, uri: str, device_id: str | None = None) -> None:
         await self.req("POST", "/me/player/queue", params={"uri": uri, **({"device_id": device_id} if device_id else {})})
+
+    async def fila(self) -> dict:
+        return await self.req("GET", "/me/player/queue") or {}
 
     async def criar_playlist(self, nome: str, uris: list[str], descricao: str = "") -> dict:
         eu = await self.req("GET", "/me") or {}

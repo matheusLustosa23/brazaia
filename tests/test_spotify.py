@@ -116,3 +116,30 @@ async def test_busca_sem_market_e_403_de_escopo_explica(tool):
         return httpx.Response(403, json={"error": {"status": 403, "message": "Insufficient client scope"}})
     out = await tool(recusa).run(SpotifyInput(acao="aparelhos"), CTX)
     assert "spotify_login.py" in out
+
+
+async def test_fila_200_sem_json_e_sucesso_e_varias_em_ordem(tool):
+    class FilaTexto(FakeSpotify):
+        def __call__(self, req):
+            if req.url.path == "/v1/me/player/queue" and req.method == "POST":
+                self.chamadas.append((req.method, req.url.path, dict(req.url.params), None))
+                return httpx.Response(200, text="ok")           # o Spotify real responde 200 com corpo não-JSON
+            return super().__call__(req)
+    fake = FilaTexto()
+    fake.devices[0]["is_active"] = True
+    out = await tool(fake).run(SpotifyInput(acao="fila", musicas=["man in the box", "naoexiste", "them bones"]), CTX)
+    assert out.startswith("[spotify] na fila, nesta ordem (no DESKTOP): 1. Man In The Box — Queen; 2. Them Bones — Queen")
+    assert "não achei: naoexiste" in out
+    filas = [c[2]["uri"] for c in fake.chamadas if c[1] == "/v1/me/player/queue"]
+    assert filas == ["spotify:track:man i", "spotify:track:them "]   # uma vez cada, na ordem
+
+
+async def test_ver_fila(tool):
+    class ComFila(FakeSpotify):
+        def __call__(self, req):
+            if req.url.path == "/v1/me/player/queue" and req.method == "GET":
+                return httpx.Response(200, json={"currently_playing": {"name": "Them Bones", "artists": [{"name": "Alice In Chains"}]},
+                                                 "queue": [{"name": "Rooster", "artists": [{"name": "Alice In Chains"}]}]})
+            return super().__call__(req)
+    out = await tool(ComFila()).run(SpotifyInput(acao="ver_fila"), CTX)
+    assert out == "[spotify] agora: Them Bones — Alice In Chains · a seguir: 1. Rooster — Alice In Chains."

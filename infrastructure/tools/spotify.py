@@ -18,9 +18,10 @@ _APELIDO_TIPO = {"celular": "smartphone", "telefone": "smartphone", "pc": "compu
 
 
 class SpotifyInput(BaseModel):
-    acao: Literal["tocar", "fila", "pausar", "continuar", "proxima", "anterior", "tocando", "volume",
+    acao: Literal["tocar", "fila", "ver_fila", "pausar", "continuar", "proxima", "anterior", "tocando", "volume",
                   "playlists", "criar_playlist", "aparelhos"] = Field(description=(
-        "tocar = toca agora pelo nome · fila = põe na fila (toca depois da atual) · pausar/continuar · "
+        "tocar = toca agora pelo nome · fila = põe na fila (uma em busca OU várias em musicas, na ordem) · "
+        "ver_fila = o que vem a seguir · pausar/continuar · "
         "proxima/anterior = pula ou volta a música · tocando = o que está tocando · volume (0-100) · "
         "playlists = lista as do dono · criar_playlist = cria uma com as músicas pedidas · aparelhos = onde dá pra tocar"))
     busca: str = Field(default="", description=(
@@ -31,7 +32,8 @@ class SpotifyInput(BaseModel):
     dispositivo: str = Field(default="", description=(
         "Onde tocar, se ele disse: 'celular', 'PC', 'S24', o nome do aparelho no Spotify. Vazio = onde já está tocando."))
     musicas: list[str] = Field(default_factory=list, description=(
-        "Só pra criar_playlist: uma música por item, com artista ('Tempo Perdido Legião Urbana')."))
+        "Pra criar_playlist e pra fila de VÁRIAS: uma música por item, na ordem, com artista "
+        "('Tempo Perdido Legião Urbana')."))
     nome_playlist: str = Field(default="", description="Só pra criar_playlist: o nome da playlist nova.")
     volume: int | None = Field(default=None, ge=0, le=100, description="Só pra acao=volume: 0 a 100.")
 
@@ -48,7 +50,8 @@ class SpotifyTool(Tool[SpotifyInput]):
         "com a tela apagada: tocar pelo nome, pular/voltar, pausar, fila, volume, ver o que toca, listar e criar "
         "playlists.\nEx.: 'toca Bohemian Rhapsody' → spotify(acao=tocar, busca='Bohemian Rhapsody') · "
         "'pula essa' → spotify(acao=proxima) · 'põe Tempo Perdido na fila' → spotify(acao=fila, busca='Tempo "
-        "Perdido Legião Urbana') · 'toca minha playlist Treino no celular' → spotify(acao=tocar, busca='Treino', "
+        "Perdido Legião Urbana') · 'põe A, B e C na fila' → spotify(acao=fila, musicas=[A, B, C]) (UMA chamada) · "
+        "'o que vem depois?' → spotify(acao=ver_fila) · 'toca minha playlist Treino no celular' → spotify(acao=tocar, busca='Treino', "
         "tipo=playlist, dispositivo='celular') · 'cria uma playlist Foco com X, Y e Z' → spotify(acao="
         "criar_playlist, nome_playlist='Foco', musicas=[X, Y, Z]).\n"
         "Diga ao dono o que o RESULTADO disse (a música e o aparelho reais), nunca o que você supôs."
@@ -131,6 +134,29 @@ class SpotifyTool(Tool[SpotifyInput]):
             pl = await self._c.criar_playlist(p.nome_playlist, uris, "criada pelo agente")
             return (f"[spotify] playlist '{pl.get('name', p.nome_playlist)}' criada com {len(uris)} música(s)"
                     + (f"; não achei: {', '.join(faltou)}" if faltou else "") + ".")
+        if a == "ver_fila":
+            f = await self._c.fila()
+            prox = [x for x in (f.get("queue") or []) if x][:10]
+            atual = f.get("currently_playing")
+            if not atual and not prox:
+                return "[spotify] fila vazia (nada tocando)."
+            return ((f"[spotify] agora: {_quem(atual)}" if atual else "[spotify] nada tocando agora")
+                    + (" · a seguir: " + "; ".join(f"{i}. {_quem(x)}" for i, x in enumerate(prox, 1)) if prox
+                       else " · fila vazia depois dela") + ".")
+        if a == "fila" and p.musicas:                       # várias, NA ORDEM (cada POST vai pro fim da fila)
+            dev_id, dev_nome = await self._aparelho(p.dispositivo)
+            entraram, faltou = [], []
+            for m in p.musicas:
+                itens = await self._c.buscar(m, "track", limite=1)
+                if not itens:
+                    faltou.append(m)
+                    continue
+                await self._c.enfileirar(itens[0]["uri"], dev_id)
+                entraram.append(_quem(itens[0]))
+            if not entraram:
+                return "[erro] Spotify: não achei nenhuma das músicas — nada entrou na fila."
+            return (f"[spotify] na fila, nesta ordem (no {dev_nome}): " + "; ".join(f"{i}. {x}" for i, x in enumerate(entraram, 1))
+                    + (f" · não achei: {', '.join(faltou)}" if faltou else "") + ".")
         if a in ("tocar", "fila") and not p.busca.strip():
             if a == "tocar":                                  # "toca" sem dizer o quê = continuar
                 a = "continuar"
