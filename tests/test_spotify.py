@@ -102,3 +102,17 @@ async def test_token_vencido_renova_sozinho(tool):
 async def test_sem_login_diz_como_conectar(tmp_path):
     t = SpotifyTool(SpotifyCliente("", "", str(tmp_path / "nao.json")))
     assert "spotify_login.py" in await t.run(SpotifyInput(acao="tocando"), CTX)
+
+
+async def test_busca_sem_market_e_403_de_escopo_explica(tool):
+    fake = FakeSpotify()
+    await tool(fake).run(SpotifyInput(acao="fila", busca="them bones"), CTX)
+    busca = [c for c in fake.chamadas if c[1] == "/v1/search"][0]
+    assert "market" not in busca[2]                          # market=from_token exige user-read-private
+
+    def recusa(req):
+        if "accounts" in str(req.url):
+            return httpx.Response(200, json={"access_token": "x", "expires_in": 3600})
+        return httpx.Response(403, json={"error": {"status": 403, "message": "Insufficient client scope"}})
+    out = await tool(recusa).run(SpotifyInput(acao="aparelhos"), CTX)
+    assert "spotify_login.py" in out

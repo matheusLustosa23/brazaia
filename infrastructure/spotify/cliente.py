@@ -108,6 +108,9 @@ class SpotifyCliente:
                 pass
             if motivo == "NO_ACTIVE_DEVICE":
                 raise SpotifyErro("nenhum Spotify tocando agora — diga em qual device (ou abra o app uma vez)")
+            if r.status_code == 403 and "scope" in motivo.lower():
+                raise SpotifyErro("o login do Spotify não deu essa permissão — rode de novo no Windows: "
+                                  "python ops\\spotify_login.py")
             if motivo == "PREMIUM_REQUIRED":
                 raise SpotifyErro("controlar a reprodução exige Spotify Premium nesta conta")
             raise SpotifyErro(f"o Spotify recusou ({r.status_code}{': ' + motivo if motivo else ''})")
@@ -120,7 +123,8 @@ class SpotifyCliente:
         return await self.req("GET", "/me/player")
 
     async def buscar(self, q: str, tipo: str = "track", limite: int = 5) -> list[dict]:
-        d = await self.req("GET", "/search", params={"q": q, "type": tipo, "limit": limite, "market": "from_token"})
+        # SEM market=from_token: ele exige o escopo user-read-private (05/11: busca dava 403 "Insufficient client scope")
+        d = await self.req("GET", "/search", params={"q": q, "type": tipo, "limit": limite})
         return [x for x in ((d or {}).get(tipo + "s", {}).get("items") or []) if x]
 
     async def tocar(self, device_id: str | None = None, uris: list[str] | None = None,
