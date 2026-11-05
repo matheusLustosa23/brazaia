@@ -286,9 +286,13 @@ class CerebroService:
 
     async def registrar(self, acao: str = "registrar", tipo: str | None = None, assunto: str | None = None,
                         dados: dict | None = None, texto: str = "", quando: str | None = None,
-                        corrige: int | None = None, fonte: str = "") -> str:
+                        corrige: int | None = None, fonte: str = "", cada_lado: bool = False,
+                        igual_ultima: bool = False) -> str:
         """acao: abrir (começa a sessão: "vou começar o treino de peito") · registrar (um evento; entra na sessão
-        aberta, se houver) · fechar (termina a sessão aberta e resume)."""
+        aberta, se houver) · fechar (termina a sessão aberta e resume).
+        igual_ultima: copia dados/texto do último registro desse assunto ("mantive o mesmo peso"; 04/11 o modelo
+        não registrou tríceps/panturrilha "com o mesmo peso" e gravou um resumo em texto no perfil).
+        cada_lado: a carga é por lado → texto "cada lado (N kg no total)" (04/11 o "cada lado" se perdia)."""
         acao = norm(acao or "registrar")
         try:
             ts = quando_de(quando)
@@ -308,6 +312,22 @@ class CerebroService:
 
         if not tipo:
             return "[erro] falta o tipo (ex.: treino, serie, estudo) — nada foi registrado."
+        dados = dict(dados or {})
+        if igual_ultima:
+            anterior = None
+            if assunto:
+                ent0 = await self._store.achar_entidade(self.nome_entidade(assunto))
+                if ent0 is not None:
+                    anterior = next(iter(await self._store.registros(tipo=tipo, entidade_id=ent0.id, limite=1)), None)
+            if anterior is None:
+                return (f"[erro] não há registro anterior de '{assunto}' pra repetir — pergunte os números a ele. "
+                        "Nada foi registrado.")
+            dados = {**anterior.dados, **dados}
+            if not texto and anterior.texto.startswith("cada lado"):
+                texto = anterior.texto
+        if cada_lado and isinstance(dados.get("carga_kg"), (int, float)) and not texto.startswith("cada lado"):
+            total = dados["carga_kg"] * 2
+            texto = f"cada lado ({_num(total)} kg no total)" + (f"; {texto}" if texto else "")
         ent = None
         if assunto:
             sugerido = _ASSUNTO_TIPO.get(norm(tipo))
@@ -321,7 +341,7 @@ class CerebroService:
         else:
             sessao, eh_sessao = (aberta.id if aberta else None), False
         try:
-            reg = await self._store.registrar(tipo, ts, entidade_id=ent.id if ent else None, dados=dados or {},
+            reg = await self._store.registrar(tipo, ts, entidade_id=ent.id if ent else None, dados=dados,
                                               texto=texto, sessao=sessao, eh_sessao=eh_sessao, substitui=corrige,
                                               fonte=fonte)
         except ValueError as e:

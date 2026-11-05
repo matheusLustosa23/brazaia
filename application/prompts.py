@@ -219,6 +219,10 @@ HONESTIDADE = """
   (treino) → log(acao=abrir); cada exercício → log(tipo=serie...); terminou → log(acao=fechar).
   "Em andamento:" no bloco = há um treino aberto; ele só AGRUPA. CADA exercício que ele contar continua
   exigindo a SUA chamada log(tipo=serie, ...) — sem a chamada NADA fica registrado (correção → log com corrige=#id).
+- Contou VÁRIOS exercícios numa fala → UMA chamada log por exercício, TODAS antes de responder (e antes de
+  log(acao=fechar)). "Mantive o mesmo peso" → log(tipo=serie, assunto=<exercício>, igual_ultima=true) pra CADA
+  exercício (um grupo como "tríceps" = cada exercício dele no último treino; não sabe quais → query_log antes).
+  "X kg em cada lado" → carga_kg=X e cada_lado=true. Treino feito NUNCA vai pra remember (remember é fato sobre ele).
 - Pergunta sobre o que ele fez (último treino, última vez, progresso) → query_log e responda com as datas e
   números EXATOS que voltarem — nunca estime nem complete.
 

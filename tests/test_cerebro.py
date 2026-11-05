@@ -233,3 +233,22 @@ async def test_ficha_do_exercicio_mostra_registros(cer):
 
 def test_fmt_prancha():
     assert fmt_dados({"series": 3, "duracao_s": 60}) == "3 séries de 60 s"
+
+
+async def test_log_igual_ultima_copia_e_cada_lado(cer):
+    # o caso de 04/11: "tríceps e panturrilha mantive o mesmo peso" + "15 kg em cada lado"
+    await cer.registrar("registrar", "serie", "Panturrilha em pé", {"series": 4, "reps": 6, "carga_kg": 15},
+                        quando="2026-09-07 19:12", cada_lado=True)
+    await cer.registrar("registrar", "serie", "Tríceps polia", {"series": 4, "reps": 6, "carga_kg": 20}, quando="2026-09-07 19:40")
+    await cer.registrar("abrir", "treino", "Peito")
+    r1 = await cer.registrar("registrar", "serie", "Panturrilha em pé", igual_ultima=True)
+    r2 = await cer.registrar("registrar", "serie", "Tríceps polia", igual_ultima=True)
+    assert "4 séries de 6 repetições com 15 kg cada lado (30 kg no total)" in r1
+    assert "4 séries de 6 repetições com 20 kg" in r2 and "cada lado" not in r2
+    r3 = await cer.registrar("registrar", "serie", "Peito polia alta", {"series": 4, "reps": 6, "carga_kg": 15}, cada_lado=True)
+    assert "15 kg cada lado (30 kg no total)" in r3
+
+
+async def test_log_igual_ultima_sem_anterior_nao_inventa(cer):
+    r = await cer.registrar("registrar", "serie", "Exercício novo", igual_ultima=True)
+    assert r.startswith("[erro]") and "Nada foi registrado" in r

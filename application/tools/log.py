@@ -24,6 +24,12 @@ class LogInput(BaseModel):
     texto: str = Field(default="", description="O comentário dele, curto ('a última foi difícil'). Vazio se não houve.")
     quando: str | None = Field(default=None, description=(
         "Só se NÃO foi agora: 'ontem', 'ontem 18:40', '28/10', '2026-10-28 19:00'. Vazio = agora."))
+    cada_lado: bool = Field(default=False, description=(
+        "A carga dita é de CADA LADO (halteres, polia dupla): '15 kg em cada lado' → carga_kg=15, cada_lado=true. "
+        "O sistema anota 'cada lado (30 kg no total)'."))
+    igual_ultima: bool = Field(default=False, description=(
+        "'Mantive o mesmo peso' / 'igual à última vez': o sistema COPIA os números do último registro desse "
+        "exercício (assunto) — não precisa mandar dados. Uma chamada por exercício."))
     corrige: int | None = Field(default=None, description=(
         "CORREÇÃO: o #id do registro errado (ele fica no histórico, marcado). Mande o registro certo inteiro."))
 
@@ -48,4 +54,5 @@ class LogTool(Tool[LogInput]):
 
     async def run(self, payload: LogInput, ctx: ToolCtx) -> str:
         return await self._cerebro.registrar(payload.acao, payload.tipo, payload.assunto, dict(payload.dados),
-                                             payload.texto, payload.quando, payload.corrige, fonte=ctx.session_id)
+                                             payload.texto, payload.quando, payload.corrige, fonte=ctx.session_id,
+                                             cada_lado=payload.cada_lado, igual_ultima=payload.igual_ultima)
