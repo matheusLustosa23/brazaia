@@ -2,7 +2,8 @@ import glob, random, soundfile as sf
 from companion.audio import play, TTS_SAMPLE_RATE
 
 def get_files(voice: str):
-    return sorted(glob.glob(f"companion/assets/greeting_{voice}_*.wav"))
+    from companion import caminho
+    return sorted(glob.glob(caminho("assets", f"greeting_{voice}_*.wav")))   # pacote dos devices não traz as saudações → []
 
 async def play_greeting(voice: str) -> None:
     print(f"play chamadno:{voice}")

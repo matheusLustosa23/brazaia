@@ -4,4 +4,4 @@
 # NÃO precisa de rede: grava na fila (~/.brazaia_loc_fila.jsonl); o connect entrega ao server quando puder.
 # Instalado em ~/brazaia/localizacao.sh pelo `python -m companion.setup`.
 mkdir -p "$HOME/ts"
-cd "$HOME/brazaia" && python -m companion.localizacao coletar >> "$HOME/ts/localizacao.log" 2>&1
+cd "$HOME" && python -m companion.localizacao coletar >> "$HOME/ts/localizacao.log" 2>&1

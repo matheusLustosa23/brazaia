@@ -4,4 +4,4 @@
 # Roda no boot do aparelho (precisa do app Termux:Boot instalado): segura wake-lock
 # e sobe o supervisor, que mantem o tailscaled vivo + na tailnet.
 termux-wake-lock
-"$HOME/brazaia/supervisor.sh" &
+"$HOME/.brazaia/supervisor.sh" &

@@ -2,8 +2,11 @@ import asyncio, os, subprocess, sys, time
 from companion.config import load_config
 
 REC = os.path.expanduser("~/rec.aac")
-IMG = os.path.expanduser("~/brazaia/companion/assets/images/braza_logo_full.png")
-CHAMAR = "cd $HOME/brazaia && python -m companion.gravador"       # como a notificação chama de volta
+from companion import caminho
+
+IMG = (caminho("assets", "images", "braza_logo_full.png") if os.path.exists(caminho("assets", "images", "braza_logo_full.png"))
+       else caminho("assets", "images", "braza_logo_termux.png"))     # o pacote dos devices não traz o logo grande
+CHAMAR = "python -m companion.gravador"                            # pacote instalado: roda de qualquer pasta
 
 def _notif(titulo: str, botao: str, acao: str) -> None:
     subprocess.run(["termux-notification", "--id", "42", "--ongoing", "--alert-once",

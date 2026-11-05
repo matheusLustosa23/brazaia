@@ -21,7 +21,9 @@ _porta = _SERVE_PORT
 
 
 def _asset(nome: str) -> str:
-    return os.path.abspath(os.path.join("companion", "assets", "images", nome))
+    from companion import caminho
+    p = caminho("assets", "images", nome)
+    return p if os.path.exists(p) else caminho("assets", "images", "braza_logo.png")   # pacote não traz o logo grande
 
 async def _reap(proc: asyncio.subprocess.Process):
     """Só espera o filho pra ele não virar <defunct> na tabela de processos.

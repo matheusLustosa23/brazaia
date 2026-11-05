@@ -37,6 +37,12 @@ class DeviceHandshakeService:
             "device_id": device_id,
             "tools": device.allowed_tools,
         }
+        try:                                              # versão do pacote → o device se atualiza sozinho
+            import asyncio
+            from infrastructure import companion_pacote
+            welcome["companion"] = await asyncio.to_thread(companion_pacote.info)
+        except Exception:                                 # pacote não monta = só não avisa (não derruba a conexão)
+            pass
         await ws.send_text(orjson.dumps(welcome).decode())
         return data
         

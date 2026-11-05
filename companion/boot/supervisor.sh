@@ -11,18 +11,23 @@ REPO="$HOME/brazaia"                        # onde o repo esta checado no celula
 mkdir -p "$STATE" "$HOME/ts"
 termux-wake-lock 2>/dev/null                # segura a CPU acordada (contra o Doze) sempre que o supervisor roda
 
+# Tailscale SEMPRE com PATH limpo: no init ele procura o termux-clipboard-set no PATH e, se ACHA, faz a syscall
+# faccessat2 — que alguns Androids bloqueiam (seccomp → SIGSYS: bad system call). Medido 04/11 num Android 15:
+# mesma 1.104.4 do S24 crashava; com PATH=/system/bin roda. Não precisa de nada do Termux no PATH (userspace).
+TSX="env PATH=/system/bin"
+
 log() { echo "$(date '+%H:%M:%S') $*" >> "$HOME/ts/supervisor.log"; }
 
 sobe_tailscaled() {
   pgrep -f "tailscaled --tun=userspace" >/dev/null 2>&1 && return
   log "subindo tailscaled (userspace)..."
-  "$TS/tailscaled" --tun=userspace-networking --socks5-server=localhost:1055 \
+  $TSX "$TS/tailscaled" --tun=userspace-networking --socks5-server=localhost:1055 \
     --state="$STATE/tailscaled.state" --socket="$STATE/tailscaled.sock" \
     >> "$HOME/ts/tsd.log" 2>&1 &
   sleep 3
-  "$TS/tailscale" --socket="$STATE/tailscaled.sock" up \
+  $TSX "$TS/tailscale" --socket="$STATE/tailscaled.sock" up \
     --auth-key="${TS_AUTHKEY:-}" --hostname="${DEVICE_ID:-celular}" >> "$HOME/ts/tsd.log" 2>&1
-  log "tailscale up ip=$("$TS/tailscale" --socket="$STATE/tailscaled.sock" ip -4 2>/dev/null)"
+  log "tailscale up ip=$($TSX "$TS/tailscale" --socket="$STATE/tailscaled.sock" ip -4 2>/dev/null)"
 }
 
 sobe_connect() {

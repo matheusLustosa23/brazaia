@@ -91,7 +91,8 @@ def _modelos_wake() -> None:
 def _saudacao(voz: str) -> bytes:
     """PCM 24k de uma saudação gravada (companion/assets/greeting_<voz>_N.wav) — b"" se não houver."""
     import glob, random, wave
-    arqs = glob.glob(f"companion/assets/greeting_{voz}_*.wav")
+    from companion import caminho
+    arqs = glob.glob(caminho("assets", f"greeting_{voz}_*.wav"))
     if not arqs:
         return b""
     with wave.open(random.choice(arqs), "rb") as w:

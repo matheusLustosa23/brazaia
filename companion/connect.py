@@ -14,7 +14,7 @@ Roda SILENCIOSO em background, logando em ~/ts/connect.log:
 CS2b (TODO): no Termux (tailscaled userspace), sair pelo SOCKS5 (localhost:1055) p/
              alcancar o server SEM o app do Tailscale.
 """
-import asyncio, os, sys, time
+import asyncio, os, subprocess, sys, time
 import websockets
 from companion._json import dumps, loads
 from companion.config import load_config
@@ -74,12 +74,49 @@ async def _sessao(cfg) -> None:
         bem = loads(await ws.recv())
         if bem.get("type") == "welcome":
             log(f"❇️  handshake ok — tools no server: {bem.get('tools')}")
+            await _talvez_atualizar(cfg, bem.get("companion") or {})
         estado.device_online = True; estado.device_status = "online"   # rodapé: 🛰 on
         fila = asyncio.create_task(_esvaziar_fila(ws))
         try:
             await _escutar(ws)
         finally:
             fila.cancel()
+
+
+SUPERVISIONADO = False        # True só no `connect --fg` (supervisor/serviço): aí pode sair pra atualizar
+
+
+async def _talvez_atualizar(cfg, novo: dict) -> None:
+    """O servidor anunciou outra versão do pacote → baixa, instala e sai (o supervisor sobe a nova em ~30 s).
+    Só quando instalado como pacote E supervisionado: rodando do repo ("dev") ou dentro do CLI, nunca."""
+    import companion
+    v = novo.get("versao")
+    if not v or companion.__version__ in ("dev", v) or not SUPERVISIONADO:
+        return
+    import httpx
+    from companion import DADOS
+    base = cfg.server_ws_url.replace("wss://", "https://").replace("ws://", "http://").split("/api/")[0]
+    destino = os.path.join(DADOS, "pacote", novo["arquivo"])
+    os.makedirs(os.path.dirname(destino), exist_ok=True)
+    log(f"⬆️  atualizando companion {companion.__version__} → {v}…")
+    try:
+        async with httpx.AsyncClient(timeout=120, proxy=os.getenv("SOCKS_PROXY") or None) as http:
+            r = await http.get(base + novo["url"])
+            r.raise_for_status()
+        with open(destino, "wb") as f:
+            f.write(r.content)
+        # --no-deps: o download já veio pelo SOCKS (o pip não fala SOCKS sem PySocks); deps novas = instalar à mão
+        p = await asyncio.to_thread(subprocess.run, [sys.executable, "-m", "pip", "install", "--no-deps",
+                                    "--force-reinstall", "-q", destino], capture_output=True, text=True, timeout=300)
+    except Exception as e:
+        log(f"⚠️  atualização falhou ({type(e).__name__}: {e}) — sigo na versão {companion.__version__}")
+        return
+    if p.returncode != 0:
+        log(f"⚠️  pip falhou: {(p.stderr or p.stdout)[-300:]} — sigo na versão {companion.__version__}")
+        return
+    log(f"✅ companion {v} instalado — reiniciando (o supervisor sobe a nova versão)")
+    subprocess.run(["pkill", "-f", "companion.localizacao rastrear"], check=False)   # rastreador volta com a nova
+    os._exit(0)
 
 
 async def _esvaziar_fila(ws) -> None:
@@ -234,6 +271,7 @@ if __name__ == "__main__":
     elif "--watch" in sys.argv:
         _watch()
     elif "--fg" in sys.argv:
+        SUPERVISIONADO = True
         try:
             open(PIDFILE, "w").write(str(os.getpid()))   # authoritative: quem subir o --fg registra o PID
         except Exception:

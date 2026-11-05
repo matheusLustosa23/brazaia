@@ -7,7 +7,7 @@ SAMPLE_RATE = 16_000
 TTS_SAMPLE_RATE = 24_000   # Kokoro (saída do TTS)
 CHANNELS = 1
 DTYPE = "int16"
-_DIR = os.path.expanduser("~/brazaia")
+_DIR = os.path.expanduser("~/.brazaia/audio")     # turnos gravados/respostas (antes ~/brazaia = o repo)
 MIC_DEVICE = os.getenv("MIC_DEVICE", "pulse")       # segue o mic padrão do sistema; ou "HyperX"/índice
 _MIC_DEV = int(MIC_DEVICE) if MIC_DEVICE.isdigit() else MIC_DEVICE
 

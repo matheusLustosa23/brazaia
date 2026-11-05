@@ -1,0 +1,3 @@
+# Scripts que rodam no bash do Termux/Linux: sempre LF (o Windows com core.autocrlf=true os converteria pra CRLF
+# e o bash quebra com $'\r': command not found).
+*.sh text eol=lf
