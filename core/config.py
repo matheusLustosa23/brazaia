@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     acervo_dir: str = "data/acervo"                 # documentos (Markdown) que o agente consulta: search_docs/read_doc
     acervo_db_path: str = "data/acervo.db"           # índice (reconstruível: python ops/acervo.py reindexar)
     cerebro_db_path: str = "data/cerebro.db"
+    spotify_client_id: str = ""                         # app em developer.spotify.com (ops/spotify_login.py)
+    spotify_client_secret: SecretStr = SecretStr("")
+    spotify_token_path: str = "data/spotify_token.json"  # refresh_token do dono (gerado pelo spotify_login)
     lembrete_devices: str = ""        # devices que recebem os lembretes, separados por vírgula; vazio = todos os conectados     # M1: entidades/observações/relações (substitui o memoria.db)
     session_db_path: str = "data/sessoes.db"
     

@@ -1,0 +1,104 @@
+import json
+import time
+
+import httpx
+import pytest
+
+from domain.tools.guard import ToolCtx
+from infrastructure.spotify.cliente import SpotifyCliente
+from infrastructure.tools.spotify import SpotifyInput, SpotifyTool
+
+CTX = ToolCtx(fala_do_usuario="")
+
+
+class FakeSpotify:
+    """Responde como a Web API; guarda as chamadas pra conferir."""
+    def __init__(self, devices=None, tocando=None, playlists=None):
+        self.chamadas, self.devices = [], devices if devices is not None else [
+            {"id": "d-pc", "name": "DESKTOP", "type": "Computer", "is_active": False},
+            {"id": "d-s24", "name": "Galaxy S24 Ultra", "type": "Smartphone", "is_active": False}]
+        self.tocando = tocando
+        self.playlists = playlists or [{"id": "p1", "name": "Treino Pesado", "uri": "spotify:playlist:p1", "tracks": {"total": 40}}]
+        self.refreshes = 0
+
+    def __call__(self, req: httpx.Request) -> httpx.Response:
+        caminho, q = req.url.path, dict(req.url.params)
+        if "accounts.spotify.com" in str(req.url):          # renovação: corpo é formulário, não JSON
+            self.refreshes += 1
+            return httpx.Response(200, json={"access_token": "novo", "expires_in": 3600})
+        self.chamadas.append((req.method, caminho, q, json.loads(req.content) if req.content else None))
+        if caminho == "/v1/me/player/devices":
+            return httpx.Response(200, json={"devices": self.devices})
+        if caminho == "/v1/search":
+            if "naoexiste" in q["q"]:
+                return httpx.Response(200, json={q["type"] + "s": {"items": []}})
+            item = {"name": q["q"].title(), "uri": f"spotify:{q['type']}:{q['q'][:5]}", "artists": [{"name": "Queen"}]}
+            return httpx.Response(200, json={q["type"] + "s": {"items": [item]}})
+        if caminho == "/v1/me/playlists":
+            return httpx.Response(200, json={"items": self.playlists})
+        if caminho == "/v1/me/player" and req.method == "GET":
+            return httpx.Response(200, json=self.tocando) if self.tocando else httpx.Response(204)
+        if caminho == "/v1/me":
+            return httpx.Response(200, json={"id": "dono"})
+        if caminho == "/v1/users/dono/playlists":
+            return httpx.Response(201, json={"id": "nova", "name": json.loads(req.content)["name"]})
+        return httpx.Response(204)
+
+
+@pytest.fixture
+def tool(tmp_path):
+    def fazer(fake, expira_em=3600):
+        tok = tmp_path / "tok.json"
+        tok.write_text(json.dumps({"access_token": "velho", "refresh_token": "r", "expires_at": time.time() + expira_em}))
+        return SpotifyTool(SpotifyCliente("id", "segredo", str(tok), transport=httpx.MockTransport(fake)))
+    return fazer
+
+
+async def test_tocar_musica_no_celular_pelo_nome(tool):
+    fake = FakeSpotify()
+    out = await tool(fake).run(SpotifyInput(acao="tocar", busca="bohemian rhapsody", dispositivo="celular"), CTX)
+    assert "tocando Bohemian Rhapsody — Queen no Galaxy S24 Ultra" in out
+    play = [c for c in fake.chamadas if c[1] == "/v1/me/player/play"][0]
+    assert play[2] == {"device_id": "d-s24"} and play[3] == {"uris": ["spotify:track:bohem"]}
+
+
+async def test_playlist_do_dono_vem_antes_da_busca(tool):
+    fake = FakeSpotify()
+    out = await tool(fake).run(SpotifyInput(acao="tocar", busca="treino", tipo="playlist"), CTX)
+    assert "playlist 'Treino Pesado'" in out
+    assert not [c for c in fake.chamadas if c[1] == "/v1/search"]
+    assert [c for c in fake.chamadas if c[1] == "/v1/me/player/play"][0][3] == {"context_uri": "spotify:playlist:p1"}
+
+
+async def test_pular_mostra_a_musica_nova(tool):
+    fake = FakeSpotify(tocando={"is_playing": True, "item": {"name": "Tempo Perdido", "artists": [{"name": "Legião Urbana"}]},
+                                "device": {"name": "Galaxy S24 Ultra"}})
+    fake.devices[1]["is_active"] = True
+    out = await tool(fake).run(SpotifyInput(acao="proxima"), CTX)
+    assert "pulou no Galaxy S24 Ultra — agora: Tempo Perdido — Legião Urbana" in out
+    assert ("POST", "/v1/me/player/next") in [(c[0], c[1]) for c in fake.chamadas]
+
+
+async def test_criar_playlist_avisa_o_que_nao_achou(tool):
+    fake = FakeSpotify()
+    out = await tool(fake).run(SpotifyInput(acao="criar_playlist", nome_playlist="Foco",
+                                            musicas=["clocks coldplay", "naoexiste xyz"]), CTX)
+    assert "playlist 'Foco' criada com 1 música(s); não achei: naoexiste xyz" in out
+    add = [c for c in fake.chamadas if c[1] == "/v1/playlists/nova/tracks"][0]
+    assert add[3] == {"uris": ["spotify:track:clock"]}
+
+
+async def test_sem_spotify_aberto_explica(tool):
+    out = await tool(FakeSpotify(devices=[])).run(SpotifyInput(acao="tocar", busca="x"), CTX)
+    assert out.startswith("[erro] Spotify: nenhum Spotify aberto")
+
+
+async def test_token_vencido_renova_sozinho(tool):
+    fake = FakeSpotify()
+    await tool(fake, expira_em=-10).run(SpotifyInput(acao="aparelhos"), CTX)
+    assert fake.refreshes == 1
+
+
+async def test_sem_login_diz_como_conectar(tmp_path):
+    t = SpotifyTool(SpotifyCliente("", "", str(tmp_path / "nao.json")))
+    assert "spotify_login.py" in await t.run(SpotifyInput(acao="tocando"), CTX)

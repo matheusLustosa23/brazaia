@@ -23,6 +23,8 @@ from infrastructure.tools.get_location import GetLocationTool
 from infrastructure.tools.search_docs import SearchDocsTool
 from infrastructure.tools.read_doc import ReadDocTool
 from infrastructure.tools.web import WebFetchTool, WebSearchTool
+from infrastructure.tools.spotify import SpotifyTool
+from infrastructure.spotify.cliente import SpotifyCliente
 from infrastructure.acervo.acervo import Acervo
 from infrastructure.memory.cerebro_store import SqliteCerebroStore
 from infrastructure.memory.session_store import SqlLiteSessionStore
@@ -113,6 +115,9 @@ async def lifespan(app: FastAPI):
     app.state.acervo = acervo                                        # rota /acervo (enviar pelo CLI/celular/painel)
     registry.register(SearchDocsTool(acervo))
     registry.register(ReadDocTool(acervo))
+    registry.register(SpotifyTool(SpotifyCliente(settings.spotify_client_id,      # música (Spotify Connect, pela API)
+                                                 settings.spotify_client_secret.get_secret_value(),
+                                                 settings.spotify_token_path)))
     registry.register(WebSearchTool(settings.searxng_url))     # busca na web (SearXNG próprio)
     registry.register(WebFetchTool(acervo, settings.web_user_agent))   # lê a página e guarda no acervo (coleção web)
 
