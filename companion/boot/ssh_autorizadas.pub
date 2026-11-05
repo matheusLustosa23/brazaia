@@ -1,0 +1,6 @@
+# Chaves PÚBLICAS que podem entrar por SSH nos devices Termux (porta 8022, só pela tailnet, só por chave).
+# Vão pro ~/.ssh/authorized_keys pelo setup (python -m companion.setup --ssh). Chave pública não é segredo.
+# note (Ubuntu):
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPU7Es8h8/Ojq/cwhqcEpMUGQmd2CiNojg75gItHU6Td note
+# Windows (servidor):
+ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQC0ws7brZliFbiMYeTII1wukF21TRzPzCfFM8Wy3kQo3/bpfP4I2pz94z+xmNwQcJKp8LFK6jDmeSCCm9zfPp3IQieAAmTzfHlgUbDsxWg4fsGCfGWKblWI9+/AUozzzb8ST1sNmL6avgrr7yHO+aRR2gk4xf7k5xlE42VrFx+WhrCHNwNo2A3LzHNmg+aRlZpjzreHcPnobcJZpyNwUzXoV+UM+sPwFxagjl7ePxf0wsCesdVBVhBkoGMgtGeFomGRhtuC7B1E1kMVuHm1f4abBfBoOyr5lrxW7z/Jyl3PUloVzjW1EMmb+IOguSoAIyrT8WAOsgOigD9xrGNdCM7eRE+3wgCI+n7Z97xhPaRfJIioeCU0xNjYO00f2SG9UkhLCQw/9L3YysdGssPEZvKk7xbqnh4znYZuoLK+8KU0y9BGJJx0vWpH/EmhCCpefEYEo59gIgILY2Av1IVTU6u2jZ5RYUMCQeYuoK8Nw2JfpF7vrE1JwKQzg5Hbmh/MEhIzUBcskWzq5DOjfa65O7BZx55KM3ADERYkQmG1UVXYr5ya9kC0suIaQEqPTRrp4I5C8ra8gIu14F/9G01WqPuDQUSt/e1GrUcjFjMQcLgtN3TutEZRuSlaARpcAxoUuBnk3qKcNQW3bzBrxPcoiZaLxjIREp2IJalJkLdPCSXIPQ== dev@DESKTOP-J0D2FA3

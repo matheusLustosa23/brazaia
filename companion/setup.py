@@ -53,9 +53,10 @@ def baixar_tailscale(bindir: str) -> bool:
         with tarfile.open(fileobj=io.BytesIO(dados)) as tar:
             for m in tar.getmembers():
                 base = m.name.rsplit("/", 1)[-1]
-                if base in ("tailscale", "tailscaled") and m.isfile():
+                arq = tar.extractfile(m) if m.isfile() else None     # None = não é arquivo comum (pasta/link)
+                if base in ("tailscale", "tailscaled") and arq is not None:
                     with open(f"{bindir}/{base}", "wb") as f:
-                        f.write(tar.extractfile(m).read())
+                        f.write(arq.read())
                     _mais_x(f"{bindir}/{base}")
         return os.path.exists(f"{bindir}/tailscaled")
     except Exception as e:
@@ -118,6 +119,66 @@ def setup_tailscale_termux() -> None:
     print("CS1/CS2b ok — supervisor + Termux:Boot + SOCKS_PROXY. (precisa do app Termux:Boot)")
 
 
+def _destinos_scripts() -> dict[str, str]:
+    """Script de dentro do pacote → onde ele fica instalado no device."""
+    return {"supervisor.sh": f"{DADOS}/supervisor.sh", "healthcheck.sh": f"{DADOS}/healthcheck.sh",
+            "localizacao.sh": f"{DADOS}/localizacao.sh",
+            "termux-boot.sh": os.path.expanduser("~/.termux/boot/00-brazaia.sh")}
+
+
+def instalar_scripts() -> list[str]:
+    """Recopia os scripts de boot do pacote (chamado pelo connect DEPOIS de se atualizar). Devolve os que mudaram.
+    Sem isto, uma correção no supervisor.sh (ex.: o PATH limpo do Tailscale, 04/11) nunca chegava num device já
+    instalado — a atualização trocava só o Python. Troca ATÔMICA (arquivo novo + rename): um bash que esteja rodando
+    o script antigo continua lendo a cópia antiga (outro inode) até ser reiniciado — nunca lê metade de cada."""
+    mudaram = []
+    for nome, destino in _destinos_scripts().items():
+        novo = open(caminho("boot", nome), "rb").read()
+        if not os.path.exists(os.path.dirname(destino)):
+            continue                                       # parte não instalada neste device (ex.: sem Termux:Boot)
+        if os.path.exists(destino) and open(destino, "rb").read() == novo:
+            continue
+        tmp = destino + ".novo"
+        with open(tmp, "wb") as f:
+            f.write(novo)
+        _mais_x(tmp)
+        os.replace(tmp, destino)
+        mudaram.append(nome)
+    return mudaram
+
+
+def setup_ssh_termux() -> None:
+    """Canal de MANUTENÇÃO: sshd do Termux (porta 8022), só por chave — as de companion/boot/ssh_autorizadas.pub.
+    Pra quando o companion cair com o celular longe (05/11: celular2 ficou fora sem como entrar). O tailscaled
+    userspace repassa o que chega no IP da tailnet pras portas locais → ssh -p 8022 <ip-tailnet> (só pela tailnet)."""
+    home = os.path.expanduser("~")
+    if not shutil.which("sshd"):
+        print("instalando openssh…")
+        subprocess.run(["pkg", "install", "-y", "openssh"], check=False)
+    if not shutil.which("sshd"):
+        print("⚠ openssh não instalou — SSH de manutenção fica sem"); return
+    os.makedirs(f"{home}/.ssh", exist_ok=True)
+    os.chmod(f"{home}/.ssh", 0o700)
+    ak = f"{home}/.ssh/authorized_keys"
+    atuais = set(open(ak).read().splitlines()) if os.path.exists(ak) else set()
+    novas = [l.strip() for l in open(caminho("boot", "ssh_autorizadas.pub")) if l.strip() and not l.startswith("#")]
+    with open(ak, "a") as f:
+        for chave in novas:
+            if chave not in atuais:
+                f.write(chave + "\n")
+    os.chmod(ak, 0o600)
+    cfg = os.path.join(os.environ.get("PREFIX", "/data/data/com.termux/files/usr"), "etc", "ssh", "sshd_config")
+    linhas = [l for l in (open(cfg).read().splitlines() if os.path.exists(cfg) else [])
+              if not l.strip().startswith(("PasswordAuthentication", "KbdInteractiveAuthentication"))]
+    linhas += ["PasswordAuthentication no", "KbdInteractiveAuthentication no"]   # só chave, nunca senha
+    with open(cfg, "w") as f:
+        f.write("\n".join(linhas) + "\n")
+    subprocess.run(["pkill", "-x", "sshd"], check=False)
+    subprocess.run(["sshd"], check=False)                 # o supervisor mantém vivo daqui pra frente
+    usuario = subprocess.run(["id", "-un"], capture_output=True, text=True).stdout.strip()
+    print(f"SSH ok — porta 8022, só por chave ({len(novas)} autorizadas) · usuário: {usuario}")
+
+
 def setup_localizacao_termux() -> None:
     """P2 — coleta de localização + bateria a cada 15 min (job 2 do JobScheduler; o job 1 é o healthcheck)."""
     home = os.path.expanduser("~")
@@ -133,12 +194,16 @@ def setup_localizacao_termux() -> None:
 if __name__ == "__main__":
     import sys
     from companion import permissoes
+    if "--ssh" in sys.argv:                    # device já instalado: só o canal de manutenção
+        setup_ssh_termux()
+        sys.exit(0)
     if "--kit" in sys.argv:
         aplicar_kit(sys.argv[sys.argv.index("--kit") + 1])
     if _IS_TERMUX:
         setup_termux()
         setup_tailscale_termux()
         setup_localizacao_termux()
+        setup_ssh_termux()
     else:
         print("desktop: só as permissões (o resto do setup é do Termux)")
     permissoes.main()                          # por último: pede/testa cada permissão UMA vez e guarda
