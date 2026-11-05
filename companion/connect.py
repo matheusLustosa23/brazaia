@@ -115,6 +115,23 @@ async def _talvez_atualizar(cfg, novo: dict) -> None:
         log(f"⚠️  pip falhou: {(p.stderr or p.stdout)[-300:]} — sigo na versão {companion.__version__}")
         return
     log(f"✅ companion {v} instalado — reiniciando (o supervisor sobe a nova versão)")
+    if localizacao.plataforma() == "termux":
+        # scripts de boot vêm do pacote NOVO → roda num processo novo (este ainda tem o código antigo carregado)
+        r = await asyncio.to_thread(subprocess.run, [sys.executable, "-c",
+                                    "from companion.setup import instalar_scripts; print(','.join(instalar_scripts()))"],
+                                    capture_output=True, text=True, timeout=60)
+        ultima = (r.stdout or "").strip().splitlines()[-1:] if r.returncode == 0 else []
+        mudaram = [m for m in ultima[0].split(",") if m] if ultima else []
+        if r.returncode != 0:
+            log(f"⚠️  não consegui recopiar os scripts de boot: {(r.stderr or '')[-200:]}")
+        elif mudaram:
+            log(f"🔧 scripts de boot atualizados: {', '.join(mudaram)}")
+        if "supervisor.sh" in mudaram:
+            # o supervisor em execução segue lendo a cópia antiga: troca por um novo (ele sobe o connect em ≤ 30 s)
+            from companion import DADOS
+            subprocess.run(["pkill", "-f", "brazaia/supervisor.sh"], check=False)
+            subprocess.Popen(["nohup", os.path.join(DADOS, "supervisor.sh")], stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
     subprocess.run(["pkill", "-f", "companion.localizacao rastrear"], check=False)   # rastreador volta com a nova
     os._exit(0)
 
@@ -216,9 +233,13 @@ def _start_bg() -> None:
     os.makedirs(os.path.dirname(LOG), exist_ok=True)
     pos = os.path.getsize(LOG) if os.path.exists(LOG) else 0      # le so o que ESTE start produzir
     logf = open(LOG, "a")
-    kw = {"creationflags": subprocess.CREATE_NEW_CONSOLE} if os.name == "nt" else {"start_new_session": True}
-    p = subprocess.Popen([sys.executable, "-m", "companion.connect", "--fg"],
-                         stdout=logf, stderr=logf, **kw)
+    # duas chamadas explícitas (não **kw): com o dict misto int/bool o Pylance não casava nenhuma assinatura do Popen
+    if os.name == "nt":
+        p = subprocess.Popen([sys.executable, "-m", "companion.connect", "--fg"],
+                             stdout=logf, stderr=logf, creationflags=subprocess.CREATE_NEW_CONSOLE)
+    else:
+        p = subprocess.Popen([sys.executable, "-m", "companion.connect", "--fg"],
+                             stdout=logf, stderr=logf, start_new_session=True)
     try: open(PIDFILE, "w").write(str(p.pid))
     except Exception: pass
     for _ in range(16):                                          # espera o 1o resultado (~8s)
