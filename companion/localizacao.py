@@ -291,7 +291,10 @@ def _fix(provedor: str, modo: str, timeout: float) -> dict | None:
 
 def _mais_fresca() -> dict | None:
     """A 'última conhecida' mais nova entre GPS e rede — instantânea: não liga o GPS, aproveita quem ligou."""
-    fixes = [f for f in (_fix("gps", "last", 8), _fix("network", "last", 8)) if f]
+    g = _fix("gps", "last", 6)
+    if g is None and any("timeout" in m for m in _motivos):
+        return None                   # nem a "última conhecida" (instantânea) respondeu: o Termux:API está dormindo
+    fixes = [f for f in (g, _fix("network", "last", 6)) if f]
     return min(fixes, key=lambda f: f["idade_s"]) if fixes else None
 
 
@@ -313,13 +316,29 @@ def rastrear() -> None:
     ultimo: dict | None = None
     ultimo_mov = 0.0                  # última vez que andou de verdade
     ultimo_estado = 0.0
+    bloqueado_desde = 0.0             # desde quando o Termux:API não responde (0 = respondendo)
     while True:
         t0 = time.time()
         try:
             movendo = t0 - ultimo_mov < PARADO_S
             _motivos.clear()
             p = _mais_fresca()
-            if p is None or p["idade_s"] > FRESCO_S:
+            api_dormindo = p is None and any("timeout" in m for m in _motivos)
+            if api_dormindo:
+                # 04/11, tela apagada: TODAS as leituras davam timeout (51 s por tick). O Termux:API foi posto pra
+                # dormir pelo Android — insistir não adianta. Avisa o server (vai junto da bateria) e tenta no próximo tick.
+                if not bloqueado_desde:
+                    bloqueado_desde = t0
+                    print(time.strftime("%H:%M:%S"), "Termux:API não responde (Android pôs em suspensão) — "
+                          "verifique: localização 'Permitir o tempo todo' e bateria 'Sem restrições' no Termux:API", flush=True)
+                    salvar_estado({**ler_estado(), "loc_bloqueada_desde": bloqueado_desde})
+                    ultimo_estado = t0
+            elif bloqueado_desde and p is not None:
+                print(time.strftime("%H:%M:%S"), f"Termux:API voltou (ficou {round((t0 - bloqueado_desde) / 60)} min sem responder)", flush=True)
+                bloqueado_desde = 0.0
+                salvar_estado(ler_estado())
+                ultimo_estado = t0
+            if not api_dormindo and (p is None or p["idade_s"] > FRESCO_S):
                 vencido = ultimo is None or t0 - ultimo["quando"] >= PARADO_S
                 if movendo or vencido:        # sem posição fresca: pede uma (GPS se está andando, rede se parado)
                     velha = p
@@ -347,7 +366,7 @@ def rastrear() -> None:
                           round(p["lat"], 5), round(p["lon"], 5), p["fonte"], f"±{round(p.get('precisao_m') or 0)}m",
                           f"idade {round(p['idade_s'])}s", flush=True)
             if t0 - ultimo_estado >= PARADO_S:
-                salvar_estado(ler_estado())
+                salvar_estado({**ler_estado(), **({"loc_bloqueada_desde": bloqueado_desde} if bloqueado_desde else {})})
                 ultimo_estado = t0
         except Exception as e:                # nunca morre por uma leitura ruim
             print(time.strftime("%H:%M:%S"), "erro:", e, flush=True)

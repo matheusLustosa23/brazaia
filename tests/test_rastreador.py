@@ -72,3 +72,29 @@ def test_rede_falha_parado_tenta_gps(monkeypatch, tmp_path):
     leituras = [(_p(-16.8, idade=900), _p(-16.8))]
     fila, pedidos = _simular(monkeypatch, tmp_path, leituras, ticks=6)
     assert len(fila) >= 1
+
+
+def test_api_dormindo_desiste_rapido_e_avisa(monkeypatch, tmp_path):
+    monkeypatch.setattr(L, "FILA", str(tmp_path / "fila.jsonl"))
+    monkeypatch.setattr(L, "PID_RASTREADOR", str(tmp_path / "pid"))
+    monkeypatch.setattr(L, "ESTADO", str(tmp_path / "estado.json"))
+    monkeypatch.setattr(L, "ler_estado", lambda: {"bateria": 50})
+    chamadas = []
+
+    def rodar(cmd, timeout, env=None):
+        chamadas.append(cmd[2:5:2])
+        return 124, "timeout"
+
+    ticks = {"n": 0}
+
+    def dormir(_):
+        ticks["n"] += 1
+        if ticks["n"] >= 3:
+            raise _Parar
+
+    monkeypatch.setattr(L, "_rodar", rodar)
+    monkeypatch.setattr(L.time, "sleep", dormir)
+    with pytest.raises(_Parar):
+        L.rastrear()
+    assert len(chamadas) == 3                      # 1 leitura por tick (desistiu), não 4
+    assert L.estado_salvo().get("loc_bloqueada_desde")
