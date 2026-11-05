@@ -365,6 +365,7 @@ async function carregarDevices() {
   if (d && d.conectado !== estado.consoleOnline) renderConsole();
   atualizarSelectMapa();
   if (abaAtual() === "mapa" && !estado.filtro.device) desenharUltimas();
+  if (abaAtual() === "mapa") renderDestaque();             // online/bateria/alertas a cada 10 s
 }
 
 // ── mapa ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -416,21 +417,52 @@ function pino(ll, nome, quando, aoClicar) {
   return m;
 }
 
+// Devices no MESMO lugar (≤ JUNTOS_M) = um marcador só, um nome por linha (antes os rótulos se sobrepunham e não dava
+// pra ver que os dois celulares estavam juntos). Clicar num nome abre a trilha daquele device.
+const JUNTOS_M = 60;
+function agruparDevices(itens) {                  // itens: [{id, nome, lat, lon, quando, precisao_m}]
+  const grupos = [];
+  for (const it of itens) {
+    const g = grupos.find((x) => metros(x, it) <= JUNTOS_M);
+    if (g) g.itens.push(it); else grupos.push({ lat: it.lat, lon: it.lon, itens: [it] });
+  }
+  return grupos;
+}
+
+function pinoGrupo(g, { secundario = false } = {}) {
+  const linhas = g.itens.map((it) =>
+    `<span class="pino-linha" data-id="${it.id}"><b>${it.nome}</b> · ${relativo(it.quando)}</span>`).join("");
+  const html = `<span class="pino-ponto"></span><span class="pino-rotulo">${linhas}</span>`;
+  const m = L.marker([g.lat, g.lon], {
+    icon: L.divIcon({ className: `pino${secundario ? " secundario" : ""}`, html, iconSize: null, iconAnchor: [9, 9] }),
+    title: g.itens.map((it) => `${it.nome} · ${dataHora(it.quando)}`).join("\n"), riseOnHover: true,
+  });
+  m.on("click", (e) => {
+    const alvo = e.originalEvent?.target?.closest?.(".pino-linha");
+    const id = alvo?.dataset?.id || g.itens[0].id;
+    if (id !== estado.filtro.device) escolherNoMapa(id);
+  });
+  return m;
+}
+
+const posicoesDevices = () => estado.devices.filter((d) => d.localizacao).map((d) => ({
+  id: d.id, nome: d.nome || d.id, lat: d.localizacao.lat, lon: d.localizacao.lon,
+  quando: d.localizacao.quando, precisao_m: d.localizacao.precisao_m }));
+
 function desenharUltimas() {
   iniciarMapa();
   if (!mapa) return;
   grupoTrilha.clearLayers();
   grupoPontos.clearLayers();
   const coords = [];
-  for (const d of estado.devices) {
-    const p = d.localizacao;
-    if (!p) continue;
+  const pos = posicoesDevices();
+  for (const p of pos) {
     coords.push([p.lat, p.lon]);
     if (p.precisao_m && p.precisao_m <= 1000) {    // anel de ±10 km (IP) só atrapalha a leitura
       L.circle([p.lat, p.lon], { radius: p.precisao_m, color: "#22e5ff", weight: 1, fillOpacity: 0.06 }).addTo(grupoPontos);
     }
-    pino([p.lat, p.lon], d.nome || d.id, p.quando, () => escolherNoMapa(d.id)).addTo(grupoPontos);
   }
+  for (const g of agruparDevices(pos)) pinoGrupo(g).addTo(grupoPontos);
   $("#resumo-mapa").textContent = coords.length
     ? `Última posição de ${coords.length} device(s). Escolha um device e o intervalo para ver a trilha.`
     : "Nenhum device mandou posição ainda.";
@@ -545,6 +577,58 @@ function abrirCard(ll, info) {
     .catch(() => { end.textContent = "endereço indisponível"; });
 }
 
+// ── destaque do device no topo do mapa: online, bateria, parado/andando, última posição + endereço, alertas ──
+let situacao = null;                          // {parado, desde, vel, ponto} — calculada na trilha
+let enderecoDestaque = { chave: "", texto: "" };
+
+function renderDestaque() {
+  const caixa = $("#destaque-device");
+  const d = dev(estado.filtro.device);
+  if (!d) { caixa.hidden = true; return; }
+  caixa.hidden = false;
+  const ult = situacao?.ponto || d.localizacao;
+  const est = d.estado || {};
+  const agora = Date.now() / 1000;
+  const item = (rotulo, valor, cls = "") => el("div", { class: `dq-item ${cls}` }, el("span", { class: "dq-rot" }, rotulo), el("b", {}, valor));
+  const itens = [
+    item("Conexão", d.conectado ? `● online${d.conectado_desde ? ` desde ${new Date(d.conectado_desde * 1000).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}` : ""}`
+                                : `○ offline · visto ${relativo(d.ultima_vez)}`, d.conectado ? "ok" : "off"),
+  ];
+  if (est.bateria != null) {
+    itens.push(item("Bateria", `${est.bateria}%${est.carregando ? " ⚡ carregando" : ""} · ${relativo(d.estado_em)}`,
+      est.bateria <= 20 && !est.carregando ? "alerta" : ""));
+  }
+  if (situacao) {
+    itens.push(situacao.parado
+      ? item("Situação", `⏸ parado ${relativo(situacao.desde).replace("há ", "há ")} (desde ${new Date(situacao.desde * 1000).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })})`, "parado")
+      : item("Situação", `▶ em movimento${situacao.vel != null ? ` · ${Math.round(situacao.vel)} km/h` : ""}`, "movendo"));
+  }
+  if (ult) {
+    const fonte = ult.fonte ? ` · ${ult.fonte}` : "";
+    itens.push(item("Última posição", `${dataHora(ult.quando)} · ${relativo(ult.quando)}${ult.precisao_m ? ` · ±${Math.round(ult.precisao_m)} m` : ""}${fonte}`));
+  }
+  const end = el("div", { class: "dq-end" }, enderecoDestaque.texto || (ult ? "buscando endereço…" : ""));
+  const alertas = [];
+  if (est.loc_bloqueada_desde) {
+    alertas.push(el("div", { class: "dq-alerta" }, `📵 Localização bloqueada pelo Android desde ${new Date(est.loc_bloqueada_desde * 1000).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })} ` +
+      "(o Termux:API não responde com a tela apagada). No celular: Termux:API → Permissões → Localização → “Permitir o tempo todo” e Bateria → “Sem restrições”."));
+  } else if (d.conectado && ult && agora - ult.quando > 10 * 60) {
+    alertas.push(el("div", { class: "dq-aviso" }, `⚠ Conectado, mas sem posição nova ${relativo(ult.quando)}.`));
+  }
+  caixa.replaceChildren(el("div", { class: "dq-topo" }, el("h2", {}, d.nome || d.id), ...itens), end, ...alertas);
+  if (ult) {
+    const chave = `${ult.lat.toFixed(4)},${ult.lon.toFixed(4)}`;
+    if (chave !== enderecoDestaque.chave) {
+      enderecoDestaque = { chave, texto: "" };
+      api(`/endereco?lat=${ult.lat}&lon=${ult.lon}`).then((r) => {
+        if (enderecoDestaque.chave !== chave) return;
+        enderecoDestaque.texto = r.erro ? "" : ["📍", r.lugar, r.linha1, r.linha2].filter(Boolean).join(" ");
+        const e = $("#destaque-device .dq-end"); if (e) e.textContent = enderecoDestaque.texto;
+      }).catch(() => {});
+    }
+  }
+}
+
 let mostrarLinha = true;
 try { mostrarLinha = localStorage.getItem("painel.linha") !== "0"; } catch { /* sem storage */ }
 let mostrarHoras = true;
@@ -583,7 +667,7 @@ async function carregarTrilha(manterVista = false) {
   trilhaEm = Date.now();
   iniciarMapa();
   const f = estado.filtro;
-  if (!f.device) { desenharUltimas(); return; }
+  if (!f.device) { situacao = null; renderDestaque(); desenharUltimas(); return; }
   const q = new URLSearchParams({ desde: String(f.desde ?? 0) });
   if (f.ate != null) q.set("ate", String(f.ate));
   const { pontos } = await api(`/devices/${encodeURIComponent(f.device)}/localizacoes?${q}`);
@@ -594,6 +678,8 @@ async function carregarTrilha(manterVista = false) {
   const d = dev(f.device);
   const nome = d?.nome || f.device;
   if (!pontos.length) {
+    situacao = null;
+    renderDestaque();
     $("#resumo-mapa").textContent = `${nome}: nenhuma posição nesse intervalo.`;
     renderCompartilhar(nome, d?.localizacao);
     return;
@@ -661,7 +747,21 @@ async function carregarTrilha(manterVista = false) {
       .addTo(grupoTrilha);
     if (i < cron.length - 1 && !parada) rotMov.push({ ll: L.latLng(p.lat, p.lon), txt: hora(p.quando) });  // dentro da parada o horário já está na etiqueta dela
   }
-  pino([ult.lat, ult.lon], nome, ult.quando).addTo(grupoTrilha);
+  {                                                       // o device escolhido + os OUTROS devices (último ponto)
+    const eu = { id: f.device, nome, lat: ult.lat, lon: ult.lon, quando: ult.quando };
+    const outros = posicoesDevices().filter((p) => p.id !== f.device);
+    const juntos = outros.filter((p) => metros(p, eu) <= JUNTOS_M);            // no mesmo lugar → mesmo marcador
+    pinoGrupo({ lat: eu.lat, lon: eu.lon, itens: [eu, ...juntos] }).addTo(grupoTrilha);
+    for (const g of agruparDevices(outros.filter((p) => !juntos.includes(p)))) pinoGrupo(g, { secundario: true }).addTo(grupoTrilha);
+  }
+  {                                                       // situação AGORA pro destaque: está numa parada ou andando
+    const s = paradas.find((x) => x.fim >= ult.quando - 1 && metros(x, ult) <= RAIO_PARADA);
+    const ant = cron[cron.length - 2];
+    const vel = ant && ult.quando > ant.quando ? (metros(ant, ult) / (ult.quando - ant.quando)) * 3.6 : null;
+    situacao = estado.filtro.ate == null                  // intervalo no passado: não fala do passado como "agora"
+      ? { parado: !!s || (vel != null && vel < 2), desde: s ? s.inicio : ult.quando, vel, ponto: ult } : null;
+  }
+  renderDestaque();
   rotulosPontos = [...rotParadas, ...rotMov];             // paradas primeiro: ganham o espaço na tela
   if (!manterVista) mapa.fitBounds(ll, { maxZoom: 16, padding: [40, 40] });   // refresh: não mexe no zoom do usuário
   desenharRotulos();
@@ -697,6 +797,14 @@ $("#f-presets").addEventListener("click", (e) => {
   const h = e.target.dataset?.h;
   if (h === undefined) return;
   aplicarPreset(Number(h));
+  recarregar();
+});
+$("#f-limpar").addEventListener("click", () => {          // volta ao padrão: Todos, 24 h até agora
+  estado.filtro.device = "";                               // (camada/tamanho/linha/horários = preferência, ficam)
+  $("#f-device").value = "";
+  situacao = null;
+  enquadrado = false;
+  aplicarPreset(24);
   recarregar();
 });
 $("#f-aplicar").addEventListener("click", () => {

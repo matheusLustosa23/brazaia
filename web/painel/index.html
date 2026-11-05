@@ -43,6 +43,8 @@
         <p class="sub" id="resumo-mapa">Última posição de cada device; escolha um device e o intervalo para ver a trilha.</p>
       </div>
 
+      <div class="card destaque" id="destaque-device" hidden></div>
+
       <div class="card barra-mapa">
         <div class="barra-linha">
           <label class="campo c-device">Device
@@ -62,6 +64,7 @@
           <label class="campo">De <input type="datetime-local" id="f-de"></label>
           <label class="campo">Até <input type="datetime-local" id="f-ate"></label>
           <button type="button" class="neon" id="f-aplicar">Aplicar</button>
+          <button type="button" id="f-limpar" title="volta pra Todos, 24 h até agora (camada/tamanho/linha/horários ficam)">↺ Limpar filtros</button>
           <span class="separador" aria-hidden="true"></span>
           <label class="campo">Camada
             <select id="f-camada">
