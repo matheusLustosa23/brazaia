@@ -17,6 +17,7 @@ _seq = 0
 _SERVE_PORT = 8765
 _conteudo: dict[str, tuple[str, bytes]] = {}     # rota -> (content-type, bytes)
 _servidor_no_ar = False
+_porta = _SERVE_PORT
 
 
 def _asset(nome: str) -> str:
@@ -59,7 +60,7 @@ def _servir(rota: str, tipo: str, dados: bytes) -> str:
     Em memória (sem arquivo em disco): zero content://, zero limpeza. Bind em
     127.0.0.1 → nada sai do aparelho. Sobe uma vez, na 1ª chamada (lazy).
     """
-    global _servidor_no_ar, _seq
+    global _servidor_no_ar, _seq, _porta
     _conteudo[rota] = (tipo, dados)
     if not _servidor_no_ar:
         import threading
@@ -84,12 +85,19 @@ def _servir(rota: str, tipo: str, dados: bytes) -> str:
             def log_message(self, format, *args):
                 pass
             
-        srv = ThreadingHTTPServer(("127.0.0.1", _SERVE_PORT), _H)
+        srv = None
+        for _porta in range(_SERVE_PORT, _SERVE_PORT + 10):   # o companion de FUNDO pode já estar na 8765 (outro processo)
+            try:
+                srv = ThreadingHTTPServer(("127.0.0.1", _porta), _H); break
+            except OSError:
+                continue
+        if srv is None:
+            raise OSError(f"nenhuma porta livre entre {_SERVE_PORT} e {_SERVE_PORT + 9}")
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         _servidor_no_ar = True
         
     _seq += 1
-    return f"http://localhost:{_SERVE_PORT}/{rota}?v={_seq}"
+    return f"http://localhost:{_porta}/{rota}?v={_seq}"
 
 async def show_html(html: str) -> str:
     """Abre uma página no navegador do device. Termux → localhost; desktop → arquivo tmp."""
@@ -97,8 +105,8 @@ async def show_html(html: str) -> str:
         url = _servir("page.html", "text/html; charset=utf-8", html.encode("utf-8"))
         return await _run_detached(["termux-open-url", url])
     import tempfile
-    caminho = os.path.join(tempfile.gettempdir(), "brazaia_page.html")
-    with open(caminho, "w", encoding="utf-8") as f:
+    fd, caminho = tempfile.mkstemp(prefix="brazaia_", suffix=".html")   # nome ÚNICO: sem colidir/travar nome fixo no Windows e sem servir conteúdo velho
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(html)
     return await open_file(caminho)
 
@@ -108,8 +116,8 @@ async def show_image(png: bytes) -> str:
         url = _servir("img.png", "image/png", png)
         return await _run_detached(["termux-open-url", url])
     import tempfile
-    caminho = os.path.join(tempfile.gettempdir(), "brazaia_img.png")
-    with open(caminho, "wb") as f:
+    fd, caminho = tempfile.mkstemp(prefix="brazaia_", suffix=".png")   # nome ÚNICO: corrige o OSError [Errno 22] (nome fixo travado/reaberto) no Windows
+    with os.fdopen(fd, "wb") as f:
         f.write(png)
     return await open_file(caminho)
 
@@ -182,7 +190,7 @@ async def notify(title: str, message: str, image: str | None = None) -> str:
     """Notificação. Termux/Linux = SYNC (entrega e sai); Windows toast = DETACHED."""
     if _IS_TERMUX:
         return await _run_sync(
-            ["termux-notification", "--title", title, "--content", message,"--image-path", image or _asset("braza_logo_full.png")]
+            ["termux-notification", "--channel", "brazaia", "--title", title, "--content", message,"--image-path", image or _asset("braza_logo_full.png")]
         )
     if image:
         await open_file(image)

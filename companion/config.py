@@ -35,8 +35,8 @@ def load_config() -> CompanionConfig:
     _carregar_env() 
     return CompanionConfig(
         server_ws_url=os.getenv("SERVER_WS_URL", "ws://localhost:8000/api/v1"),
-        device_id=os.getenv("DEVICE_ID", "device_macbook_pro_01"),
-        device_name=os.getenv("DEVICE_NAME", "Dispositivo Principal"),
+        device_id=os.getenv("DEVICE_ID", "tester"),
+        device_name=os.getenv("DEVICE_NAME", "Dispositivo de teste"),
         token=os.getenv("DEVICE_TOKEN"),
         wake_models=os.getenv("WAKE_MODELS", "companion/models/braza.onnx").split(","),
         wake_threshold=float(os.getenv("WAKE_THRESHOLD", "0.3")),

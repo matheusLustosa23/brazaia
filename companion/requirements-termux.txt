@@ -8,5 +8,15 @@
 #
 # CLI (via pkg, não pip):  pkg install python termux-api ffmpeg
 # App:                     Termux:API (F-Droid)
+#
+# Instalado em bloco pelo setup:  pip install -r companion/requirements-termux.txt
+# (todas puras-Python / com wheel → instalam no Termux sem build nativo)
 
 websockets
+python-socks          # SOCKS5 do tailscaled nativo (companion.connect sai por ele)
+httpx                 # cliente HTTP do chat (companion.chat_client → /chat SSE)
+socksio               # SOCKS5 pro httpx (chat sai pelo tailscaled no Termux, igual o connect/voz)
+rich                  # render do chat no terminal (companion.render / cli)
+prompt_toolkit        # a caixa de input + scrollback do CLI
+pylatexenc            # LaTeX→Unicode da matemática no terminal (companion.render)
+pyfiglet              # banner do CLI (opcional: sem ele cai num banner simples)

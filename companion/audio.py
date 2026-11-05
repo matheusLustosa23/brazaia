@@ -164,3 +164,48 @@ class GaplessPlayer:
         self._stream.stop(); self._stream.close()
 
     
+class GravacaoLivre:
+    """Gravação com start/stop MANUAL — controlada por quem chama (ex.: tecla Enter do CLI).
+    NÃO lê stdin, NÃO dá beep/print (não briga com o prompt_toolkit). Termux: termux-microphone-record
+    (AAC); desktop: sounddevice (PCM16 16k). Use: iniciar() → … → parar() devolve os bytes."""
+    def __init__(self) -> None:
+        self._aac = None                       # definido em iniciar(): nome ÚNICO por gravação (evita ler áudio velho)
+        self._stream = None
+        self._buf = bytearray()
+
+    async def iniciar(self) -> None:
+        if _IS_TERMUX:
+            os.makedirs(_DIR, exist_ok=True)
+            await _run_sync(["termux-microphone-record", "-q"])        # mata gravação presa
+            await asyncio.sleep(0.2)
+            import uuid
+            from datetime import datetime
+            self._aac = f"{_DIR}/rec_livre-{datetime.now():%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:6]}.aac"  # nome ÚNICO (data+id)
+            res = await _run_sync(["termux-microphone-record", "-f", self._aac, "-l", "300", "-e", "aac"])
+            if res != "ok":
+                raise RuntimeError(f"termux-microphone-record não iniciou: {res}")
+            return
+        import sounddevice as sd
+        self._buf = bytearray()
+        def _cb(indata, frames, t, status):                           # callback: acumula PCM cru
+            self._buf.extend(bytes(indata))
+        self._stream = sd.RawInputStream(samplerate=SAMPLE_RATE, channels=CHANNELS,
+                                         dtype=DTYPE, device=_MIC_DEV, callback=_cb)
+        self._stream.start()
+
+    async def parar(self) -> bytes:
+        if _IS_TERMUX:
+            await _run_sync(["termux-microphone-record", "-q"])        # para → finaliza o container AAC
+            await asyncio.sleep(0.3)
+            if not self._aac or not os.path.exists(self._aac):         # sem arquivo = mic ocupado/falhou → erra (não lê o velho)
+                raise RuntimeError("gravação não produziu arquivo (microfone ocupado?)")
+            with open(self._aac, "rb") as f:
+                dados = f.read()
+            try:
+                os.remove(self._aac)                                   # limpa o turno (não acumula .aac em cache)
+            except OSError:
+                pass
+            return dados
+        if self._stream is not None:
+            self._stream.stop(); self._stream.close(); self._stream = None
+        return bytes(self._buf)

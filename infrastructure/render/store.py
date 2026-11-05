@@ -1,12 +1,9 @@
-"""stash: escreve bytes de imagem num arquivo de cache e registra no image_index,
-devolvendo um id curto (12 hex, compatível com o load_image). Usa o MESMO store
-das cap"""
+"""Resolve um file_id de imagem do FileStore em data URI (o notify manda a imagem pro device)."""
 
 import base64
 import os
-import uuid
 
-from infrastructure.vision.image_index import ImageIndex
+from infrastructure.storage.file_store import FileStore
 from domain.tools.guard import ToolCtx
 
 _CACHE = os.path.expanduser("~/brazaia/cache")
@@ -14,17 +11,7 @@ _MIME_POR_EXT = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg
 _MIME_PADRAO = "application/octet-stream"
 _ID_LEN = 12  
 
-def stash(index: ImageIndex, data: bytes, ext: str = ".png") -> str:
-    """bytes -> arquivo de cache -> image_index.put -> id (12 hex)."""
-    os.makedirs(_CACHE, exist_ok=True)
-    img_id = uuid.uuid4().hex[:_ID_LEN]
-    caminho = os.path.join(_CACHE, f"{img_id}{ext}")
-    with open(caminho, "wb") as f:
-        f.write(data)
-    index.put(img_id, caminho)
-    return img_id
-
-def resolve_data_uri(index: ImageIndex, img_id: str) -> str | None:
+def resolve_data_uri(index: FileStore, img_id: str) -> str | None:
     """id -> data URI (lê o arquivo, infere o mime pela extensão). None se sumiu."""
     caminho = index.get(img_id)
     if not caminho or not os.path.exists(caminho):

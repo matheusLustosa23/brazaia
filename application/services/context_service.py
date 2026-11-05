@@ -36,7 +36,23 @@ class ContextManager:
     def input_budget(self) -> int:
         """Teto real do PROMPT (deixa espaço para a geração)."""
         return self._budget - self._reserved
-    
+
+    @property
+    def budget(self) -> int:
+        """Janela TOTAL do modelo (input + saída reservada) — para o rodapé de contexto do CLI."""
+        return self._budget
+
+    @property
+    def reserved(self) -> int:
+        """Tokens reservados para a geração (saída) — para o rodapé de contexto do CLI."""
+        return self._reserved
+
+    def max_saida(self, messages: list[dict], margem: int = 512, minimo: int = 512) -> int:
+        """max_tokens DINÂMICO: nunca deixa input+saída furar a janela (budget). Encolhe a saída
+        quando o input é grande (ex.: histórico com HTML grande) — evita o 400 'total > max context'."""
+        room = self._budget - self._count(messages) - margem
+        return max(minimo, min(self._reserved, room))
+
     def build(
         self,
         system_static: str, #preixo estatico imutavel
@@ -46,11 +62,14 @@ class ContextManager:
         rolling_summary: str = "" #conversas compactadas 
     ) -> list[dict]:
         """Ordem canônica: system ESTÁTICO → memória → resumo rolante → histórico → turno atual."""
-        head: list[dict] = [{"role": "system", "content": system_static}]
+        # UMA mensagem system só: o template do Qwen rejeita (400) system fora da 1ª posição. O estático vai
+        # primeiro (prefixo estável p/ o cache de prefixo do vLLM); memória e resumo, que mudam, vão no fim dele.
+        partes = [system_static]
         if memory_block:
-            head.append({"role": "system", "content": memory_block})
+            partes.append(memory_block)
         if rolling_summary:
-            head.append({"role": "system", "content": f"[resumo da conversa]\n{rolling_summary}"})
+            partes.append(f"[resumo da conversa]\n{rolling_summary}")
+        head: list[dict] = [{"role": "system", "content": "\n\n".join(partes)}]
         tail = [user_turn] if user_turn else []
         
         room = self.input_budget - self._count(head + tail)
@@ -90,11 +109,13 @@ class ContextManager:
         self,
         raw: str,
         foco: str,
-        target_tokens: int = 256    
+        target_tokens: int = 400,
+        limite_tokens: int = 2500,
     ) -> str:
-        """Compacta uma observação volumosa, focando no objetivo do turno. Reusa o próprio
-        modelo via o contrato LLMClient injetado (coerência de estilo/idioma)."""
-        if self._count([{"role": "user", "content": raw}]) <= target_tokens:
+        """Compacta uma observação MUITO volumosa (> limite_tokens), focando no objetivo do turno.
+        Antes o corte era 256 tokens: quase todo resultado era reescrito — e, com o raciocínio ligado,
+        o "resumo" saía como o pensamento cortado do modelo (o agente recebia lixo e inventava)."""
+        if self._count([{"role": "user", "content": raw}]) <= limite_tokens:
             return raw
         
         prompt = [
@@ -110,7 +131,8 @@ class ContextManager:
         ]
         out = await self._llm.complete(
             prompt,
-            max_tokens=target_tokens + max(64,target_tokens//4)
+            max_tokens=target_tokens + max(64, target_tokens // 4),
+            no_think=True,
         )
         return out.content or raw
     

@@ -6,6 +6,9 @@ def _mais_x(p: str) -> None:
 
 def setup_termux() -> None:
     home = os.path.expanduser("~")
+    # libs do companion/CLI no Termux, em BLOCO (evita instalar uma a uma)
+    print("instalando deps do Termux (pip install -r companion/requirements-termux.txt)…")
+    subprocess.run(["pip", "install", "-r", "companion/requirements-termux.txt"], check=False)
     sc, icons, tasks = f"{home}/.shortcuts", f"{home}/.shortcuts/icons", f"{home}/.shortcuts/tasks"
     os.makedirs(icons, exist_ok=True)
     os.makedirs(tasks, exist_ok=True)
@@ -21,8 +24,7 @@ def setup_termux() -> None:
     # 3) permissão das pastas (o Termux:Widget exige leitura+exec) + canal da notificação
     os.chmod(sc, 0o700)
     os.chmod(tasks, 0o700)
-    subprocess.run(["termux-notification-channel", "--id", "brazaia",
-                    "--name", "Brazaia", "--importance", "max"], check=False)
+    subprocess.run(["termux-notification-channel", "brazaia", "Brazaia"], check=False)  # posicional (id nome)
     # 4) config por-dispositivo (FORA do repo) — cria template se não existir
     envf = f"{home}/.brazaia.env"
     if not os.path.exists(envf):
@@ -33,5 +35,63 @@ def setup_termux() -> None:
         print(f"criado {envf} — confira o IP do server (SERVER_WS_URL)")
     print("setup ok — agora arraste o widget 'Fala Comigo' na tela inicial")
 
+
+def setup_tailscale_termux() -> None:
+    """CS1 — instala o supervisor do Tailscale nativo no Termux: move os binarios
+    (do spike ~/ts/tailscale_*/) -> ~/ts/bin, instala supervisor.sh e o entry do
+    Termux:Boot (do repo), e garante o TS_AUTHKEY no ~/.brazaia.env."""
+    import glob
+    home = os.path.expanduser("~")
+    bindir = f"{home}/ts/bin"; os.makedirs(bindir, exist_ok=True)
+
+    for nome in ("tailscale", "tailscaled"):              # 1) binarios -> ~/ts/bin
+        destino = f"{bindir}/{nome}"
+        if not os.path.exists(destino):
+            achados = glob.glob(f"{home}/ts/tailscale_*/{nome}")
+            if achados: shutil.copy(achados[0], destino); _mais_x(destino)
+            else: print(f"⚠ '{nome}' nao achado em ~/ts/tailscale_*/ — rode o download do spike antes")
+
+    os.makedirs(f"{home}/brazaia", exist_ok=True)         # 2) supervisor -> ~/brazaia/
+    shutil.copy("companion/boot/supervisor.sh", f"{home}/brazaia/supervisor.sh")
+    _mais_x(f"{home}/brazaia/supervisor.sh")
+
+    os.makedirs(f"{home}/.termux/boot", exist_ok=True)    # 3) entry do Termux:Boot
+    shutil.copy("companion/boot/termux-boot.sh", f"{home}/.termux/boot/00-brazaia.sh")
+    _mais_x(f"{home}/.termux/boot/00-brazaia.sh")
+
+    shutil.copy("companion/boot/healthcheck.sh", f"{home}/brazaia/healthcheck.sh")   # 3b) watchdog
+    _mais_x(f"{home}/brazaia/healthcheck.sh")
+    subprocess.run(["termux-job-scheduler", "--script", f"{home}/brazaia/healthcheck.sh",  # a cada 15min, sobrevive a kill/reboot
+                    "--period-ms", "900000", "--persisted", "true", "--job-id", "1"], check=False)
+
+    envf = f"{home}/.brazaia.env"                         # 4) TS_AUTHKEY no env
+    txt = open(envf).read() if os.path.exists(envf) else ""
+    if "TS_AUTHKEY" not in txt:
+        with open(envf, "a") as f: f.write('\nexport TS_AUTHKEY="tskey-auth-COLE_A_SUA_AQUI"\n')
+        print(f"⚠ ponha a sua auth-key em {envf} (TS_AUTHKEY)")
+    if "SOCKS_PROXY" not in txt:                           # CS2b: companion sai pelo tailscaled nativo
+        with open(envf, "a") as f: f.write('export SOCKS_PROXY="socks5://localhost:1055"\n')
+    print("CS1/CS2b ok — supervisor + Termux:Boot + SOCKS_PROXY. (precisa do app Termux:Boot)")
+
+
+def setup_localizacao_termux() -> None:
+    """P2 — coleta de localização + bateria a cada 15 min (job 2 do JobScheduler; o job 1 é o healthcheck)."""
+    home = os.path.expanduser("~")
+    destino = f"{home}/brazaia/localizacao.sh"
+    if os.path.abspath("companion/boot/localizacao.sh") != os.path.abspath(destino):
+        shutil.copy("companion/boot/localizacao.sh", destino)
+    _mais_x(destino)
+    subprocess.run(["termux-job-scheduler", "--script", destino, "--period-ms", "900000",
+                    "--persisted", "true", "--job-id", "2"], check=False)
+    print("P2 ok — localização + bateria de 15 em 15 min (fila em ~/.brazaia_loc_fila.jsonl)")
+
+
 if __name__ == "__main__":
-    setup_termux() if _IS_TERMUX else print("setup é só do Termux; no desktop não precisa")
+    from companion import permissoes
+    if _IS_TERMUX:
+        setup_termux()
+        setup_tailscale_termux()
+        setup_localizacao_termux()
+    else:
+        print("desktop: só as permissões (o resto do setup é do Termux)")
+    permissoes.main()                          # por último: pede/testa cada permissão UMA vez e guarda

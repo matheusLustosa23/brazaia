@@ -18,8 +18,9 @@ def test_build_ordem_canonica_e_prefixo_intacto():
     turno = {"role": "user", "content": "oi"}
     msgs = cm.build(system_static=PROMPT, memory_block="Dono: estuda calculo.",
                     history=[], user_turn=turno)
-    assert msgs[0]["role"] == "system" and msgs[0]["content"] == PROMPT
-    assert "calculo" in msgs[1]["content"]
+    # uma system só (o Qwen rejeita system fora da 1ª posição): estático primeiro, memória no fim dela
+    assert [m["role"] for m in msgs] == ["system", "user"]
+    assert msgs[0]["content"].startswith(PROMPT) and msgs[0]["content"].endswith("Dono: estuda calculo.")
     assert msgs[-1] is turno
     assert cm.metrics.static_prefix_tokens > 0
 

@@ -27,7 +27,7 @@ class Tool(Generic[InputType]):
     def after(self, result: str, ctx: ToolCtx) -> GuardResult:
         return GuardResult(ok=True)
     
-    async def run(self, payload: InputType) -> str:
+    async def run(self, payload: InputType, ctx: ToolCtx) -> str:
         raise NotImplementedError()
     
     def openai_schema(self) -> dict:      
@@ -60,7 +60,7 @@ class ToolRegistry:
         return list(self._tools.keys())
     
     
-    async def run(self, name: str, payload: dict) -> str:
+    async def run(self, name: str, payload: dict, ctx: ToolCtx) -> str:
         tool = self.get(name)
         if tool is  None:
             return f"[erro] ferramenta '{name}' não existe"
@@ -70,13 +70,13 @@ class ToolRegistry:
             parsed = tool.input_schema.model_validate(payload)
         except ValidationError as e:
              return f"[erro de input em {name}] {e.errors()}"
-        return await self._invoke(tool, parsed)
+        return await self._invoke(tool, parsed, ctx)
 
-    
-    
-    async def _invoke(self, tool: Tool, parsed: BaseModel) -> str:
+
+
+    async def _invoke(self, tool: Tool, parsed: BaseModel, ctx: ToolCtx) -> str:
         try:
-            return await asyncio.wait_for(tool.run(parsed), timeout=tool.timeout_s)
+            return await asyncio.wait_for(tool.run(parsed, ctx), timeout=tool.timeout_s)
         except asyncio.TimeoutError:
             return f"[timeout] '{tool.name}' excedeu {tool.timeout_s}s"
         except Exception as e:

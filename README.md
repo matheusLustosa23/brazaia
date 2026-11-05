@@ -97,6 +97,7 @@ Requer **Python 3.12+**, [`uv`](https://docs.astral.sh/uv/) e um endpoint **vLLM
 
 ```bash
 uv sync --dev                 # cria .venv e instala deps
+uv run playwright install chromium   # baixa o chromium do Playwright (screenshot server-side; NÃO vai no git, é por máquina)
 cp .env.example .env          # configure VLLM_BASE_URL, MODEL_NAME, etc.
 
 uv run uvicorn main:app --host 0.0.0.0 --port 8080 --reload

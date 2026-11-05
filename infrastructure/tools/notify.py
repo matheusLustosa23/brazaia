@@ -3,7 +3,7 @@ from domain.tools.base import Tool
 from domain.tools.guard import GuardResult, ToolCtx
 from infrastructure.devices.device_gateway import DeviceGateway
 from infrastructure.render.store import resolve_data_uri, _id_valido
-from infrastructure.vision.image_index import ImageIndex
+from infrastructure.storage.file_store import FileStore
 
 
 class NotifyInput(BaseModel):
@@ -24,7 +24,7 @@ class NotifyInput(BaseModel):
         default=None,
         description=(
             "OPCIONAL — o PADRÃO é NÃO anexar. Só use se o dono pediu pra enviar/mostrar uma imagem.\n"
-            "Quando anexar, o id tem que JÁ ter aparecido nesta conversa — de 'render_math' (image_id=XXXX) "
+            "Quando anexar, o id tem que JÁ ter aparecido nesta conversa — de 'screenshot' (file_id de imagem) "
             "ou de uma captura ([imagem capturada · image_id=...]). NÃO invente o id.\n"
             "Se NENHUM image_id apareceu ainda: não gere nem capture por conta própria — diga que "
             "não encontrou imagem e PERGUNTE se quer que gere ou capture.\n"
@@ -49,12 +49,13 @@ class NotifyTool(Tool[NotifyInput]):
     action_class = "reversible"
     router_hint = "notificar,avisar,enviar algo"
 
-    def __init__(self, gateway: DeviceGateway, index: ImageIndex) -> None:
+    def __init__(self, gateway: DeviceGateway, index: FileStore) -> None:
         self._gateway = gateway
         self._index = index    
         
-    async def run(self, payload: NotifyInput) -> str:
-        args:dict = {"title": payload.title, "message": payload.message}
+    async def run(self, payload: NotifyInput, ctx: ToolCtx) -> str:
+        # o modelo às vezes escapa duas vezes no JSON ("\\n") → chega '\n' literal na tela
+        args:dict = {"title": payload.title, "message": payload.message.replace("\\n", "\n")}
         if payload.image_id:
             data_uri = resolve_data_uri(self._index, payload.image_id)
             if data_uri is None:

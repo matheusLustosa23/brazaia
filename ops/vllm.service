@@ -1,0 +1,22 @@
+# ops/vllm.service — TEMPLATE do servico systemd do vLLM (WSL do rig do autor).
+# O setup instala em /etc/systemd/system/vllm.service, daemon-reload, e deixa DISABLED no boot
+# (o braza/start controla; nao sobe cego com a GPU ocupada).
+# NAO tem 'After=network-online.target' de proposito: num boot frio do WSL ele pendura esperando a rede.
+[Unit]
+Description=vLLM (Qwen3.5-27B) - servidor do modelo
+After=tailscaled.service
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=iobraza
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/lib/wsl/lib
+ExecStart=/bin/bash /home/iobraza/projetos/iobraza/ops/subir_27b.sh
+Restart=on-failure
+RestartSec=10
+KillMode=control-group
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

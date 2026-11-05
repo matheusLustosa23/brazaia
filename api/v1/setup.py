@@ -3,7 +3,11 @@ from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from domain.exceptions.base import AgentError
 from schemas.shared import ApiResponse
-from api.v1.routers import device_ws, health_router, chat_router, voice_router
+import os
+
+from fastapi.staticfiles import StaticFiles
+
+from api.v1.routers import device_ws, health_router, chat_router, voice_router, files_router, devices_router, painel_router, acervo_router
 
 
 def register_routers(app: FastAPI) -> None:
@@ -12,6 +16,13 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(device_ws.router, prefix="/api/v1")
     app.include_router(chat_router.router, prefix="/api/v1")
     app.include_router(voice_router.router, prefix="/api/v1")
+    app.include_router(files_router.router, prefix="/api/v1")
+    app.include_router(devices_router.router, prefix="/api/v1")
+    app.include_router(painel_router.api, prefix="/api/v1")
+    app.include_router(acervo_router.router, prefix="/api/v1")
+    app.include_router(painel_router.pagina)
+    # JS/CSS do painel: sem segredo (os DADOS vêm da API, que exige o cookie)
+    app.mount("/painel/static", StaticFiles(directory=os.path.abspath(painel_router.WEB)), name="painel-static")
     
 
 

@@ -48,6 +48,59 @@ async def ping_ws(ws: WebSocket) -> None:
     await ws.close()
 
 
+@router.websocket("/ws/transcribe")
+async def transcribe_ws(ws: WebSocket) -> None:
+    """STT-only: recebe UM turno de áudio (PCM ou AAC) e devolve só a transcrição.
+    É o modo 'mensagem de voz' do CLI — NÃO roda LLM nem TTS (isso é o /ws/voice).
+
+    Protocolo: {"type":"turn_start","fmt":"pcm|aac"} → bytes do áudio → {"type":"turn_end"}
+    Resposta:  {"type":"final","text":...}  (ou {"type":"error","text":...})"""
+    await ws.accept()
+    asr = ws.app.state.asr
+    if asr is None:
+        await ws.send_text(orjson.dumps({"type": "error", "text": "voz desabilitada no server"}).decode())
+        await ws.close()
+        return
+    import numpy as np
+    from infrastructure.voice.asr import is_hallucination, collapse_repeats
+    fmt = "pcm"
+    try:
+        while True:
+            msg = await ws.receive()
+            if msg.get("type") == "websocket.disconnect":
+                break
+            if msg.get("bytes") is not None:
+                raw = msg["bytes"]
+                try:
+                    pcm = await _decode_aac(raw) if fmt == "aac" else raw
+                except FileNotFoundError:
+                    await ws.send_text(orjson.dumps({"type": "error", "text": "ffmpeg não está no PATH do server"}).decode())
+                    continue
+                if not pcm:
+                    await ws.send_text(orjson.dumps({"type": "error", "text": "áudio vazio / ffmpeg falhou"}).decode())
+                    continue
+                audio = np.frombuffer(pcm, np.int16).astype(np.float32) / 32768.0
+                words = await asyncio.to_thread(asr.transcribe_words, audio, "")
+                texto = collapse_repeats(" ".join(w.texto for w in words).strip())
+                if is_hallucination(texto):
+                    texto = ""
+                logger.info("[transcribe] %d bytes → %r", len(raw), texto)
+                await ws.send_text(orjson.dumps({"type": "final", "text": texto}).decode())
+            elif msg.get("text"):
+                d = orjson.loads(msg["text"])
+                if d.get("type") == "turn_start":
+                    fmt = d.get("fmt", "pcm")
+                elif d.get("type") == "bye":
+                    break
+    except WebSocketDisconnect:
+        pass
+    finally:
+        try:
+            await ws.close()
+        except Exception:
+            pass
+
+
 @router.websocket("/ws/voice")
 async def voice_ws(ws: WebSocket) -> None:
     await ws.accept()
@@ -61,7 +114,8 @@ async def voice_ws(ws: WebSocket) -> None:
         return
 
     orchestrator = ws.app.state.container.orchestrator
-    sid = await orchestrator.create_session()
+    # ?session_id=… → continua a conversa que estava aberta (ex.: o CLI entrando no /live); sem ele, sessão nova
+    sid = ws.query_params.get("session_id") or await orchestrator.create_session()
 
     lock = asyncio.Lock()
     async def emit(obj: dict) -> None:          # json com lock (ordena com o áudio)
@@ -71,6 +125,7 @@ async def voice_ws(ws: WebSocket) -> None:
         async with lock:
             await ws.send_bytes(pcm)
 
+    await emit({"type": "session", "session_id": sid})   # o cliente sabe em qual sessão está (p/ voltar ao CLI nela)
     sess = VoiceSession(s, asr, vad, tts, orchestrator, sid, emit, send_audio)
     task = asyncio.create_task(sess.run())
     pending_aac = False                              # próximo binário é um turno AAC (celular)?

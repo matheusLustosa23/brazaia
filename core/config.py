@@ -41,7 +41,14 @@ class Settings(BaseSettings):
     port: int = 8080
     log_level: str = "INFO"
     
-    memory_db_path: str = "data/memoria.db"
+    searxng_url: str = "http://127.0.0.1:8888"      # busca na web (SearXNG em Docker; braza start/watchdog garantem)
+    # identificação honesta do web_fetch (robô). Alguns sites (ex.: Wikipédia) exigem um CONTATO no UA pra
+    # aceitar robôs: ponha um site ou e-mail seu em WEB_USER_AGENT no .env se quiser abrir esses sites.
+    web_user_agent: str = "brazaia-agente/1.0 (agente pessoal de pesquisa; uso local)"
+    acervo_dir: str = "data/acervo"                 # documentos (Markdown) que o agente consulta: search_docs/read_doc
+    acervo_db_path: str = "data/acervo.db"           # índice (reconstruível: python ops/acervo.py reindexar)
+    cerebro_db_path: str = "data/cerebro.db"
+    lembrete_devices: str = ""        # devices que recebem os lembretes, separados por vírgula; vazio = todos os conectados     # M1: entidades/observações/relações (substitui o memoria.db)
     session_db_path: str = "data/sessoes.db"
     
     device_db_path: str = "data/devices.db"

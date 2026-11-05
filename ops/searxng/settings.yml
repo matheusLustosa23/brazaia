@@ -1,0 +1,29 @@
+# ops/searxng/settings.yml — o buscador do agente (web_search). Montado no contêiner em /etc/searxng.
+# Sobe e é vigiado pelo `braza` (start/watchdog). Só ouve em 127.0.0.1:8888 (o agente, no mesmo Windows).
+# O segredo vem do ambiente (SEARXNG_SECRET), criado pelo braza em %USERPROFILE%\.braza_searxng_secret — fora do git.
+use_default_settings: true
+
+general:
+  instance_name: "brazaia-busca"
+  debug: false
+
+server:
+  secret_key: "trocado-pelo-SEARXNG_SECRET"
+  limiter: false            # uso local de 1 cliente (o agente): sem limitador de robôs
+  image_proxy: false
+  public_instance: false
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "auto"
+  formats:                  # json = o que a tool web_search consome
+    - html
+    - json
+
+ui:
+  default_locale: "pt-BR"
+
+outgoing:
+  request_timeout: 4.0
+  max_request_timeout: 8.0

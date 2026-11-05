@@ -18,12 +18,14 @@ class CaptureImageInput(BaseModel):
 class CaptureImageTool(Tool[CaptureImageInput]):
     name = "capture_image"
     description = (
-        "Captura um frame AO VIVO da câmera. Use SOMENTE quando o dono pedir pra VER/OLHAR/ANALISAR "
+        "Captura um frame AO VIVO da câmera. É SEMPRE esta a tool pra câmera — 'olha/vê/mostra a câmera', "
+        "'o que tem na webcam' → capture_image (NUNCA see_file: see_file é pra arquivo que já tem file_id, "
+        "não pra câmera). Use SOMENTE quando o dono pedir pra VER/OLHAR/ANALISAR "
         "a câmera. NUNCA acione a câmera por conta própria pra 'verificar/testar se um device está "
         "conectado', confirmar disponibilidade, ou qualquer fim que o dono NÃO pediu — a câmera é "
         "privada e só liga a pedido explícito.\n"
-        "VOCÊ vê os pixels e a imagem fica GUARDADA, devolvendo um image_id. Pra ENVIAR a um device "
-        "(tela cheia ou notificação), use 'open_image'/'notify' com esse image_id.\n"
+        "VOCÊ vê os pixels e a imagem fica GUARDADA, devolvendo um image_id. Pra MOSTRAR num device "
+        "(tela cheia) use 'open_file'; pra ENVIAR como notificação use 'notify' com esse image_id.\n"
         "Pra VER/DESCREVER o que tem na câmera, você é OBRIGADO a CHAMAR esta ferramenta e ESPERAR o "
         "resultado — NUNCA descreva a cena de cabeça. NUNCA escreva '[imagem capturada …]' sem ter "
         "CHAMADO esta ferramenta NESTE turno. A cena é sempre atual: se pedirem de novo, capture de novo."
@@ -38,7 +40,7 @@ class CaptureImageTool(Tool[CaptureImageInput]):
     def __init__(self, registry: VisionRegistry):
         self._registry = registry
     
-    async def run(self, payload: CaptureImageInput):
+    async def run(self, payload: CaptureImageInput, ctx: ToolCtx):
         return await self._registry.capture(payload.source)  
     
     def before(self, args: dict, ctx: ToolCtx) -> GuardResult:

@@ -12,26 +12,38 @@ from infrastructure.devices.device_gateway import DeviceGateway
 from infrastructure.llm.client import OpenAILLMClient
 from infrastructure.llm import tokenizer
 from infrastructure.tools.capture_image import CaptureImageTool
-from infrastructure.tools.load_imagem import LoadImageTool
-from infrastructure.tools.display_math import DisplayMathTool
-from infrastructure.tools.display_page import DisplayPageTool
-from infrastructure.tools.render_math import RenderMathTool
+from infrastructure.tools.see_file import SeeFileTool
+from infrastructure.tools.create_file import CreateFileTool
+from infrastructure.tools.screenshot import ScreenshotTool
 from infrastructure.tools.notify import NotifyTool
-from infrastructure.tools.open_image import OpenImageTool
-from infrastructure.memory.sqlite_store import SqlLiteMemoryStore
+from infrastructure.tools.open_file import OpenFileTool
+from infrastructure.tools.calculate import CalculateTool
+from infrastructure.tools.list_devices import ListDevicesTool
+from infrastructure.tools.get_location import GetLocationTool
+from infrastructure.tools.search_docs import SearchDocsTool
+from infrastructure.tools.read_doc import ReadDocTool
+from infrastructure.tools.web import WebFetchTool, WebSearchTool
+from infrastructure.acervo.acervo import Acervo
+from infrastructure.memory.cerebro_store import SqliteCerebroStore
 from infrastructure.memory.session_store import SqlLiteSessionStore
 from application.services.context_service import ContextManager
-from application.services.memory_service import MemoryService
+from application.services.cerebro_service import CerebroService
 from application.services.orchestrator import Orchestrator
 from application.services.device_service import DeviceService
 from application.services.device_handshake import DeviceHandshakeService
-from application.tools.lembrar import LembrarTool
+from application.tools.remember import RememberTool
+from application.tools.recall import RecallTool
+from application.tools.log import LogTool
+from application.tools.query_log import QueryLogTool
+from application.tools.remind import RemindTool
+from application.services.lembretes import agendador
+from infrastructure.memory.lembrete_store import SqliteLembreteStore
 from domain.tools.base import ToolRegistry
 from infrastructure.voice.asr import make_asr
 from infrastructure.voice.vad import make_vad
 from infrastructure.voice.tts import make_tts
 from infrastructure.vision.sources import VisionRegistry, WebCam
-from infrastructure.vision.image_index import ImageIndex
+from infrastructure.storage.file_store import FileStore
 
 logger = logging.getLogger(__name__)
 
@@ -49,19 +61,19 @@ async def lifespan(app: FastAPI):
         llm=llm,
     )
     
-    # ── Memory ──
-    os.makedirs(os.path.dirname(settings.memory_db_path), exist_ok=True)
-    _store = SqlLiteMemoryStore(settings.memory_db_path)
-    await _store.init()
-    memory = MemoryService(_store)
+    # ── Cérebro (memória do dono) ──
+    os.makedirs(os.path.dirname(settings.cerebro_db_path), exist_ok=True)
+    _cerebro_store = SqliteCerebroStore(settings.cerebro_db_path)
+    await _cerebro_store.init()
+    memory = CerebroService(_cerebro_store)
 
     # ── Session ──
     os.makedirs(os.path.dirname(settings.session_db_path), exist_ok=True)
     _session_store = SqlLiteSessionStore(settings.session_db_path)
     await _session_store.init()
     
-     # -- VISION --
-    image_index = ImageIndex()
+     # -- VISION / STORAGE --
+    store = FileStore()                       # armazém unificado de artefatos (imagem/html/…) por file_id
     vision = VisionRegistry()
     vision.register(WebCam())
     
@@ -81,14 +93,28 @@ async def lifespan(app: FastAPI):
     device_gateway = DeviceGateway(conn_manager, rpc_manager, device_service)
     device_handshake = DeviceHandshakeService(device_service, device_gateway)
     
-    registry.register(LembrarTool(memory))
+    registry.register(RememberTool(memory))
+    registry.register(RecallTool(memory))
+    registry.register(LogTool(memory))
+    lembretes = SqliteLembreteStore(settings.cerebro_db_path)      # lembretes que avisam (tabela no cerebro.db)
+    await lembretes.init()
+    registry.register(RemindTool(lembretes))
+    registry.register(QueryLogTool(memory))
     registry.register(CaptureImageTool(vision))
-    registry.register(LoadImageTool(image_index))
-    registry.register(DisplayMathTool(device_gateway))
-    registry.register(DisplayPageTool(device_gateway))
-    registry.register(RenderMathTool(image_index))
-    registry.register(NotifyTool(device_gateway, image_index))
-    registry.register(OpenImageTool(device_gateway, image_index))
+    registry.register(SeeFileTool(store))
+    registry.register(CreateFileTool(store))
+    registry.register(ScreenshotTool(store))
+    registry.register(NotifyTool(device_gateway, store))
+    registry.register(OpenFileTool(device_gateway, store))
+    registry.register(CalculateTool())
+    registry.register(ListDevicesTool(device_gateway))
+    registry.register(GetLocationTool(device_gateway))
+    acervo = Acervo(settings.acervo_dir, settings.acervo_db_path)   # material das disciplinas e documentos
+    app.state.acervo = acervo                                        # rota /acervo (enviar pelo CLI/celular/painel)
+    registry.register(SearchDocsTool(acervo))
+    registry.register(ReadDocTool(acervo))
+    registry.register(WebSearchTool(settings.searxng_url))     # busca na web (SearXNG próprio)
+    registry.register(WebFetchTool(acervo, settings.web_user_agent))   # lê a página e guarda no acervo (coleção web)
 
     # ── Orchestrator ──
     orchestrator = Orchestrator(
@@ -98,7 +124,8 @@ async def lifespan(app: FastAPI):
         memory=memory,
         device_gateway=device_gateway,
         session_store=_session_store,
-        image_index=image_index
+        file_store=store,
+        acervo=acervo,
     )
 
     # ── Sub-Containers ──
@@ -140,17 +167,33 @@ async def lifespan(app: FastAPI):
     app.state.asr = asr
     app.state.vad = vad
     app.state.tts = tts
-    app.state.image_index = image_index
+    app.state.file_store = store
     app.state.vision = vision
     app.state.container = container
 
     setup_logging(settings.log_level)
     
     try:
-        from infrastructure.render.page import render_page
-        await asyncio.to_thread(render_page, r"$x^2$")
+        from infrastructure.render.render import render
+        await asyncio.to_thread(render, "<p>$$x^2$$</p>")
         logger.info("katex assets warmed")
     except Exception as e:
         logger.warning("warm do render falhou (segue sem): %s", e) 
         
+    async def _enviar_lembrete(titulo: str, mensagem: str) -> bool:
+        """Manda o aviso pros devices (os configurados, ou todos os conectados que sabem notificar)."""
+        alvo = [d.strip() for d in settings.lembrete_devices.split(",") if d.strip()] or device_gateway.connections.names()
+        ok = False
+        for dev in alvo:
+            if dev not in device_gateway.connections.names():
+                continue
+            caps = await device_gateway.capabilities(dev)
+            if caps is not None and "notify" not in caps:
+                continue
+            r = await device_gateway.request(dev, "notify", {"title": titulo, "message": mensagem}, timeout=20)
+            ok = ok or not r.startswith(("[erro", "[timeout"))
+        return ok
+
+    _tarefa_lembretes = asyncio.create_task(agendador(lembretes, _enviar_lembrete))
     yield
+    _tarefa_lembretes.cancel()
