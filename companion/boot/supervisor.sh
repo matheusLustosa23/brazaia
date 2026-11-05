@@ -7,7 +7,10 @@ set -u
 [ -f "$HOME/.brazaia.env" ] && source "$HOME/.brazaia.env"   # TS_AUTHKEY, DEVICE_ID, SERVER_WS_URL
 TS="$HOME/ts/bin"
 STATE="$HOME/ts/state"
-REPO="$HOME/brazaia"                        # onde o repo esta checado no celular
+# O companion é um PACOTE instalado (pip): roda de qualquer pasta. NÃO entrar no repo antigo (~/brazaia): ele não
+# existe mais nos devices — o "cd no repo && python …" antigo falhava e o connect/rastreador NUNCA subiam, sem log
+# (05/11: S24 e celular2 ficaram fora depois da atualização por isso).
+cd "$HOME"
 mkdir -p "$STATE" "$HOME/ts"
 termux-wake-lock 2>/dev/null                # segura a CPU acordada (contra o Doze) sempre que o supervisor roda
 
@@ -33,18 +36,26 @@ sobe_tailscaled() {
 sobe_connect() {
   pgrep -f "companion.connect --fg" >/dev/null 2>&1 && return
   log "subindo connect (device no server)..."
-  ( cd "$REPO" && python -m companion.connect --fg >> "$HOME/ts/connect.log" 2>&1 ) &
+  ( python -m companion.connect --fg >> "$HOME/ts/connect.log" 2>&1 ) &
 }
 
 sobe_rastreador() {
   pgrep -f "companion.localizacao rastrear" >/dev/null 2>&1 && return
   log "subindo rastreador de localizacao..."
-  ( cd "$REPO" && python -m companion.localizacao rastrear >> "$HOME/ts/rastreador.log" 2>&1 ) &
+  ( python -m companion.localizacao rastrear >> "$HOME/ts/rastreador.log" 2>&1 ) &
+}
+
+sobe_sshd() {                # canal de manutenção (setup --ssh): só se o openssh estiver instalado
+  command -v sshd >/dev/null 2>&1 || return
+  pgrep -x sshd >/dev/null 2>&1 && return
+  log "subindo sshd (manutencao, porta 8022)..."
+  sshd
 }
 
 while true; do
   sobe_tailscaled           # garante a tailnet
   sobe_connect              # garante a presenca do device no server (CS2b: via SOCKS5)
+  sobe_sshd                 # SSH de manutenção (entrar no celular de longe se o companion cair)
   sobe_rastreador           # localização contínua → fila (funciona offline; o connect entrega)
   sleep 30
 done

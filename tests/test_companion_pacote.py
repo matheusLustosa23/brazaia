@@ -63,3 +63,49 @@ def test_texto_sempre_lf_mesmo_vindo_do_windows(tmp_path, monkeypatch):
     assert b"\r" not in arqs["boot/x.sh"] and b"\r" not in arqs["a.py"]
     (raiz / "a.py").write_bytes(b"x = 1\n")                 # mesmo conteúdo com LF → mesma versão
     assert P.versao() == P.versao([(r, d) for r, d in arqs.items()])
+
+
+def test_instalar_scripts_troca_so_o_que_mudou(tmp_path, monkeypatch):
+    import companion.setup as st
+    dados = tmp_path / ".brazaia"
+    dados.mkdir()
+    (tmp_path / ".termux" / "boot").mkdir(parents=True)
+    monkeypatch.setattr(st, "DADOS", str(dados))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))          # no Windows o ~ vem daqui
+    primeira = st.instalar_scripts()
+    assert sorted(primeira) == ["healthcheck.sh", "localizacao.sh", "supervisor.sh", "termux-boot.sh"]
+    assert st.instalar_scripts() == []                       # nada mudou → nada trocado
+    (dados / "supervisor.sh").write_text("versao velha")
+    assert st.instalar_scripts() == ["supervisor.sh"]
+    assert "TSX" in (dados / "supervisor.sh").read_text()
+    import os
+    assert os.access(dados / "supervisor.sh", os.X_OK)
+
+
+def test_ssh_so_por_chave_e_sem_duplicar(tmp_path, monkeypatch):
+    import companion.setup as st
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    prefix = tmp_path / "usr"
+    (prefix / "etc" / "ssh").mkdir(parents=True)
+    (prefix / "etc" / "ssh" / "sshd_config").write_text("PrintMotd yes\nPasswordAuthentication yes\n")
+    monkeypatch.setenv("PREFIX", str(prefix))
+    monkeypatch.setattr(st.shutil, "which", lambda nome: "/bin/" + nome)
+    chamados = []
+    monkeypatch.setattr(st.subprocess, "run", lambda cmd, **kw: chamados.append(cmd) or type("R", (), {"stdout": "u0_a46"})())
+    st.setup_ssh_termux()
+    st.setup_ssh_termux()                                     # 2ª vez não duplica
+    chaves = (tmp_path / ".ssh" / "authorized_keys").read_text().splitlines()
+    assert len(chaves) == 2 and len(set(chaves)) == 2 and all(c.startswith("ssh-") for c in chaves)
+    cfg = (prefix / "etc" / "ssh" / "sshd_config").read_text()
+    assert "PasswordAuthentication no" in cfg and "PasswordAuthentication yes" not in cfg and "PrintMotd yes" in cfg
+    assert ["sshd"] in chamados
+
+
+def test_scripts_de_boot_nao_dependem_do_repo_antigo():
+    # 05/11: o supervisor commitado ainda fazia `cd "$REPO"` (~/brazaia, apagado) → connect nunca subia
+    from pathlib import Path
+    for sh in (P.RAIZ / "boot").glob("*.sh"):
+        texto = sh.read_text()
+        assert "$REPO" not in texto and "HOME/brazaia" not in texto, sh.name
