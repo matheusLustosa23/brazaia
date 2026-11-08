@@ -39,8 +39,24 @@ class SpotifyInput(BaseModel):
 
 
 def _quem(item: dict) -> str:
+    """'"Them Bones", de Alice In Chains' — título entre aspas: 'HDMI — BONES' foi lido como saída de som (06/11)."""
     artistas = ", ".join(a["name"] for a in item.get("artists") or [] if a.get("name"))
-    return f"{item.get('name', '?')}" + (f" — {artistas}" if artistas else "")
+    return f"\"{item.get('name', '?')}\"" + (f", de {artistas}" if artistas else "")
+
+
+def _nota(busca: str, faixa: dict) -> int:
+    """Quanto a faixa responde à busca: 3 = título igual · 2 = busca dentro do título · 1 = todas as palavras em
+    título+artista · 0 = não é ela. ('bones' → 'Them Bones' = 2; o 1º da busca geral era 'HDMI', do BONES.)"""
+    q = _norm(busca)
+    nome = _norm(faixa.get("name") or "")
+    texto = nome + " " + " ".join(_norm(a.get("name") or "") for a in faixa.get("artists") or [])
+    if not q:
+        return 0
+    if nome == q:
+        return 3
+    if all(t in texto.split() or t in texto for t in q.split()):
+        return 2 if q in nome else 1
+    return 0
 
 
 class SpotifyTool(Tool[SpotifyInput]):
@@ -54,7 +70,10 @@ class SpotifyTool(Tool[SpotifyInput]):
         "'o que vem depois?' → spotify(acao=ver_fila) · 'toca minha playlist Treino no celular' → spotify(acao=tocar, busca='Treino', "
         "tipo=playlist, dispositivo='celular') · 'cria uma playlist Foco com X, Y e Z' → spotify(acao="
         "criar_playlist, nome_playlist='Foco', musicas=[X, Y, Z]).\n"
-        "Diga ao dono o que o RESULTADO disse (a música e o aparelho reais), nunca o que você supôs."
+        "Música pelo nome: procura PRIMEIRO nas Músicas curtidas do dono e toca seguindo a lista; não achou, busca "
+        "no Spotify e toca seguindo o álbum.\n"
+        "Diga ao dono o que o RESULTADO disse (a música e o aparelho reais), nunca o que você supôs. A SAÍDA de som "
+        "do aparelho (fone, HDMI, caixa) NÃO aparece no Spotify: não invente — diga que não dá pra ver nem trocar por aqui."
     )
     input_schema = SpotifyInput
     side = "server"
@@ -85,6 +104,31 @@ class SpotifyTool(Tool[SpotifyInput]):
             return None, ativo["name"]
         d = sorted(devs, key=lambda x: x.get("type", "").lower() != "smartphone")[0]
         return d["id"], d["name"]
+
+    async def _curtidas(self) -> list[dict] | None:
+        """Curtidas, ou None se o login ainda não deu a permissão (aí a busca geral segue sozinha)."""
+        try:
+            return await self._c.curtidas()
+        except SpotifyErro:
+            self._sem_curtidas = True
+            return None
+
+    async def _achar_musica(self, busca: str) -> tuple[dict, list[dict] | None, int]:
+        """(faixa, lista das curtidas ou None, posição). Curtidas primeiro; depois a busca geral."""
+        curt = await self._curtidas() or []
+        notas = [(_nota(busca, f), -i) for i, f in enumerate(curt)]
+        if notas and max(notas)[0] > 0:
+            _, neg_i = max(notas)
+            return curt[-neg_i], curt, -neg_i
+        itens = await self._c.buscar(busca, "track", limite=5)
+        if not itens:
+            raise SpotifyErro(f"não achei '{busca}' no Spotify")
+        melhor = max(itens, key=lambda f: _nota(busca, f))   # entre os 5 da busca, o que mais responde
+        return melhor, None, 0
+
+    def _dica(self) -> str:
+        return (" (pra eu procurar nas suas Músicas curtidas, rode de novo no Windows: python ops\\spotify_login.py)"
+                if getattr(self, "_sem_curtidas", False) else "")
 
     async def _achar(self, busca: str, tipo: str) -> dict:
         if tipo == "playlist":                                # as DO DONO primeiro ("minha playlist Treino")
@@ -147,12 +191,13 @@ class SpotifyTool(Tool[SpotifyInput]):
             dev_id, dev_nome = await self._aparelho(p.dispositivo)
             entraram, faltou = [], []
             for m in p.musicas:
-                itens = await self._c.buscar(m, "track", limite=1)
-                if not itens:
+                try:
+                    faixa, _, _ = await self._achar_musica(m)
+                except SpotifyErro:
                     faltou.append(m)
                     continue
-                await self._c.enfileirar(itens[0]["uri"], dev_id)
-                entraram.append(_quem(itens[0]))
+                await self._c.enfileirar(faixa["uri"], dev_id)
+                entraram.append(_quem(faixa))
             if not entraram:
                 return "[erro] Spotify: não achei nenhuma das músicas — nada entrou na fila."
             return (f"[spotify] na fila, nesta ordem (no {dev_nome}): " + "; ".join(f"{i}. {x}" for i, x in enumerate(entraram, 1))
@@ -164,14 +209,29 @@ class SpotifyTool(Tool[SpotifyInput]):
                 return "[erro] Spotify: falta o que pôr na fila."
         dev_id, dev_nome = await self._aparelho(p.dispositivo)
         if a == "tocar":
-            item = await self._achar(p.busca, p.tipo)
             if p.tipo == "musica":
-                await self._c.tocar(dev_id, uris=[item["uri"]])
-                return f"[spotify] ▶ tocando {_quem(item)} no {dev_nome}."
+                # SEMPRE por CONTEXTO, nunca por lista de faixas: medido 08/11 no app do PC, tocar por `uris` (1, 10
+                # ou 100 faixas) é ACEITO pela API mas o app fica vazio (sem música, controles bloqueados); por
+                # contexto (álbum, Músicas curtidas) toca e segue.
+                faixa, curt, i = await self._achar_musica(p.busca)
+                if curt is not None:
+                    try:
+                        await self._c.tocar(dev_id, context_uri=f"spotify:user:{await self._c.meu_id()}:collection",
+                                            offset_uri=faixa["uri"])
+                        return f"[spotify] ▶ tocando {_quem(faixa)} das suas Músicas curtidas (segue a lista) no {dev_nome}."
+                    except SpotifyErro:
+                        pass                                  # sem contexto das curtidas: cai pro álbum
+                album = (faixa.get("album") or {})
+                if album.get("uri"):
+                    await self._c.tocar(dev_id, context_uri=album["uri"], offset_uri=faixa["uri"])
+                    return (f"[spotify] ▶ tocando {_quem(faixa)} (do álbum \"{album.get('name', '?')}\", segue o álbum) "
+                            f"no {dev_nome}.{self._dica()}")
+                raise SpotifyErro(f"não consegui tocar {_quem(faixa)} (sem álbum pra tocar por contexto)")
+            item = await self._achar(p.busca, p.tipo)
             await self._c.tocar(dev_id, context_uri=item["uri"])
             return f"[spotify] ▶ tocando {p.tipo} '{item.get('name')}' no {dev_nome}."
         if a == "fila":
-            item = await self._achar(p.busca, "musica")
+            item, _, _ = await self._achar_musica(p.busca)
             await self._c.enfileirar(item["uri"], dev_id)
             return f"[spotify] na fila: {_quem(item)} (toca depois da atual, no {dev_nome})."
         params = {"device_id": dev_id} if dev_id else None

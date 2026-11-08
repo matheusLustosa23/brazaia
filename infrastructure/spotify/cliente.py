@@ -20,7 +20,8 @@ import httpx
 API = "https://api.spotify.com/v1"
 CONTAS = "https://accounts.spotify.com/api/token"
 ESCOPOS = ("user-read-playback-state user-modify-playback-state user-read-currently-playing "
-           "playlist-read-private playlist-modify-private playlist-modify-public")
+           "playlist-read-private playlist-modify-private playlist-modify-public user-library-read")
+CURTIDAS_TTL = 15 * 60          # as Músicas curtidas mudam pouco: relê no máximo a cada 15 min
 
 
 class SpotifyErro(Exception):
@@ -33,6 +34,8 @@ class SpotifyCliente:
         self._id, self._secret, self._path = client_id, client_secret, token_path
         self._transport = transport                         # testes injetam um MockTransport
         self._trava = asyncio.Lock()
+        self._curtidas: tuple[float, list[dict]] | None = None
+        self._eu: str | None = None
 
     @property
     def configurado(self) -> bool:
@@ -130,9 +133,30 @@ class SpotifyCliente:
         d = await self.req("GET", "/search", params={"q": q, "type": tipo, "limit": limite})
         return [x for x in ((d or {}).get(tipo + "s", {}).get("items") or []) if x]
 
+    async def meu_id(self) -> str:
+        if not self._eu:
+            self._eu = (await self.req("GET", "/me") or {})["id"]
+        return self._eu
+
+    async def curtidas(self) -> list[dict]:
+        """As Músicas curtidas do dono (mais recentes primeiro), em cache. Precisa do escopo user-library-read."""
+        if self._curtidas and time.time() - self._curtidas[0] < CURTIDAS_TTL:
+            return self._curtidas[1]
+        faixas, offset = [], 0
+        while offset < 2000:                                # teto de segurança (40 páginas de 50)
+            d = await self.req("GET", "/me/tracks", params={"limit": 50, "offset": offset}) or {}
+            faixas += [x["track"] for x in d.get("items") or [] if x and x.get("track")]
+            if not d.get("next"):
+                break
+            offset += 50
+        self._curtidas = (time.time(), faixas)
+        return faixas
+
     async def tocar(self, device_id: str | None = None, uris: list[str] | None = None,
-                    context_uri: str | None = None) -> None:
+                    context_uri: str | None = None, offset_uri: str | None = None) -> None:
         corpo = {"uris": uris} if uris else ({"context_uri": context_uri} if context_uri else {})
+        if context_uri and offset_uri:                      # começa NESSA faixa e segue o álbum/playlist
+            corpo["offset"] = {"uri": offset_uri}
         await self.req("PUT", "/me/player/play", params={"device_id": device_id} if device_id else None,
                        json=corpo or None)
 
