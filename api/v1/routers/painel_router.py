@@ -112,6 +112,29 @@ async def capturar(device_id: str, corpo: CapturarIn, request: Request):
     return {"ok": True, "imagem": r}
 
 
+class GravarIn(BaseModel):
+    acao: str = Field("gravar", pattern="^(gravar|iniciar|parar|status)$")
+    segundos: int = Field(10, ge=1, le=300)
+
+
+@api.post("/devices/{device_id}/gravar", dependencies=[Depends(require_painel)])
+async def gravar(device_id: str, corpo: GravarIn, request: Request):
+    """Mesma função que o agente usa (record_audio). gravar/parar devolvem o áudio pra tocar no painel
+    e guardam com file_id (sessão 'painel') — o agente consegue usar depois."""
+    from infrastructure.tools.som import guardar_gravacao
+    espera = {"gravar": corpo.segundos + 30, "parar": 120}.get(corpo.acao, 30)
+    r = await _gw(request).request(device_id, "record_audio", {"acao": corpo.acao, "segundos": corpo.segundos},
+                                   timeout=espera)
+    if _falhou(r):
+        return {"ok": False, "motivo": str(r)[:300]}
+    if not str(r).startswith("{"):                       # iniciar/status: só texto ("[ok] gravando desde…")
+        return {"ok": True, "texto": str(r)}
+    fid, dados, mime, d = guardar_gravacao(request.app.state.file_store, r, device_id, "painel")
+    return {"ok": True, "file_id": fid, "segundos": d["segundos"], "kb": d["bytes"] // 1024,
+            "audio": f"data:{mime};base64,{base64.b64encode(dados).decode()}",
+            "nome": f"{device_id}-{time.strftime('%Y%m%d-%H%M%S')}{'.m4a' if mime == 'audio/mp4' else '.aac'}"}
+
+
 _MAX_ABRIR = 15 * 1024 * 1024
 
 

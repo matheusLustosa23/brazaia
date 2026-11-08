@@ -24,6 +24,7 @@ from infrastructure.tools.search_docs import SearchDocsTool
 from infrastructure.tools.read_doc import ReadDocTool
 from infrastructure.tools.web import WebFetchTool, WebSearchTool
 from infrastructure.tools.spotify import SpotifyTool
+from infrastructure.tools.som import PlayAudioTool, RecordAudioTool, SetVolumeTool
 from infrastructure.spotify.cliente import SpotifyCliente
 from infrastructure.acervo.acervo import Acervo
 from infrastructure.memory.cerebro_store import SqliteCerebroStore
@@ -115,6 +116,9 @@ async def lifespan(app: FastAPI):
     app.state.acervo = acervo                                        # rota /acervo (enviar pelo CLI/celular/painel)
     registry.register(SearchDocsTool(acervo))
     registry.register(ReadDocTool(acervo))
+    registry.register(RecordAudioTool(device_gateway, store))   # som no device (companion/tools/som_handler.py)
+    registry.register(PlayAudioTool(device_gateway, store))
+    registry.register(SetVolumeTool(device_gateway))
     registry.register(SpotifyTool(SpotifyCliente(settings.spotify_client_id,      # música (Spotify Connect, pela API)
                                                  settings.spotify_client_secret.get_secret_value(),
                                                  settings.spotify_token_path)))

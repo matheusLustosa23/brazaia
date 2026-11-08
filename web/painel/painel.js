@@ -246,6 +246,50 @@ function cardCamera(d) {
     el("div", { class: "linha-form" }, sel, b), saida);
 }
 
+function cardAudio(d) {
+  // gravar o microfone do device: por N segundos, ou iniciar/parar (sem tempo, até 30 min)
+  const pode = temTool(d, "record_audio");
+  const seg = el("input", { type: "number", min: "1", max: "300", value: "10", "aria-label": "segundos", class: "seg" });
+  const saida = el("div", {});
+  const estadoTxt = el("p", { class: "sub" });
+  const mostrar = (r) => {
+    const player = el("audio", { controls: true, src: r.audio, preload: "auto" });
+    saida.replaceChildren(
+      el("p", { class: "sub" }, `${r.segundos} s · ${r.kb} KB · id ${r.file_id}`), player,
+      el("div", { class: "linha-form" },
+        el("a", { class: "btn", href: r.audio, download: r.nome }, "Baixar"),
+        el("button", { type: "button", class: "rosa", onclick: () => saida.replaceChildren() }, "Remover")));
+  };
+  const chamar = (corpo) => api(`/devices/${encodeURIComponent(d.id)}/gravar`, { method: "POST", body: JSON.stringify(corpo) });
+  const bGravar = el("button", { type: "button", class: "neon" }, "Gravar");
+  const bIniciar = el("button", { type: "button" }, "● Iniciar");
+  const bParar = el("button", { type: "button", class: "rosa" }, "■ Parar");
+  for (const b of [bGravar, bIniciar, bParar]) b.disabled = !pode;
+  bGravar.addEventListener("click", comCarga(bGravar, "Gravando…", async () => {
+    const r = await chamar({ acao: "gravar", segundos: Number(seg.value) || 10 });
+    if (!r.ok) { aviso(`Não gravou: ${r.motivo}`, true); return; }
+    mostrar(r);
+  }));
+  bIniciar.addEventListener("click", comCarga(bIniciar, "Iniciando…", async () => {
+    const r = await chamar({ acao: "iniciar" });
+    if (!r.ok) { aviso(`Não iniciou: ${r.motivo}`, true); return; }
+    estadoTxt.textContent = r.texto.replace(/^\[ok\] /, "");
+  }));
+  bParar.addEventListener("click", comCarga(bParar, "Parando…", async () => {
+    const r = await chamar({ acao: "parar" });
+    if (!r.ok) { aviso(`Não parou: ${r.motivo}`, true); return; }
+    estadoTxt.textContent = "";
+    mostrar(r);
+  }));
+  if (pode && d.conectado) {                          // já havia uma gravação rodando? mostra
+    chamar({ acao: "status" }).then((r) => { if (r.ok && r.texto && !r.texto.includes("nenhuma")) estadoTxt.textContent = r.texto.replace(/^\[ok\] /, ""); }).catch(() => {});
+  }
+  return el("div", { class: "card" }, el("h3", {}, "Áudio"),
+    d.conectado && !pode ? el("p", { class: "sub" }, "Este device ainda não grava áudio (só o celular, por enquanto).") : null,
+    el("div", { class: "linha-form" }, el("label", { class: "campo" }, "Segundos", seg), bGravar),
+    el("div", { class: "linha-form" }, bIniciar, bParar), estadoTxt, saida);
+}
+
 function cardAbrir(d) {
   let arquivo = null;
   const entrada = el("input", { type: "file", accept: ".html,.htm,image/*", hidden: true });
@@ -353,7 +397,7 @@ function renderConsole() {
       el("h2", {}, d.nome || d.id), d.plataforma ? el("span", { class: "plataforma" }, d.plataforma) : null,
       textoEstado(d),
       d.conectado ? null : el("span", { class: "chip negada" }, "offline — ferramentas desativadas")),
-    cardLocal(d), cardNotificar(d), cardCamera(d), cardAbrir(d), cardEstado(d));
+    cardLocal(d), cardNotificar(d), cardCamera(d), cardAudio(d), cardAbrir(d), cardEstado(d));
 }
 
 async function carregarDevices() {
