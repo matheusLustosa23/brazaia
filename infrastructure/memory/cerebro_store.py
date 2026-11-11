@@ -268,6 +268,21 @@ class SqliteCerebroStore:
                 (q, limite))
         return [_obs(r) for r in rows]
 
+    async def entidades_por_termos(self, termos: list[str], limite: int = 30) -> list[Entidade]:
+        """Entidades cujo NOME casa parcialmente com algum termo (sem acento: 'triceps' acha 'Tríceps polia',
+        'supino' acha 'Supino máquina reto') OU cuja ÁREA casa ('academia' → tudo da área academia). É o que
+        permite o dono NÃO precisar dizer o nome exato de como foi salvo."""
+        termos = [norm(t) for t in termos if norm(t)]
+        if not termos:
+            return []
+        cond = " OR ".join(["e.nome_norm LIKE ? OR t.area LIKE ?"] * len(termos))
+        args = [x for t in termos for x in (f"%{t}%", f"%{t}%")]
+        async with self._db() as db:
+            rows = await db.execute_fetchall(
+                "SELECT e.id, e.tipo, e.nome, t.area FROM entidades e JOIN tipos t ON t.nome = e.tipo"
+                f" WHERE {cond} ORDER BY e.atualizado_em DESC LIMIT ?", (*args, limite))
+        return [Entidade(id=r[0], tipo=r[1], nome=r[2], area=r[3]) for r in rows]
+
     # ── registros (M2) ────────────────────────────────────────────────────────────────────────────────
     async def registrar(self, tipo: str, quando: float, *, entidade_id: int | None, dados: dict, texto: str = "",
                         sessao: int | None = None, eh_sessao: bool = False, substitui: int | None = None,

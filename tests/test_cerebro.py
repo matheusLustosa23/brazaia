@@ -252,3 +252,25 @@ async def test_log_igual_ultima_copia_e_cada_lado(cer):
 async def test_log_igual_ultima_sem_anterior_nao_inventa(cer):
     r = await cer.registrar("registrar", "serie", "Exercício novo", igual_ultima=True)
     assert r.startswith("[erro]") and "Nada foi registrado" in r
+
+
+async def test_buscar_tudo_agrupa_e_conta_assuntos(cer):
+    # academia tem DUAS coisas: a conta (finanças) e os treinos (academia) → 2 assuntos → modelo pergunta
+    await cer.lembrar("mensalidade da academia vence todo dia 10", "financa", "Mensalidade academia", "conta")
+    await cer.registrar("abrir", "treino", "Peito", quando="2026-09-07 19:00")
+    for n, kg in [("Tríceps polia", 20), ("Tríceps banco altere", 15), ("Tríceps francês altere", 8), ("Supino máquina reto", 20)]:
+        await cer.registrar("registrar", "serie", n, {"series": 4, "reps": 6, "carga_kg": kg}, quando="2026-09-07 19:10")
+    await cer.registrar("fechar", "treino", "Peito", quando="2026-09-07 20:00")
+
+    aca = await cer.buscar_tudo("academia")
+    assert "2 assunto(s)" in aca and "[academia]" in aca and "[financas]" in aca and "vence todo dia 10" in aca
+
+    tri = await cer.buscar_tudo("triceps")                   # nome parcial de grupo → 1 assunto, os 3 exercícios
+    assert "1 assunto(s)" in tri
+    assert "Tríceps polia" in tri and "Tríceps banco altere" in tri and "Tríceps francês altere" in tri
+    assert "Supino" not in tri
+
+    sup = await cer.buscar_tudo("supino")                    # 'supino' acha 'Supino máquina reto' (parcial)
+    assert "Supino máquina reto" in sup and "1 assunto(s)" in sup
+
+    assert "nada encontrado" in await cer.buscar_tudo("xyzinexistente")

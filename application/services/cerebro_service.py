@@ -31,6 +31,11 @@ _DIAS = ["seg", "ter", "qua", "qui", "sex", "sáb", "dom"]
 _SESSAO_MAX_H = 6            # sessão aberta há mais que isso = esquecida aberta, não "em andamento"
 # tipo de registro → tipo da entidade-assunto quando ela ainda não existe (série é de um exercício, etc.)
 _ASSUNTO_TIPO = {"serie": "exercicio", "treino": "grupo muscular", "estudo": "disciplina", "exercicios": "tema"}
+_AREA_TIPO = {"voce": "voce", "pessoa": "pessoas", "exercicio": "academia", "grupo muscular": "academia",
+              "treino": "academia", "disciplina": "estudos", "tema": "estudos", "instituicao": "estudos",
+              "projeto": "trabalho", "empresa": "trabalho", "ferramenta": "trabalho", "fluxo": "trabalho",
+              "financa": "financas", "conta": "financas", "cartao": "financas", "meta": "pessoal",
+              "habito": "pessoal"}
 
 _NUCLEO_MAX_CHARS = 1600     # ≈ 400 tokens: o núcleo vai em TODO turno, tem que ser pequeno
 _RELEVANTES = 6              # observações puxadas pela fala atual (além do núcleo)
@@ -245,6 +250,63 @@ class CerebroService:
         for o in achadas:
             linhas.append(_linha(o, com_entidade=True, com_data=True))
             linhas += await self._antes(o)
+        return "\n".join(linhas)
+
+    async def buscar_tudo(self, busca: str, periodo: str | None = None) -> str:
+        """A busca ÚNICA do dono: varre observações (o que ele é/sabe) E registros (o que ele fez), por nome
+        PARCIAL e por ÁREA, e devolve AGRUPADO por assunto (área). A 1ª linha diz quantos assuntos distintos
+        apareceram — é o que o modelo usa pra decidir: 1 assunto → responde/age; 2+ → pergunta mostrando as opções.
+        (Antes: recall só via observações por nome exato e query_log por nome exato — o dono tinha que dizer a
+        frase idêntica à salva, e o agente nunca perguntava.)"""
+        ts = termos(busca)
+        ents = await self._store.entidades_por_termos(ts)
+        obs = {o.id: o for o in await self._ranquear(busca, limite=12)}
+        for e in ents:                                       # observações das entidades casadas (ex.: da própria conta)
+            for o in await self._store.da_entidade(e.id):
+                obs.setdefault(o.id, o)
+        try:
+            desde = desde_de(periodo) if periodo else None
+        except ValueError:
+            desde = None
+        # registros: por entidade casada; se nada casou por entidade mas há observações, pega os registros delas
+        ids = {e.id for e in ents} | {o.entidade_id for o in obs.values()}
+        regs: list[Registro] = []
+        for eid in ids:
+            regs += await self._store.registros(entidade_id=eid, desde=desde, limite=8)
+
+        # agrupa por ÁREA (o "assunto"): finanças × academia × estudos…
+        area_por_ent = {e.id: e.area for e in ents}
+        grupos: dict[str, dict] = {}
+        def area_de(tipo_ent: str, eid: int | None) -> str:
+            return area_por_ent.get(eid) or _AREA_TIPO.get(norm(tipo_ent), "geral")
+        for o in obs.values():
+            g = grupos.setdefault(area_de(o.tipo, o.entidade_id), {"obs": [], "regs": []})
+            g["obs"].append(o)
+        for r in regs:
+            tipo_ent = next((e.tipo for e in ents if e.nome == r.entidade), "")
+            g = grupos.setdefault(area_de(tipo_ent, None) if not tipo_ent else
+                                  next((e.area for e in ents if e.nome == r.entidade), "academia"),
+                                  {"obs": [], "regs": []})
+            g["regs"].append(r)
+        grupos = {a: g for a, g in grupos.items() if g["obs"] or g["regs"]}
+        if not grupos:
+            return f"[memória] nada encontrado sobre \"{busca}\"."
+
+        linhas = [f'[memória] "{busca}" → {len(grupos)} assunto(s):']
+        for area, g in sorted(grupos.items(), key=lambda kv: -(len(kv[1]["obs"]) + len(kv[1]["regs"]))):
+            linhas.append(f"\n[{area}]")
+            for o in g["obs"][:8]:
+                linhas.append(f"  • {o.entidade}: {o.texto} · {_quando(o.valido_desde)} (#{o.id})")
+            # registros: último de cada exercício (o assunto), com os números — serve pro 'mantive o mesmo peso'
+            por_ent: dict[str, Registro] = {}
+            for r in sorted(g["regs"], key=lambda r: r.quando, reverse=True):
+                if r.entidade and r.entidade not in por_ent and not r.eh_sessao:
+                    por_ent[r.entidade] = r
+            if por_ent:
+                ult = max(r.quando for r in por_ent.values())
+                linhas.append(f"  treinos — última vez {_dia(ult)}:")
+                for r in por_ent.values():
+                    linhas.append("    " + _reg_linha(r, com_dia=False, recuo="· "))
         return "\n".join(linhas)
 
     async def _antes(self, o: Observacao, maximo: int = 3) -> list[str]:

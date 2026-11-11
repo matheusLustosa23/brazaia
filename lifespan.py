@@ -37,7 +37,6 @@ from application.services.device_handshake import DeviceHandshakeService
 from application.tools.remember import RememberTool
 from application.tools.recall import RecallTool
 from application.tools.log import LogTool
-from application.tools.query_log import QueryLogTool
 from application.tools.remind import RemindTool
 from application.services.lembretes import agendador
 from infrastructure.memory.lembrete_store import SqliteLembreteStore
@@ -102,7 +101,7 @@ async def lifespan(app: FastAPI):
     lembretes = SqliteLembreteStore(settings.cerebro_db_path)      # lembretes que avisam (tabela no cerebro.db)
     await lembretes.init()
     registry.register(RemindTool(lembretes))
-    registry.register(QueryLogTool(memory))
+    # query_log saiu da vista do modelo: a busca única é recall(busca=...) (une consulta + diário)
     registry.register(CaptureImageTool(vision))
     registry.register(SeeFileTool(store))
     registry.register(CreateFileTool(store))
