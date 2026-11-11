@@ -163,19 +163,22 @@ class Orchestrator:
                         ids_reais.update(re.findall(r"(?:file_id|image_id)=([0-9a-f]{12})", _b["text"]))
         saw_image = False
         bruto_turno: list[str] = []   # TUDO que foi streamado no turno (todos os passos) → log bruto p/ auditar o thinking
+        tools_def = active.as_openai_tools()
+        tools_tok = self._context.tokens_tools(tools_def)   # as definições das tools também ocupam a janela
         for _step in range(MAX_STEPS):
             if saw_image and VISION_STYLE not in system:
                 system = f"{system}\n\n{VISION_STYLE}"
-            messages = self._context.build(system, memory_block, _enxuga_autoria(history, manter_ultimo=True), user_turn or {})
-            max_tok = self._context.max_saida(messages)        # saída dinâmica: nunca estoura a janela
-            usado = self._context.count(messages)
+            messages = self._context.build(system, memory_block, _enxuga_autoria(history, manter_ultimo=True), user_turn or {},
+                                           extra_tokens=tools_tok)
+            max_tok = self._context.max_saida(messages, extra_tokens=tools_tok)   # saída dinâmica: nunca estoura a janela
+            usado = self._context.count(messages) + tools_tok
             if _step == 0:                                      # rodapé de contexto: 1x por turno, com o prompt REAL
                 yield ("event", {"evento": "contexto",
                                  "usado": usado,
                                  "total": self._context.budget,
                                  "reservado": self._context.reserved,
                                  "model": getattr(self._llm, "model", "")})   # fakes de teste não têm → ""
-            flow(session_id, f"llm#{_step + 1}", f"→ prompt {usado} tok ({len(messages)} msgs) · max_saida={max_tok}")
+            flow(session_id, f"llm#{_step + 1}", f"→ prompt {usado} tok ({len(messages)} msgs + tools {tools_tok}) · max_saida={max_tok}")
             t_llm = time.monotonic(); t_1o = 0.0
             n_tok = {"think": 0, "reply": 0, "tool": 0}; txt_think = ""
             texto = ""
@@ -183,7 +186,7 @@ class Orchestrator:
             bruto_turno.append(f"\n⟦── chamada {_step + 1} ──⟧\n")   # marca o limite de CADA llm.stream no log bruto
             sep = _CoTSplit(think)                               # separa raciocínio/resposta DESTA chamada (por-chamada = confiável)
             async for kind, val in self._llm.stream(
-                messages, tools=active.as_openai_tools(), tool_choice="auto", no_think=not think,
+                messages, tools=tools_def, tool_choice="auto", no_think=not think,
                 max_tokens=max_tok
             ):
                 if not t_1o:

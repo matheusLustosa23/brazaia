@@ -47,10 +47,20 @@ class ContextManager:
         """Tokens reservados para a geração (saída) — para o rodapé de contexto do CLI."""
         return self._reserved
 
-    def max_saida(self, messages: list[dict], margem: int = 512, minimo: int = 512) -> int:
+    def tokens_tools(self, tools: list[dict]) -> int:
+        """Tokens das DEFINIÇÕES das tools (nome, descrição, campos) — vão em TODO pedido ao modelo junto das
+        mensagens. 09/11: com ~25 tools eram ~9.400 tokens fora da conta → o agente estimava 14.686 de entrada,
+        o modelo recebia > 24.000, e o pedido de 24.000 de saída furava a janela de 48.000 (400)."""
+        if not tools:
+            return 0
+        import json
+        return self._count([{"role": "system", "content": json.dumps(tools, ensure_ascii=False)}])
+
+    def max_saida(self, messages: list[dict], margem: int = 512, minimo: int = 512, extra_tokens: int = 0) -> int:
         """max_tokens DINÂMICO: nunca deixa input+saída furar a janela (budget). Encolhe a saída
-        quando o input é grande (ex.: histórico com HTML grande) — evita o 400 'total > max context'."""
-        room = self._budget - self._count(messages) - margem
+        quando o input é grande (ex.: histórico com HTML grande) — evita o 400 'total > max context'.
+        extra_tokens = o que vai no pedido FORA das mensagens (as definições das tools)."""
+        room = self._budget - self._count(messages) - extra_tokens - margem
         return max(minimo, min(self._reserved, room))
 
     def build(
@@ -59,7 +69,8 @@ class ContextManager:
         memory_block: str, #memoria pessoal (perfil compactado)
         history: list[dict], #historico das conversas
         user_turn: dict, #messagem atual
-        rolling_summary: str = "" #conversas compactadas 
+        rolling_summary: str = "", #conversas compactadas 
+        extra_tokens: int = 0,      # o que vai no pedido fora das mensagens (definições das tools)
     ) -> list[dict]:
         """Ordem canônica: system ESTÁTICO → memória → resumo rolante → histórico → turno atual."""
         # UMA mensagem system só: o template do Qwen rejeita (400) system fora da 1ª posição. O estático vai
@@ -72,7 +83,7 @@ class ContextManager:
         head: list[dict] = [{"role": "system", "content": "\n\n".join(partes)}]
         tail = [user_turn] if user_turn else []
         
-        room = self.input_budget - self._count(head + tail)
+        room = self.input_budget - self._count(head + tail) - extra_tokens
         recent: list[dict] = []
         dropped = 0
         for msg in reversed(history):
