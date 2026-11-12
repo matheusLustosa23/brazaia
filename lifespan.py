@@ -31,6 +31,7 @@ from application.services.context_service import ContextManager
 from application.services.orchestrator import Orchestrator
 from application.services.device_service import DeviceService
 from application.services.device_handshake import DeviceHandshakeService
+from application.tools.salvar import SalvarTool       # EXPERIMENTO cérebro: tool de salvar (texto livre)
 from domain.tools.base import ToolRegistry
 from infrastructure.voice.asr import make_asr
 from infrastructure.voice.vad import make_vad
@@ -80,6 +81,7 @@ async def lifespan(app: FastAPI):
     device_gateway = DeviceGateway(conn_manager, rpc_manager, device_service)
     device_handshake = DeviceHandshakeService(device_service, device_gateway)
     
+    registry.register(SalvarTool())                 # EXPERIMENTO cérebro
     registry.register(CaptureImageTool(vision))
     registry.register(SeeFileTool(store))
     registry.register(CreateFileTool(store))
