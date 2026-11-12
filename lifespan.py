@@ -26,20 +26,11 @@ from infrastructure.tools.web import WebFetchTool, WebSearchTool
 from infrastructure.tools.spotify import SpotifyTool
 from infrastructure.spotify.cliente import SpotifyCliente
 from infrastructure.acervo.acervo import Acervo
-from infrastructure.memory.cerebro_store import SqliteCerebroStore
 from infrastructure.memory.session_store import SqlLiteSessionStore
 from application.services.context_service import ContextManager
-from application.services.cerebro_service import CerebroService
 from application.services.orchestrator import Orchestrator
 from application.services.device_service import DeviceService
 from application.services.device_handshake import DeviceHandshakeService
-from application.tools.remember import RememberTool
-from application.tools.recall import RecallTool
-from application.tools.log import LogTool
-from application.tools.query_log import QueryLogTool
-from application.tools.remind import RemindTool
-from application.services.lembretes import agendador
-from infrastructure.memory.lembrete_store import SqliteLembreteStore
 from domain.tools.base import ToolRegistry
 from infrastructure.voice.asr import make_asr
 from infrastructure.voice.vad import make_vad
@@ -63,12 +54,6 @@ async def lifespan(app: FastAPI):
         llm=llm,
     )
     
-    # ── Cérebro (memória do dono) ──
-    os.makedirs(os.path.dirname(settings.cerebro_db_path), exist_ok=True)
-    _cerebro_store = SqliteCerebroStore(settings.cerebro_db_path)
-    await _cerebro_store.init()
-    memory = CerebroService(_cerebro_store)
-
     # ── Session ──
     os.makedirs(os.path.dirname(settings.session_db_path), exist_ok=True)
     _session_store = SqlLiteSessionStore(settings.session_db_path)
@@ -95,13 +80,6 @@ async def lifespan(app: FastAPI):
     device_gateway = DeviceGateway(conn_manager, rpc_manager, device_service)
     device_handshake = DeviceHandshakeService(device_service, device_gateway)
     
-    registry.register(RememberTool(memory))
-    registry.register(RecallTool(memory))
-    registry.register(LogTool(memory))
-    lembretes = SqliteLembreteStore(settings.cerebro_db_path)      # lembretes que avisam (tabela no cerebro.db)
-    await lembretes.init()
-    registry.register(RemindTool(lembretes))
-    registry.register(QueryLogTool(memory))
     registry.register(CaptureImageTool(vision))
     registry.register(SeeFileTool(store))
     registry.register(CreateFileTool(store))
@@ -126,7 +104,6 @@ async def lifespan(app: FastAPI):
         llm=llm,
         context=context,
         tools=registry,
-        memory=memory,
         device_gateway=device_gateway,
         session_store=_session_store,
         file_store=store,
@@ -138,7 +115,6 @@ async def lifespan(app: FastAPI):
         llm=llm,
         context=context,
         tools=registry,
-        memory=memory,
         session_store=_session_store,
     )
 
@@ -185,20 +161,4 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("warm do render falhou (segue sem): %s", e) 
         
-    async def _enviar_lembrete(titulo: str, mensagem: str) -> bool:
-        """Manda o aviso pros devices (os configurados, ou todos os conectados que sabem notificar)."""
-        alvo = [d.strip() for d in settings.lembrete_devices.split(",") if d.strip()] or device_gateway.connections.names()
-        ok = False
-        for dev in alvo:
-            if dev not in device_gateway.connections.names():
-                continue
-            caps = await device_gateway.capabilities(dev)
-            if caps is not None and "notify" not in caps:
-                continue
-            r = await device_gateway.request(dev, "notify", {"title": titulo, "message": mensagem}, timeout=20)
-            ok = ok or not r.startswith(("[erro", "[timeout"))
-        return ok
-
-    _tarefa_lembretes = asyncio.create_task(agendador(lembretes, _enviar_lembrete))
     yield
-    _tarefa_lembretes.cancel()

@@ -3,7 +3,6 @@ from dataclasses import dataclass
 from domain.contracts import LLMClient, DeviceRegistry, SessionStore
 from domain.tools.base import ToolRegistry
 from application.services.context_service import ContextManager
-from application.services.cerebro_service import CerebroService
 from application.services.orchestrator import Orchestrator
 from application.services.device_service import DeviceService
 from application.services.device_handshake import DeviceHandshakeService
@@ -15,7 +14,6 @@ class AIContainer:
     llm: LLMClient
     context: ContextManager
     tools: ToolRegistry
-    memory: CerebroService
     session_store: SessionStore
 
 

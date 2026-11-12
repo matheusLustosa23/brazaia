@@ -4,7 +4,7 @@ import time
 
 from pydantic import BaseModel, Field
 
-from application.services.cerebro_service import desde_de, quando_de
+from core.datas import desde_de, quando_de
 from domain.tools.base import Tool
 from domain.tools.guard import ToolCtx
 from infrastructure.devices.device_gateway import DeviceGateway
